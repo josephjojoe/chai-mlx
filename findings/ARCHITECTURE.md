@@ -1,26 +1,32 @@
 # Chai-1 Architecture: Comprehensive Reference
 
 This document describes the full Chai-1 neural architecture as reconstructed from the
-[chai-lab](chai-lab/) open-source codebase. Chai-1 closely follows AlphaFold 3 (Abramson
-et al. 2024), with key modifications described in the Chai-1 preprint.
+[chai-lab](../chai-lab/) open-source codebase **and direct inspection of the TorchScript
+(`.pt`) model weights**. Every hidden dimension, head count, layer count, and activation
+pattern documented here is verified against the actual model parameter shapes.
 
-> **Important context**: The neural network layers themselves are shipped as pre-compiled
-> TorchScript (`.pt`) files — the Python codebase contains the full inference
-> orchestration, feature construction, and post-processing, but not the internal layer
-> definitions. This document reconstructs the architecture from the inference pipeline
-> signatures, feature shapes, and preprint information.
+**Total model parameters: ~312.7M** (excluding ESM2-3B)
+
+| Component | File | Parameters | Size |
+|-----------|------|-----------|------|
+| Feature Embedding | `feature_embedding.pt` | ~1.1M | 4.4 MB |
+| Bond Projection | `bond_loss_input_proj.pt` | 512 | 5.4 KB |
+| Token Input Embedder | `token_embedder.pt` | ~1.5M | 6.0 MB |
+| Trunk | `trunk.pt` | 169,955,072 | 604 MB |
+| Diffusion Module | `diffusion_module.pt` | 127,928,768 | 454 MB |
+| Confidence Head | `confidence_head.pt` | 14,812,416 | 53 MB |
 
 ---
 
 ## Table of Contents
 
 1. [High-Level Pipeline](#1-high-level-pipeline)
-2. [Input Representation](#2-input-representation)
-3. [Feature Processing](#3-feature-processing)
+2. [Global Hidden Dimensions](#2-global-hidden-dimensions)
+3. [Input Representation](#3-input-representation)
 4. [Feature Embedding](#4-feature-embedding)
 5. [Token Input Embedder](#5-token-input-embedder)
-6. [Trunk (MSA Module + Pairformer Stack)](#6-trunk-msa-module--pairformer-stack)
-7. [Diffusion Module (Structure Prediction)](#7-diffusion-module-structure-prediction)
+6. [Trunk](#6-trunk)
+7. [Diffusion Module](#7-diffusion-module)
 8. [Confidence Head](#8-confidence-head)
 9. [Ranking and Scoring](#9-ranking-and-scoring)
 10. [Key Differences from AlphaFold 3](#10-key-differences-from-alphafold-3)
@@ -29,545 +35,676 @@ et al. 2024), with key modifications described in the Chai-1 preprint.
 
 ## 1. High-Level Pipeline
 
-The end-to-end inference pipeline, orchestrated by `run_folding_on_context()` in
-`chai_lab/chai1.py`, follows these stages:
+The end-to-end inference pipeline is orchestrated by `run_folding_on_context()` in
+`chai_lab/chai1.py`:
 
 ```
 Input (FASTA + optional MSAs/templates/constraints/ESM embeddings)
   │
   ▼
-Feature Construction (FeatureFactory + AllAtomFeatureContext)
+Feature Construction ─────────── FeatureFactory + AllAtomFeatureContext
   │
   ▼
-Feature Embedding (feature_embedding.pt)
-  │  Produces: TOKEN, TOKEN_PAIR, ATOM, ATOM_PAIR, MSA, TEMPLATE representations
-  │  TOKEN_PAIR, ATOM, ATOM_PAIR each split into trunk and structure halves
+Feature Embedding ────────────── feature_embedding.pt
+  │  TOKEN(384), TOKEN_PAIR(256+256), ATOM(128+128),
+  │  ATOM_PAIR(16+16), MSA(64), TEMPLATES(64)
   │
   ▼
-Bond Feature Projection (bond_loss_input_proj.pt)
-  │  Adds covalent bond features to TOKEN_PAIR representations
+Bond Projection ──────────────── bond_loss_input_proj.pt
+  │  Linear(1 → 512) split to 256+256, added to TOKEN_PAIR
   │
   ▼
-Token Input Embedder (token_embedder.pt)
-  │  Aggregates atom-level → token-level representations
-  │  Outputs: (single_initial, single_structure_input, pair_initial)
+Token Input Embedder ─────────── token_embedder.pt
+  │  Atom Transformer (3 blocks) → aggregate atoms to tokens
+  │  → (single_initial[384], single_structure[384], pair_initial[256])
   │
   ▼
-Trunk (trunk.pt) × num_trunk_recycles (default: 3)
-  │  Contains: MSA module (4 blocks) + Pairformer (48 blocks)
-  │  Recycling: output single/pair representations fed back as input
-  │  Outputs: (single_trunk_repr, pair_trunk_repr)
+Trunk (×3 recycles) ─────────── trunk.pt
+  │  Template Embedder (2 Pairformer blocks at dim 64)
+  │  MSA Module (4 iterations, mixed block counts)
+  │  Pairformer Stack (48 blocks)
+  │  → (single_trunk[384], pair_trunk[256])
   │
   ▼
-Diffusion Module (diffusion_module.pt) × num_diffn_timesteps (default: 200)
-  │  EDM-style denoising with second-order Heun correction
-  │  Multiple samples drawn in parallel (default: 5)
-  │  Outputs: denoised atom coordinates
+Diffusion Module (×200 steps) ── diffusion_module.pt
+  │  Diffusion Conditioning (Fourier σ embedding)
+  │  Atom Attention Encoder (3 local attn blocks at dim 128)
+  │  Diffusion Transformer (16 blocks at dim 768)
+  │  Atom Attention Decoder (3 local attn blocks at dim 128)
+  │  → denoised atom coordinates [n_atoms, 3]
   │
   ▼
-Confidence Head (confidence_head.pt) × num_diffn_samples
-  │  Outputs: PAE logits, PDE logits, pLDDT logits
+Confidence Head ─────────────── confidence_head.pt
+  │  4 Pairformer blocks
+  │  → PAE[n×n×64], PDE[n×n×64], pLDDT[n_atoms×50]
   │
   ▼
-Ranking & Output
-  │  Aggregate score = 0.2·pTM + 0.8·ipTM − 100·has_clashes
-  │  Export CIF files with per-atom pLDDT as B-factors
+Ranking ── 0.2·pTM + 0.8·ipTM − 100·has_clashes
 ```
-
-**Evidence**: The pipeline is defined in `chai_lab/chai1.py` lines 580-1059, with each
-stage clearly delineated by comments and module loading via `_component_moved_to()`.
 
 ---
 
-## 2. Input Representation
+## 2. Global Hidden Dimensions
 
-### 2.1 Token-Atom Hierarchy
+Extracted from TorchScript model parameter shapes:
 
-Chai-1 uses a two-level representation following AF3's "token" abstraction:
-
-- **Tokens**: The primary sequence-level units. For standard residues (amino acids,
-  nucleotides), one token = one residue. For ligands and modified residues, one token =
-  one atom.
-- **Atoms**: The atomic-level representation. Each token maps to up to 23 atoms
-  (hardcoded: `n_atoms = 23 * n_tokens` in `data/collate/utils.py:35`).
-
-Key mappings maintained in `AllAtomStructureContext` (`data/dataset/structure/all_atom_structure_context.py`):
-
-| Field | Shape | Description |
-|-------|-------|-------------|
-| `atom_token_index` | `[n_atoms]` | Maps each atom to its parent token |
-| `atom_within_token_index` | `[n_atoms]` | Atom ordering within each token |
-| `token_centre_atom_index` | `[n_tokens]` | Representative atom for each token |
-| `token_ref_atom_index` | `[n_tokens]` | Reference atom for each token |
-| `atom_ref_pos` | `[n_atoms, 3]` | Reference conformer coordinates |
-| `atom_ref_space_uid` | `[n_atoms]` | Groups atoms sharing a reference frame |
-| `token_backbone_frame_index` | `[n_tokens, 3]` | Three atom indices defining backbone frame |
-| `token_backbone_frame_mask` | `[n_tokens]` | Whether backbone frame is defined |
-
-### 2.2 Model Sizes
-
-The model is exported as static graphs for specific token counts:
-
-```python
-AVAILABLE_MODEL_SIZES = [256, 384, 512, 768, 1024, 1536, 2048]
-```
-
-Inputs are padded to the smallest size that fits. Each exported module has a
-`forward_{crop_size}` method variant for each size.
-
-**Evidence**: `data/collate/utils.py` line 13, `chai1.py` lines 115-148 (`ModuleWrapper`).
-
-### 2.3 Input Contexts
-
-The `AllAtomFeatureContext` (`data/dataset/all_atom_feature_context.py`) bundles:
-
-| Context | Description |
-|---------|-------------|
-| `structure_context` | All-atom structural data (coords, types, masks, bonds) |
-| `msa_context` | MSA tokens, deletion matrix, pairing keys, source labels |
-| `profile_msa_context` | Separate MSA for computing profile statistics |
-| `template_context` | Up to 4 structural templates (distances, unit vectors, types) |
-| `embedding_context` | ESM2 per-residue embeddings (dim=2560) |
-| `restraint_context` | Docking, contact, and pocket constraints |
-
-**Evidence**: `data/dataset/all_atom_feature_context.py` lines 24-39.
+| Representation | Dimension | Evidence |
+|---------------|-----------|---------|
+| Token single (s) | **384** | `pairformer.attention.input2qkvg.weight: [384, 4, 16, 24]` |
+| Token pair (z) | **256** | `pairformer.transition_pair.layer_norm.weight: [256]` |
+| MSA | **64** | `msa_module.msa_transition.linear_no_bias_ab.weight: [512, 64]` |
+| Template pair | **64** | `template_embedder.pairformer.blocks.0.transition_pair.layer_norm.weight: [64]` |
+| Atom single (a) | **128** | `atom_encoder.to_atom_cond.weight: [128, 128]` |
+| Atom pair (p) | **16** | `atom_pair_mlp.0.weight: [16, 16]` |
+| Diffusion token | **768** | `diffusion_transformer.blocks.0.to_out.weight: [768, 768]` |
 
 ---
 
-## 3. Feature Processing
+## 3. Input Representation
 
-### 3.1 Feature Factory
+### 3.1 Token-Atom Hierarchy
 
-The `FeatureFactory` (`data/features/feature_factory.py`) applies a dictionary of
-`FeatureGenerator` instances to the batched data, producing typed tensors consumed by
-`feature_embedding.pt`. Features are organized by `FeatureType`:
+- **Tokens**: One token per residue (protein/nucleotide) or per atom (ligands/modified residues)
+- **Atoms**: Up to **23 atoms per token** (`n_atoms = 23 * n_tokens` in `data/collate/utils.py:35`)
+- Model exported for static sizes: **[256, 384, 512, 768, 1024, 1536, 2048]** tokens
 
-```python
-class FeatureType(Enum):
-    TOKEN = "TOKEN"          # Per-token single features
-    TOKEN_PAIR = "TOKEN_PAIR"  # Token-pair features (n_tokens × n_tokens)
-    ATOM = "ATOM"            # Per-atom features
-    ATOM_PAIR = "ATOM_PAIR"  # Blocked atom-pair features
-    MSA = "MSA"              # MSA features (depth × n_tokens)
-    TEMPLATES = "TEMPLATES"  # Template features (n_templates × n_tokens × n_tokens)
-```
+### 3.2 Input Contexts
 
-**Evidence**: `data/features/feature_type.py`, `data/features/feature_factory.py`.
+Bundled in `AllAtomFeatureContext` (`data/dataset/all_atom_feature_context.py`):
 
-### 3.2 Complete Feature Inventory
-
-The full set of features is defined in `chai1.py` lines 172-235. Each is registered
-in the `feature_generators` dict.
-
-#### Token (Single) Features
-
-| Generator | Encoding | Classes | Source |
-|-----------|----------|---------|--------|
-| `ResidueType` | One-hot | 32 | `token_residue_type` — residue/nucleotide type |
-| `ESMEmbeddings` | Float | 2560 | ESM2-3B per-residue embeddings |
-| `MSAProfile` | Float | 32 | Distribution over residue types from profile MSA |
-| `MSADeletionMean` | Float | 1 | Mean deletion count per position |
-| `IsDistillation` | Float | 1 | Whether data is from distillation |
-| `TokenBFactor` | Float | 1 | B-factor (include_prob=0.0 at inference) |
-| `TokenPLDDT` | Float | 1 | pLDDT (include_prob=0.0 at inference) |
-| `ChainIsCropped` | Bool | 1 | Whether chain was cropped |
-| `MissingChainContact` | Float | 1 | Missing chain contact indicator |
-
-#### Token Pair Features
-
-| Generator | Encoding | Classes | Description |
-|-----------|----------|---------|-------------|
-| `RelativeSequenceSeparation` | One-hot | 67 | Residue index separation (±32 bins + inter-chain) |
-| `RelativeTokenSeparation` | One-hot | 67 | Token index separation within same residue (r_max=32) |
-| `RelativeEntity` | One-hot | 3 | Same/different entity encoding (AF-Multimer Alg. 5) |
-| `RelativeChain` | One-hot | 6 | Same/different chain within entity (s_max=2) |
-| `TokenDistanceRestraint` | RBF | 6 | Contact restraints between token pairs |
-| `DockingConstraintGenerator` | One-hot | 6 | Docking distance bins (0/4/8/16Å + mask) |
-| `TokenPairPocketRestraint` | RBF | 6 | Pocket-chain distance restraints |
-| `TokenBondRestraint` | Float | 1 | Covalent bond indicator (separate pathway) |
-
-#### Atom Features
-
-| Generator | Encoding | Classes | Description |
-|-----------|----------|---------|-------------|
-| `AtomRefPos` | Float | 3 | Reference conformer position (÷10 for scale) |
-| `AtomRefCharge` | Float | 1 | Reference atom charge |
-| `AtomRefMask` | Float | 1 | Whether atom has valid reference data |
-| `AtomRefElement` | One-hot | 128 | Atomic number (up to 128) |
-| `AtomNameOneHot` | One-hot | varies | Atom name encoding |
-
-#### Atom Pair Features (Blocked)
-
-Atom pairs use **blocked local attention** with query block size 32 and key block size
-128, computed via `get_qkv_indices_for_blocks()`.
-
-| Generator | Encoding | Classes | Description |
-|-----------|----------|---------|-------------|
-| `BlockedAtomPairDistogram` | One-hot | 11 | Distance bins (0–16Å, 10 boundaries) |
-| `InverseSquaredBlockedAtomPairDistances` | Float | 2 | 1/(1+d²) + mask channel |
-
-Atom pairs are restricted to atoms sharing the same `atom_ref_space_uid` (i.e. same
-residue/ligand reference frame).
-
-**Evidence**: `data/features/generators/blocked_atom_pair_distances.py` lines 155-175.
-
-#### MSA Features
-
-| Generator | Encoding | Classes | Description |
-|-----------|----------|---------|-------------|
-| `MSAOneHot` | One-hot | 32 | MSA residue type |
-| `MSAHasDeletion` | Float | 1 | Binary: deletion to the left |
-| `MSADeletionValue` | Float | 1 | Scaled deletion count: 2/π·arctan(d/3) |
-| `IsPairedMSA` | Float | 1 | Same species as first token (pairing) |
-| `MSADataSource` | One-hot | 6 | Data source (UniRef, BFD, etc.) |
-
-MSA depth limit: **16,384 sequences**. MSA can be subsampled during trunk recycling.
-
-**Evidence**: `data/dataset/all_atom_feature_context.py` line 20, `data/features/generators/msa.py`.
-
-#### Template Features
-
-| Generator | Encoding | Classes | Description |
-|-----------|----------|---------|-------------|
-| `TemplateMask` | Float | 2 | Backbone frame mask + pseudo-beta mask (per pair) |
-| `TemplateUnitVector` | Float | 3 | Unit vector between pseudo-beta positions |
-| `TemplateResType` | OuterSum | 32 | Residue type for outer-sum embedding |
-| `TemplateDistogram` | One-hot | 38 | Distance bins (3.25–50.75Å) |
-
-Templates are limited to **4 maximum**. All template features are masked to
-**intra-chain only** (inter-chain distances zeroed via `same_asym` masks).
-
-**Evidence**: `data/features/generators/templates.py`, `data/dataset/all_atom_feature_context.py` line 21.
-
-### 3.3 Constraint Features
-
-Three types of structural constraints can guide prediction:
-
-1. **Contact constraints**: Pairwise token distance thresholds, encoded as RBF with 6
-   radii. Sampled from geometric distribution with p=1/3 during training.
-   (`generators/token_dist_restraint.py`)
-
-2. **Pocket constraints**: Token-to-chain proximity constraints. A token i and chain C
-   such that min_j∈C ||x_i - x_j|| ≤ θ_P, with θ_P ∈ (6, 20)Å.
-   (`generators/token_pair_pocket_restraint.py`)
-
-3. **Docking constraints**: One-hot pairwise distances between chain groups using 4
-   bins [0–4Å, 4–8Å, 8–16Å, >16Å]. Chains partitioned into two groups; intra-group
-   distances provided, inter-group masked. Supports structure-level and chain-level
-   dropout. (`generators/docking.py`)
-
-All constraints include a learnable mask value for when they are absent. During
-training, each feature type is included independently with 10% probability.
-
-**Evidence**: Preprint Section 5.1.2, `chai1.py` lines 203-221 (inference config shows
-contact include_probability=1.0, docking include_probability=0.0).
+| Context | Max Size | Description |
+|---------|----------|-------------|
+| `structure_context` | 2048 tokens | All-atom coordinates, types, masks, bonds |
+| `msa_context` | 16,384 depth | MSA tokens, deletion matrix, pairing keys |
+| `template_context` | 4 templates | Distances, unit vectors, residue types |
+| `embedding_context` | 2560-dim | ESM2-3B per-residue embeddings |
+| `restraint_context` | — | Docking, contact, pocket constraints |
 
 ---
 
 ## 4. Feature Embedding
 
-**Module**: `feature_embedding.pt`
+**Module**: `feature_embedding.pt` (~1.1M params)
 
-The feature embedding module takes all raw features from the `FeatureFactory` and
-projects them into dense representations. It returns a dictionary with six keys:
+Internal class: `chai.model.embedding.feature_embedding.FeatureEmbedding`
 
-| Output Key | Shape | Description |
-|------------|-------|-------------|
-| `"TOKEN"` | `[b, n_tokens, d]` | Token single features |
-| `"TOKEN_PAIR"` | `[b, n_tokens, n_tokens, 2d]` | Token pair features (split: trunk + structure) |
-| `"ATOM"` | `[b, n_atoms, 2d]` | Atom single features (split: trunk + structure) |
-| `"ATOM_PAIR"` | `[b, n_blocks, q_size, kv_size, 2d]` | Blocked atom pair features (split) |
-| `"TEMPLATES"` | `[b, n_templates, n_tokens, n_tokens, d]` | Template pair features |
-| `"MSA"` | `[b, depth, n_tokens, d]` | MSA features |
+### 4.1 Input Feature Dimensions
 
-**Critical design**: TOKEN_PAIR, ATOM, and ATOM_PAIR outputs are **twice the channel
-width** and are split with `.chunk(2, dim=-1)` into two halves:
-- First half → feeds the trunk (Pairformer)
-- Second half → feeds the structure prediction (diffusion) module
+The feature embedding takes **32 named features** and projects them through type-specific
+input projections. The total raw feature dimensions per type (verified from projection
+input sizes):
 
-This separation allows the diffusion module to receive features that bypass the trunk
-entirely, providing a direct pathway for structural information.
+| Type | Raw Dim | Projection | Output Dim | Split |
+|------|---------|-----------|------------|-------|
+| TOKEN | 2638 | `Linear(2638, 384)` | 384 | No |
+| TOKEN_PAIR | 163 | `Linear(163, 512)` | 256 + 256 | Trunk + Structure |
+| ATOM | 395 | `Linear(395, 256)` | 128 + 128 | Trunk + Structure |
+| ATOM_PAIR | 14 | `Linear(14, 32)` | 16 + 16 | Trunk + Structure |
+| MSA | 42 | `Linear(42, 64)` | 64 | No |
+| TEMPLATES | 76 | `Linear(76, 64)` | 64 | No |
 
-**Evidence**: `chai1.py` lines 679-698.
+All input projections include bias. TOKEN_PAIR, ATOM, and ATOM_PAIR outputs are
+**split with `.chunk(2, dim=-1)`** into trunk and structure halves.
 
-```python
-token_pair_input_feats, token_pair_structure_input_feats = embedded_features[
-    "TOKEN_PAIR"
-].chunk(2, dim=-1)
-atom_single_input_feats, atom_single_structure_input_feats = embedded_features[
-    "ATOM"
-].chunk(2, dim=-1)
-block_atom_pair_input_feats, block_atom_pair_structure_input_feats = (
-    embedded_features["ATOM_PAIR"].chunk(2, dim=-1)
-)
-```
+### 4.2 Feature Encoding Details
 
-### 4.1 Bond Feature Projection
+Special embedding operations within `feature_embedding.pt`:
 
-Covalent bond features are handled separately due to TorchScript export limitations.
-The `TokenBondRestraint` generator produces a binary token-pair feature indicating
-covalent bonds between tokens. This is projected by `bond_loss_input_proj.pt` and
-**added** to both the trunk and structure token-pair representations:
+- **TemplateResType**: `Embedding(33, 32)` for outer-sum encoding, with learned offset
+- **TokenDistanceRestraint**: RBF encoding with 6 learned radii (buffer)
+- **TokenPairPocketRestraint**: RBF encoding with 6 learned radii (buffer)
+- **AtomNameOneHot**: One-hot to 65 classes → reshaped to 260 (4 chars × 65)
+- **AtomRefElement**: One-hot to 130 classes (128 elements + mask)
 
-```python
-trunk_bond_feat, structure_bond_feat = bond_loss_input_proj.forward(...).chunk(2, dim=-1)
-token_pair_input_feats += trunk_bond_feat
-token_pair_structure_input_feats += structure_bond_feat
-```
+### 4.3 Raw Feature Dimension Breakdown
 
-**Evidence**: `chai1.py` lines 705-715.
+TOKEN (2638 total):
+- ResidueType: 33 (32 types + mask, one-hot)
+- ESMEmbeddings: 2560 (ESM2-3B embedding dim)
+- MSAProfile: 32 (distribution over residue types)
+- MSADeletionMean: 1
+- IsDistillation: 1, TokenBFactor: 1, TokenPLDDT: 1
+- ChainIsCropped: 1, MissingChainContact: 1
+- Residual from encodings: ~7
+
+TOKEN_PAIR (163 total):
+- RelativeSequenceSeparation: 67 (±32 bins + 2 special + 1)
+- RelativeTokenSeparation: 67 (r_max=32, 2×32+3)
+- RelativeEntity: 3
+- RelativeChain: 6 (2×2+2)
+- DockingConstraintGenerator: 6 (5 dist bins + mask, one-hot)
+- TokenDistanceRestraint: 6 (RBF radii) + mask
+- TokenPairPocketRestraint: 6 (RBF radii) + mask
+- Residual from concatenation: ~2
+
+ATOM (395 total):
+- AtomNameOneHot: 260 (4 chars × 65 classes)
+- AtomRefCharge: 1
+- AtomRefElement: 130 (128 + mask, one-hot)
+- AtomRefMask: 1
+- AtomRefPos: 3
+
+ATOM_PAIR (14 total):
+- BlockedAtomPairDistogram: 12 (11 classes + mask, one-hot)
+- InverseSquaredBlockedAtomPairDistances: 2 (value + mask)
+
+MSA (42 total):
+- MSAOneHot: 32 (residue types, one-hot)
+- MSAHasDeletion: 1
+- MSADeletionValue: 1
+- IsPairedMSA: 1
+- MSADataSource: 7 (6 classes + mask, one-hot)
+
+TEMPLATES (76 total):
+- TemplateMask: 2 (backbone + pseudo-beta)
+- TemplateUnitVector: 3
+- TemplateResType: 32 (via outer-sum embedding → 32-dim)
+- TemplateDistogram: 39 (38 bins + mask, one-hot)
+
+**Evidence**: `feature_embedding.pt` parameter shapes, `chai1.py` lines 172-235.
+
+### 4.4 Bond Feature Projection
+
+**Module**: `bond_loss_input_proj.pt` (512 params)
+
+A single `Linear(1, 512, bias=False)`. Output is split 256+256 and **added** to the
+trunk and structure token-pair representations respectively.
+
+**Evidence**: `bond_loss_input_proj.pt` weight shape `[512, 1]`.
 
 ---
 
 ## 5. Token Input Embedder
 
-**Module**: `token_embedder.pt`
+**Module**: `token_embedder.pt` (~1.5M params)
 
-The token input embedder aggregates atom-level features up to the token level. This
-corresponds to AF3's "InputEmbedder" and performs the critical atom→token information
-flow using blocked local attention over atom pairs.
+Internal class: `chai.model.af3.token_input_emb.TokenInputEmbedding`
 
-### Inputs
+This module aggregates atom-level information to token-level representations using an
+atom transformer with blocked local attention.
 
-| Parameter | Shape | Description |
-|-----------|-------|-------------|
-| `token_single_input_feats` | `[b, n_tokens, d]` | Token single features |
-| `token_pair_input_feats` | `[b, n_tokens, n_tokens, d]` | Token pair features |
-| `atom_single_input_feats` | `[b, n_atoms, d]` | Atom single features |
-| `block_atom_pair_feat` | `[b, bl, q, kv, d]` | Blocked atom pair features |
-| `block_atom_pair_mask` | `[b, bl, q, kv]` | Blocked atom pair mask |
-| `block_indices_h` | `[bl, q]` | Query block indices |
-| `block_indices_w` | `[bl, kv]` | Key block indices |
-| `atom_single_mask` | `[b, n_atoms]` | Atom existence mask |
-| `atom_token_indices` | `[b, n_atoms]` | Atom→token mapping |
+### 5.1 Architecture
 
-### Outputs
+```
+token_single_input_feats [b, n_tokens, 384]
+atom_single_input_feats  [b, n_atoms, 128]    ─┐
+block_atom_pair_feat     [b, bl, q, kv, 16]   ─┤
+                                                ▼
+                                    AtomAttentionBlockedEncoder
+                                    ├─ to_atom_cond: Linear(128, 128)
+                                    ├─ Pair Update Block
+                                    │   ├─ proj_h: Linear(128, 16)
+                                    │   ├─ proj_w: Linear(128, 16)
+                                    │   └─ MLP: Linear(16,16) → Linear(16,16)
+                                    ├─ LocalDiffusionTransformer (3 blocks)
+                                    │   ├─ blocked_pairs2blocked_bias:
+                                    │   │    LN(16) → [3, 4, 16] per-head bias
+                                    │   ├─ 3× LocalAttentionPairBiasBlock
+                                    │   │    (4 heads, 32 head_dim, AdaLN)
+                                    │   └─ 3× ConditionedTransitionBlock
+                                    │        (SwiGLU, 4× expansion)
+                                    └─ to_token_single: Linear(128, 384)
+                                                │
+                                                ▼ aggregate via atom_token_indices
+                           concat [token_single(384) + atom_agg(384)] = 768
+                                                │
+                                    ┌───────────┴───────────┐
+                    token_single_proj_in_trunk        token_single_proj_in_structure
+                    Linear(768, 384, no bias)         Linear(768, 384, no bias)
+                           │                                    │
+                           ▼                                    ▼
+              token_single_initial_repr [384]     token_single_structure_input [384]
 
-Returns a tuple of three tensors:
-1. **`token_single_initial_repr`**: Initial single representation for the trunk
-2. **`token_single_structure_input`**: Single representation for the diffusion module
-3. **`token_pair_initial_repr`**: Initial pair representation for the trunk
+              ┌─── token_pair_proj_in_trunk: Linear(256, 256, no bias) ───┐
+              │    + outer_sum from single_to_pair: Linear(384, 512)      │
+              ▼                                                           │
+         token_pair_initial_repr [256]                                    │
+```
 
-The atom→token aggregation likely uses the atom transformer architecture from AF3,
-where atom-level attention within local blocks processes atom features, and the results
-are pooled to the token level using `atom_token_indices`.
+### 5.2 Atom Transformer Details
 
-**Evidence**: `chai1.py` lines 720-738.
+The atom-level transformer uses **blocked local attention** (query block=32, key block=128):
 
----
+**Local Attention Blocks** (3 blocks, each):
+- **AdaLayerNorm**: Conditioned by atom_single. `lin_s_merged: Linear(128, 256)` produces
+  scale and shift (128 each) for the 128-dim atom representation.
+- **QKV projection**: `to_qkv.weight: [3, 4, 32, 128]` — 4 heads, 32 head_dim, producing
+  q, k, v from 128-dim input
+- **Query bias**: `q_bias: [4, 32]` — learned bias added to queries
+- **Pair bias**: `blocked_pairs2blocked_bias`: `LN(16) → Linear(16, 3×4)` = 3 attention
+  blocks × 4 heads, pair features provide per-head attention bias
+- **Output projection**: `Linear(128, 128, bias=True)`
+- **Attention scale**: 1/√32 = 1/√head_dim
+- **Dropout**: 0.1 (from graph constant `0.10000000000000001`)
 
-## 6. Trunk (MSA Module + Pairformer Stack)
+**Conditioned Transition Blocks** (3 blocks, each):
+- **AdaLayerNorm**: `lin_s_merged: Linear(128, 256)` for scale+shift
+- **SwiGLU expansion**: `linear_a_nobias_double: Linear(128, 512)` — split to 256+256
+  (one half through SiLU, then element-wise multiply)
+- **Down projection**: `linear_b_nobias: Linear(256, 128)`
+- **Gating**: `linear_s_biasinit_m2: Linear(128, 128, bias=True)` — sigmoid gate from
+  conditioning signal, bias initialized to -2 (so gate starts near-zero)
 
-**Module**: `trunk.pt`
-
-The trunk is the central processing module, containing the MSA module and Pairformer
-stack. Per the architecture diagram, it processes:
-- **MSA module**: 4 blocks of MSA-based attention
-- **Pairformer stack**: 48 blocks of pair-bias self-attention
-
-### 6.1 Inputs
-
-| Parameter | Shape | Description |
-|-----------|-------|-------------|
-| `token_single_trunk_initial_repr` | `[b, n, d]` | Fixed initial single repr (from embedder) |
-| `token_pair_trunk_initial_repr` | `[b, n, n, d]` | Fixed initial pair repr (from embedder) |
-| `token_single_trunk_repr` | `[b, n, d]` | Recycled single repr |
-| `token_pair_trunk_repr` | `[b, n, n, d]` | Recycled pair repr |
-| `msa_input_feats` | `[b, depth, n, d]` | MSA features |
-| `msa_mask` | `[b, depth, n]` | MSA mask |
-| `template_input_feats` | `[b, t, n, n, d]` | Template features |
-| `template_input_masks` | `[b, t, n, n]` | Template masks (frame × pseudo-beta) |
-| `token_single_mask` | `[b, n]` | Token existence mask |
-| `token_pair_mask` | `[b, n, n]` | Token pair mask (outer product of single mask) |
-
-### 6.2 Outputs
-
-Returns a tuple of two tensors:
-1. **`token_single_trunk_repr`**: Updated single representation
-2. **`token_pair_trunk_repr`**: Updated pair representation
-
-### 6.3 Recycling
-
-The trunk is run `num_trunk_recycles` times (default: 3). On each iteration:
-- The **initial** representations (from the embedder) are provided unchanged
-- The **recycled** representations from the previous iteration are passed back in
-- MSA features can optionally be subsampled per-recycle via
-  `subsample_and_reorder_msa_feats_n_mask()`
-
-This follows AF3's recycling strategy where the initial embeddings provide a stable
-anchor while the recycled representations carry information from previous iterations.
-
-**Evidence**: `chai1.py` lines 746-777.
-
-### 6.4 MSA Module (4 blocks)
-
-The MSA module processes multiple sequence alignment data. Per the preprint, Chai-1
-uses MSAs trained alongside protein language model embeddings. The MSA module takes:
-- Embedded MSA features (depth × tokens × channels)
-- Pair representations from the previous layer
-
-It likely follows AF3's MSA architecture with:
-- Row-wise gated self-attention with pair bias
-- Column-wise gated self-attention
-- Transition layers
-- Outer product mean (MSA → pair update)
-
-### 6.5 Pairformer Stack (48 blocks)
-
-The main body of the trunk consists of 48 blocks of **pair-bias self-attention** — the
-key architectural motif of both AF3 and Chai-1. Each block likely contains:
-- Single representation update via self-attention with pair bias
-- Pair representation update via triangular attention and/or triangular
-  multiplicative updates
-- Transition feed-forward layers
-
-The pair representation biases the attention weights in the single representation,
-creating a tight coupling between sequence-level and pairwise structural information.
-
-### 6.6 Template Processing
-
-Templates (up to 4) provide structural homology information. Template features include:
-- Pseudo-beta distances (38 distogram bins, 3.25–50.75Å)
-- Unit vectors between pseudo-beta positions
-- Residue types (outer-sum encoded)
-- Masks (backbone frame + pseudo-beta)
-
-All template features are restricted to **intra-chain pairs only** — inter-chain
-template distances are explicitly zeroed. This is a key difference from docking
-constraints, which provide inter-chain distance information.
-
-**Evidence**: `data/features/generators/templates.py` lines 52-53, 96-101.
+**Evidence**: `token_embedder.pt` parameter names and shapes.
 
 ---
 
-## 7. Diffusion Module (Structure Prediction)
+## 6. Trunk
 
-**Module**: `diffusion_module.pt`
+**Module**: `trunk.pt` (169,955,072 params)
 
-The diffusion module predicts 3D atomic coordinates using a denoising diffusion process.
-It follows an EDM-style framework (Karras et al. 2022) adapted for molecular structure.
+The trunk is the central processing module, consisting of three sub-modules:
+template embedder, MSA module, and Pairformer stack.
 
-### 7.1 Architecture
+### 6.1 Recycle Projections
 
-The diffusion module takes as input:
-- **Trunk outputs**: `token_single_trunk_repr`, `token_pair_trunk_repr`
-- **Structure-specific features** (bypassing trunk):
-  `token_single_structure_input`, `token_pair_structure_input_feats`,
-  `atom_single_structure_input_feats`, `atom_block_pair_structure_input_feats`
-- **Noised coordinates**: `atom_noised_coords` with shape `[b, ds, n_atoms, 3]`
-- **Noise level**: `noise_sigma` with shape `[b, ds]`
-- **Structural masks and indices**: atom/token masks, block indices, atom→token mapping
+Before each recycle iteration, the previous output is projected:
 
-Per the architecture diagram, the diffusion module contains **16 blocks** of
-structure prediction and is run inside the denoising loop (×4 recycling of the
-confidence head per the diagram notation, though the inference code shows this is
-configurable).
+- `token_single_recycle_proj`: `LayerNorm(384)` → `Linear(384, 384, no bias)`
+- `token_pair_recycle_proj`: `LayerNorm(256)` → `Linear(256, 256, no bias)`
 
-**Evidence**: `chai1.py` lines 788-886.
+The recycled representations are added to the initial representations and fed back
+into the trunk. Default: **3 recycles**.
 
-### 7.2 Noise Schedule
+**Evidence**: Last parameters in `trunk.pt`.
 
-The noise schedule uses power interpolation for smooth σ transitions:
+### 6.2 Template Embedder
+
+Processes up to 4 structural templates through a small Pairformer:
+
+```
+Template features [b, 4, n, n, 64]
+    │
+    ▼
+proj_in: LayerNorm(256) → Linear(256, 64, no bias)
+    │
+    ▼
+2× PairformerBlock (at dim 64):
+    ├─ transition_pair: LN(64) → SwiGLU(64→256→128→64)
+    ├─ triangle_multiplication:
+    │   ├─ layernorm_z_in: LN(64)
+    │   ├─ merged_linear_p: Linear(64, 256, no bias) → 4×64, split to a,b pairs
+    │   ├─ merged_linear_g: Linear(64, 320, no bias) → 5×64, includes gate
+    │   └─ linear_z_out: Linear(64, 64, no bias)
+    └─ triangle_attention:
+        ├─ pair2b: Linear(64, 8, no bias) → 8 heads bias
+        ├─ pair2qkvg1: Linear(64, 512, no bias) → starting node
+        ├─ pair2qkvg2: Linear(64, 512, no bias) → ending node
+        ├─ linear_out: Linear(256, 64, no bias)
+        └─ out_scalers: [64] learned per-channel output scaling
+        (8 heads, 64 head_dim)
+    │
+    ▼
+template_layernorm: LayerNorm(64)
+    │
+    ▼
+proj_out: Linear(64, 256, no bias)
+    │
+    ▼
+Added to pair representation [b, n, n, 256]
+```
+
+**Evidence**: `trunk.pt` parameters prefixed `template_embedder.*`.
+
+### 6.3 MSA Module
+
+The MSA module converts MSA information into pair representation updates. It has an
+asymmetric block structure (not all sub-modules have the same number of blocks):
+
+| Sub-module | Count | Operates On |
+|-----------|-------|-------------|
+| `linear_s2m` | 1 | Single → MSA projection |
+| `outer_product_mean` | 4 | MSA → Pair update |
+| `msa_pair_weighted_averaging` | 3 | Pair → MSA (pair-biased attention) |
+| `msa_transition` | 3 | MSA → MSA (feed-forward) |
+| `pair_transition` | 4 | Pair → Pair (feed-forward) |
+| `triangular_multiplication` | 4 | Pair → Pair (triangle update) |
+| `triangular_attention` | 4 | Pair → Pair (triangle attention) |
+
+#### 6.3.1 Single-to-MSA Projection
+
+`linear_s2m: Linear(384, 64, no bias)` — projects token single representation to MSA
+dimension, added to the first row of the MSA.
+
+#### 6.3.2 Outer Product Mean (4 blocks)
+
+Each block:
+- `weight_ab: [2, 8, 8, 64]` — two projections (a, b) from MSA dim 64 to 8-dim,
+  producing outer products summed over MSA depth
+- `ln_out: LayerNorm(512)` — normalizes the 8×8=64 flattened outer product
+  (though stored as 512 — likely includes padding or concatenation with pair repr)
+- `linear_out: Linear(512, 256, bias=True)` — projects to pair dimension
+
+#### 6.3.3 MSA Pair-Weighted Averaging (3 blocks)
+
+Each block:
+- `layernorm_msa: LayerNorm(64)` — normalize MSA
+- `linear_msa2vg: Linear(64, 512, no bias)` — project to value+gate: **8 heads × (32 value + 32 gate)**
+- `layernorm_pair: LayerNorm(256)` — normalize pair representation
+- `linear_pair: Linear(256, 8, no bias)` — per-head attention weights from pair
+- `linear_out_no_bias: Linear(256, 64, no bias)` — project gated values (8×32=256) back to MSA dim
+
+**Attention**: 8 heads, 32 value_dim, gated, pair-biased.
+
+#### 6.3.4 MSA Transition (3 blocks)
+
+Each: `LayerNorm(64)` → `Linear(64, 512, no bias)` → SwiGLU → `Linear(256, 64)`.
+Expansion factor: **4×** (512 = 2×256, SwiGLU halves).
+
+#### 6.3.5 Pair Transition (4 blocks)
+
+Each: `LayerNorm(256)` → `Linear(256, 2048, no bias)` → SwiGLU → `Linear(1024, 256)`.
+Expansion factor: **4×**.
+
+#### 6.3.6 Triangular Multiplication (4 blocks)
+
+Each block:
+- `layernorm_z_in: LayerNorm(256)`
+- `merged_linear_p: Linear(256, 1024, no bias)` — projects to 4×256 (a_left, a_right,
+  b_left, b_right for outgoing/incoming edges)
+- `merged_linear_g: Linear(256, 1280, no bias)` — projects to 5×256 (includes gate)
+- `linear_z_out: Linear(256, 256, no bias)` — output projection
+
+#### 6.3.7 Triangular Attention (4 blocks)
+
+Each block:
+- `out_scalers: [256]` — learned per-channel scaling
+- `pair2b: Linear(256, 8, no bias)` — per-head bias (8 heads)
+- `pair2qkvg1: Linear(256, 1024, no bias)` — starting node: q+k+v+g projection
+- `pair2qkvg2: Linear(256, 1024, no bias)` — ending node: q+k+v+g projection
+- `linear_out: Linear(512, 256, no bias)` — output from gated attention
+
+**Configuration**: 8 heads. Per head: 1024/8 = 128 per projection, decomposed as
+q(32)+k(32)+v(32)+g(32) or similar. Output per head: 512/8 = 64.
+
+**Evidence**: `trunk.pt` parameters prefixed `msa_module.*`.
+
+### 6.4 Pairformer Stack (48 blocks)
+
+Each of the 48 identical blocks contains 5 sub-layers:
+
+#### 6.4.1 Transition Pair
+
+`LayerNorm(256)` → `Linear(256, 1024, no bias)` → SwiGLU → `Linear(512, 256)`.
+Expansion: **4×** (1024 = 2×512, SwiGLU halves to 512, project to 256).
+
+#### 6.4.2 Triangle Multiplication
+
+Same architecture as MSA module triangular multiplication (see §6.3.6).
+Operates at pair dim 256.
+
+#### 6.4.3 Triangle Attention
+
+Same architecture as MSA module triangular attention (see §6.3.7).
+8 heads operating at pair dim 256.
+
+#### 6.4.4 Transition Single
+
+`LayerNorm(384)` → `Linear(384, 1536, no bias)` → SwiGLU → `Linear(768, 384)`.
+Expansion: **4×**.
+
+#### 6.4.5 Attention with Pair Bias
+
+The core pair-bias self-attention mechanism:
+
+- `single_layer_norm: LayerNorm(384)` — normalize single representation
+- `pair_layer_norm: LayerNorm(256)` — normalize pair representation
+- `pair_linear: Linear(256, 16, no bias)` — pair → per-head attention bias
+
+**Attention**:
+- `input2qkvg.weight: [384, 4, 16, 24]` — from single dim 384, produces 4 outputs
+  (q, k, v, g) for **16 heads** at **24 head_dim** each
+- `query_bias: [16, 24]` — learned query bias per head
+- `output_proj.weight: [16, 24, 384]` — projects multi-head output back to 384
+
+**Configuration**: **16 heads, 24 head_dim, gated output**
+
+The attention computation is:
+1. Project single → q, k, v, g (each [b, n, 16, 24])
+2. Add query_bias to q
+3. Compute attention: softmax(q·k^T / √24 + pair_bias) · v
+4. Gate output with sigmoid(g)
+5. Project back: [b, n, 16, 24] → [b, n, 384]
+
+**Evidence**: `trunk.pt`, e.g. `pairformer_stack.blocks.0.attention_pair_bias.*`.
+
+### 6.5 Summary Table
+
+| Block Type | Count | Key Dimensions |
+|-----------|-------|---------------|
+| Template Pairformer | 2 | pair=64, 8 heads |
+| MSA outer product mean | 4 | MSA=64 → pair=256, 8×8 outer |
+| MSA pair-weighted avg | 3 | 8 heads, 32 value_dim |
+| MSA transition | 3 | 64→512→256→64 (SwiGLU 4×) |
+| Pair transition (MSA) | 4 | 256→2048→1024→256 (SwiGLU 4×) |
+| Triangular mult (MSA) | 4 | pair=256 |
+| Triangular attn (MSA) | 4 | pair=256, 8 heads |
+| Pairformer blocks | 48 | single=384, pair=256 |
+| — attention pair bias | 48 | 16 heads, 24 head_dim |
+| — transition single | 48 | 384→1536→768→384 (SwiGLU 4×) |
+| — transition pair | 48 | 256→1024→512→256 (SwiGLU 4×) |
+| — triangle mult | 48 | pair=256 |
+| — triangle attn | 48 | pair=256, 8 heads |
+
+---
+
+## 7. Diffusion Module
+
+**Module**: `diffusion_module.pt` (127,928,768 params)
+
+The diffusion module predicts 3D atomic coordinates via denoising diffusion. It consists
+of four sub-systems: conditioning, atom attention encoder, diffusion transformer, and
+atom attention decoder.
+
+### 7.1 Diffusion Conditioning
+
+Prepares conditioning signals from trunk outputs and noise level σ:
+
+```
+token_single_initial[384] ++ token_single_trunk[384] = 768
+    │
+    ▼
+token_in_proj: LayerNorm(768) → Linear(768, 384, no bias)
+    │
+    ▼
+single_trans1: SwiGLU transition (384→1536→768→384, 4×)
+    │
+    ▼
+ + fourier_embedding(σ) → fourier_proj: LayerNorm(256) → Linear(256, 384)
+    │
+    ▼
+single_trans2: SwiGLU transition (384→1536→768→384, 4×)
+    │
+    ▼
+single_ln: LayerNorm(384) → s_cond [b, n, 384]
+
+
+token_pair_initial[256] ++ token_pair_trunk[256] = 512
+    │
+    ▼
+token_pair_proj: LayerNorm(512) → Linear(512, 256, no bias)
+    │
+    ▼
+pair_trans1: SwiGLU transition (256→1024→512→256, 4×)
+    │
+    ▼
+pair_trans2: SwiGLU transition (256→1024→512→256, 4×)
+    │
+    ▼
+pair_ln: LayerNorm(256) → z_cond [b, n, n, 256]
+```
+
+**Fourier Embedding**: `weights: [256], bias: [256]` — random Fourier features for σ.
+Projects log(σ) through `sin(weights * log_σ + bias)` to produce 256-dim embedding,
+then projected to 384 via `LayerNorm(256) → Linear(256, 384)`.
+
+**Evidence**: `diffusion_module.pt` parameters prefixed `diffusion_conditioning.*`.
+
+### 7.2 Atom Attention Encoder
+
+Same architecture as the token embedder's atom encoder, with additions for diffusion:
+
+- `to_atom_cond: Linear(128, 128)` — condition atoms from structure features
+- `token_to_atom_single: LayerNorm(384) → Linear(384, 128)` — broadcast token→atom
+- **`prev_pos_embed: Linear(3, 128, no bias)`** — embeds noised atom positions (unique to diffusion)
+- `pair_update_block`: same as token embedder (proj_h/w + MLP at dim 16)
+- `token_pair_to_atom_pair: LayerNorm(256) → Linear(256, 16)` — pair→atom pair
+- 3 local attention blocks + 3 transitions (identical to token embedder, 4 heads, 32 head_dim)
+- `to_token_single: Linear(128, 768, no bias)` — aggregate to token, output dim **768**
+  (double the single dim, matching diffusion transformer width)
+
+**Evidence**: `diffusion_module.pt` parameters prefixed `atom_attention_encoder.*`.
+
+### 7.3 Diffusion Transformer (16 blocks)
+
+The core denoising network. Each of the **16 blocks** performs conditioned pair-bias
+self-attention at the **768-dim** working width:
+
+```
+For each block:
+    x [b, n, 768]  (token-level representation)
+    s_cond [b, n, 384]  (conditioning signal)
+    z_cond [b, n, n, 256]  (pair conditioning)
+        │
+        ▼
+    AdaLayerNorm: norm_in.lin_s_merged: Linear(384, 1536, no bias)
+        → produces scale[768] + shift[768] from 384-dim conditioning
+        │
+        ▼
+    to_qkv: Linear(768, 2304, no bias)
+        → 2304 = 3 × 768 = 3 × 16_heads × 48_head_dim
+        │
+        ▼
+    q_bias: [16, 48] (added to queries)
+        │
+        ▼
+    pair_layer_norm: LayerNorm(256)
+    pair_linear: Linear(256, 16, no bias) → per-head pair bias
+        │
+        ▼
+    Attention: softmax(q·k^T / √48 + pair_bias) · v
+        │
+        ▼
+    to_out: Linear(768, 768, no bias) — output projection
+        │
+        ▼
+    gate: gate_proj: Linear(384, 768, bias=True) → sigmoid gate from conditioning
+        │
+        ▼
+    x += gated_attention_output
+        │
+        ▼
+    ConditionedTransitionBlock:
+        AdaLN: Linear(384, 1536) → scale+shift for 768-dim
+        SwiGLU: Linear(768, 3072) → split → SiLU × identity → Linear(1536, 768)
+        Gate: Linear(384, 768, bias=True) → sigmoid, bias init -2
+        │
+        ▼
+    x += gated_transition_output
+```
+
+**Configuration**: **16 heads, 48 head_dim, 768 working dim, conditioned by 384-dim**
+
+Key architectural detail: The diffusion transformer operates at **2× the single
+representation width** (768 vs 384). This allows more capacity for the denoising task
+while keeping the trunk's single representation compact.
+
+**Evidence**: `diffusion_module.pt` parameters prefixed `diffusion_transformer.blocks.*`.
+
+### 7.4 Atom Attention Decoder
+
+Mirrors the encoder to decode token-level predictions back to atomic positions:
+
+- `token_to_atom: Linear(768, 128, no bias)` — broadcast token→atom
+- 3 local attention blocks + 3 transitions (same as encoder, 4 heads, 32 head_dim)
+- `to_pos_updates: LayerNorm(128) → Linear(128, 3, no bias)` — output xyz deltas
+
+### 7.5 Post-Processing Layers
+
+- `structure_cond_to_token_structure_proj: Linear(384, 768, no bias)` — initial projection
+  of structure conditioning to the 768 working dim
+- `post_attn_layernorm: LayerNorm(768)` — normalize after diffusion transformer
+- `post_atom_cond_layernorm: LayerNorm(128)` — normalize atom representations
+
+### 7.6 Noise Schedule and Sampling
+
+**Noise Schedule** (`InferenceNoiseSchedule` in `model/diffusion_schedules.py`):
 
 ```
 σ(t) = σ_data · (t · s_min^(1/p) + (1-t) · s_max^(1/p))^p
 ```
 
-Parameters (from `InferenceNoiseSchedule` and `DiffusionConfig`):
-- `σ_data = 16.0` — data standard deviation
-- `s_max = 80.0` — maximum noise level
-- `s_min = 4e-4` — minimum noise level
-- `p = 7.0` — interpolation power
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| σ_data | 16.0 | `chai1.py:247` |
+| s_max | 80.0 | `chai1.py:243` |
+| s_min | 4e-4 | `chai1.py:244` |
+| p | 7.0 | `diffusion_schedules.py:24` |
+| S_churn | 80 | `chai1.py:243` |
+| S_tmin | 4e-4 | `chai1.py:244` |
+| S_tmax | 80.0 | `chai1.py:245` |
+| S_noise | 1.003 | `chai1.py:246` |
+| Timesteps | 200 | Default |
+| 2nd order | True | Heun corrector |
 
-Timesteps are sampled at midpoints of 200 evenly-spaced intervals in [0, 1].
+**Sampling**: EDM (Karras et al. 2022) Algorithm 2 with stochastic churn and
+second-order Heun correction. At each step, coordinates are centered, randomly
+rotated (uniform SO(3) via quaternions), and translated (σ=1.0) for SE(3) invariance.
 
-**Evidence**: `model/diffusion_schedules.py` lines 14-48.
-
-### 7.3 Sampling Algorithm
-
-The sampling follows Algorithm 2 from Karras et al. (EDM) with stochastic churn:
-
-```
-DiffusionConfig:
-  S_churn = 80        # stochastic churn
-  S_tmin  = 4e-4      # minimum σ for churn
-  S_tmax  = 80.0      # maximum σ for churn
-  S_noise = 1.003     # noise amplification
-  second_order = True  # enable Heun correction
-```
-
-Per-step procedure:
-1. **Center and augment**: Random rotation + translation of atom positions
-2. **Add churn noise**: σ̂ = σ_curr + γ · σ_curr, inject noise scaled by S_noise
-3. **First-order step**: Denoise at σ̂, compute derivative d_i, step to σ_next
-4. **Second-order correction** (Heun): Denoise again at σ_next, average derivatives
-
-The centering augmentation (`center_random_augmentation`) at each step:
-- Computes the weighted centroid of valid atoms
-- Centers coordinates to origin
-- Applies a random 3D rotation (uniformly sampled via quaternions)
-- Adds random translation (σ=1.0)
-
-This ensures SE(3) invariance during the denoising process.
-
-**Evidence**: `chai1.py` lines 844-886, `model/utils.py` lines 178-194.
-
-### 7.4 Multi-Sample Generation
-
-Multiple diffusion samples (default: 5) are generated in parallel from the **same**
-trunk representation. Initial positions are sampled as `σ[0] · N(0, I)` for each atom.
-
-**Evidence**: `chai1.py` lines 839-842.
+**Evidence**: `chai1.py` lines 821-886, `model/diffusion_schedules.py`.
 
 ---
 
 ## 8. Confidence Head
 
-**Module**: `confidence_head.pt`
+**Module**: `confidence_head.pt` (14,812,416 params)
 
-The confidence head predicts per-residue and per-pair quality metrics for each
-diffusion sample. Per the architecture diagram, it contains **4 blocks** of pair-bias
-attention.
+Internal class: `chai.model.modules.af3_confidence_head`
 
-### 8.1 Inputs
+### 8.1 Input Processing
 
-| Parameter | Shape | Description |
-|-----------|-------|-------------|
-| `token_single_input_repr` | `[b, n, d]` | Initial single repr (from embedder) |
-| `token_single_trunk_repr` | `[b, n, d]` | Final trunk single repr |
-| `token_pair_trunk_repr` | `[b, n, n, d]` | Final trunk pair repr |
-| `token_single_mask` | `[b, n]` | Token existence mask |
-| `atom_single_mask` | `[b, n_atoms]` | Atom existence mask |
-| `atom_coords` | `[1, n_atoms, 3]` | Denoised atom coordinates (one sample) |
-| `token_reference_atom_index` | `[b, n]` | Reference atom per token |
-| `atom_token_index` | `[b, n_atoms]` | Atom→token mapping |
-| `atom_within_token_index` | `[b, n_atoms]` | Atom ordering within token |
+The confidence head receives trunk outputs and denoised coordinates, then constructs
+initial representations:
 
-### 8.2 Outputs
+- `single_to_pair_proj: Linear(384, 512, no bias)` — projects single representation,
+  then constructs pair representation via outer sum (512 = 2×256, split for i and j)
+- `atom_distance_bins_projection: Linear(16, 256, no bias)` — embeds pairwise atom
+  distances (16 distance bins) into pair space, added to pair representation
 
-Returns a tuple of three logit tensors:
+### 8.2 Pairformer Blocks (4 blocks)
 
-| Output | Shape | Description |
-|--------|-------|-------------|
-| `pae_logits` | `[b, n_tokens, n_tokens, 64]` | Predicted Aligned Error (64 bins, 0–32Å) |
-| `pde_logits` | `[b, n_tokens, n_tokens, 64]` | Predicted Distance Error (64 bins, 0–32Å) |
-| `plddt_logits` | `[b, n_atoms, n_bins]` | Predicted lDDT per atom |
+Each block has the same structure as the trunk Pairformer blocks (§6.4) with one
+difference in triangle attention:
 
-The confidence head is run **once per diffusion sample**, not once per denoising step.
-It takes the final denoised coordinates and predicts quality metrics.
+**Standard sub-layers** (same as trunk):
+- `transition_pair`: SwiGLU at dim 256 (4× expansion)
+- `triangle_multiplication`: Same as trunk (dim 256)
+- `transition_single`: SwiGLU at dim 384 (4× expansion)
+- `attention_pair_bias`: 16 heads, 24 head_dim (identical to trunk)
 
-**Evidence**: `chai1.py` lines 894-915, output processing at lines 912-958.
+**Triangle Attention** (different variant):
+- `pair_layer_norm: LayerNorm(256)`
+- **`pair2qkvgb: Linear(256, 2056, no bias)`** — fused q+k+v+g+bias projection
+  - 2056 = 2048 + 8 = 8 heads × (q32 + k32 + v64 + g64 + bias1)
+- `linear_out: Linear(512, 512, no bias)` — output: 8 heads × 64
 
-### 8.3 Score Computation
+This is a **simplified single-projection triangle attention** compared to the trunk's
+dual-projection variant (pair2qkvg1 + pair2qkvg2).
 
-From the logits, expected values are computed:
+### 8.3 Output Heads
 
-- **PAE scores**: softmax over 64 bins with centers from 0.0 to 32.0Å, producing
-  expected error per token pair
-- **PDE scores**: Same binning as PAE
-- **pLDDT scores**: Per-atom, then averaged to per-token using `atom_token_index`
+| Head | Projection | Output Shape | Bins |
+|------|-----------|-------------|------|
+| pLDDT | `Linear(384, 1850, no bias)` | `[b, n_tokens, 37, 50]` → `[b, n_atoms, 50]` | 50 bins, [0, 1] |
+| PAE | `Linear(256, 64, no bias)` | `[b, n_tokens, n_tokens, 64]` | 64 bins, [0, 32]Å |
+| PDE | `Linear(256, 64, no bias)` | `[b, n_tokens, n_tokens, 64]` | 64 bins, [0, 32]Å |
 
-**Evidence**: `chai1.py` lines 920-958.
+**pLDDT detail**: The 1850-dim output is reshaped to `[n_tokens, 37, 50]` — **37 atom
+positions per token, 50 bins each**. This is then scattered to atom-level using
+`atom_within_token_index`. Graph constants confirm: `37` and `50` appear at line 1497
+of the JIT source.
+
+**Evidence**: `confidence_head.pt` parameter shapes and graph constants.
 
 ---
 
@@ -575,128 +712,118 @@ From the logits, expected values are computed:
 
 ### 9.1 Aggregate Score
 
-The aggregate ranking score combines three components:
-
 ```
-aggregate_score = 0.2 × complex_pTM + 0.8 × interface_pTM − 100 × has_inter_chain_clashes
+aggregate_score = 0.2 × pTM + 0.8 × ipTM − 100 × has_inter_chain_clashes
 ```
 
-**Evidence**: `ranking/rank.py` lines 95-98.
-
-### 9.2 pTM / ipTM Computation
-
-Predicted TM-score uses the standard normalization:
+### 9.2 TM-Score Normalization
 
 ```
 d0 = 1.24 · (max(N, 19) − 15)^(1/3) − 1.8
 TM_pair(i,j) = 1 / (1 + (PAE_ij / d0)²)
 ```
 
-- **Complex pTM**: Normalized by total token count, maximized over alignment rows
-- **Interface pTM (ipTM)**: For each chain c, computes pTM of c against all other
-  chains, takes the maximum over chains. Weighted 4× more than complex pTM in the
-  aggregate score
-- **Per-chain pTM**: Individual chain quality
-- **Per-chain-pair ipTM**: Pairwise interface quality matrix
+- **pTM**: Max over alignment rows of sum of pairwise TM scores, normalized by total tokens
+- **ipTM**: Max over chains c of pTM(c vs rest), weighted 4× in aggregate score
+- **Clash detection**: Threshold 1.1Å, max 100 clashes, max ratio 0.5
 
-**Evidence**: `ranking/ptm.py` lines 33-36, 74-115.
-
-### 9.3 Clash Detection
-
-Inter-chain steric clashes are detected and penalized:
-- Clash threshold: 1.1Å
-- Maximum clashes allowed: 100
-- Maximum clash ratio: 0.5
-- Any inter-chain clash results in −100 penalty to aggregate score
-
-**Evidence**: `ranking/rank.py` lines 52-55, 95-98.
-
-### 9.4 pLDDT
-
-Per-atom predicted lDDT is computed as the expected value of the pLDDT logits. It is
-aggregated to per-chain scores and exported as B-factors (0–100 scale) in CIF files.
-
-**Evidence**: `ranking/plddt.py`, `chai1.py` lines 1028-1031.
+**Evidence**: `ranking/rank.py`, `ranking/ptm.py`, `ranking/clashes.py`.
 
 ---
 
 ## 10. Key Differences from AlphaFold 3
 
-Based on the preprint and codebase analysis:
+### 10.1 Verified from Model Inspection
 
-### 10.1 Language Model Embeddings
+1. **ESM2-3B language model** embeddings (2560-dim) as first-class TOKEN input
+2. **Constraint features**: Contact (RBF 6), pocket (RBF 6), docking (one-hot 6 bins)
+3. **Covalent bond features**: Separate projection pathway
+4. **MSA module asymmetry**: 4 outer-product-mean blocks but only 3 MSA attention/transition
+   blocks — the last iteration only updates the pair representation
+5. **Confidence head triangle attention**: Uses a single fused qkvgb projection (2056-dim)
+   instead of the trunk's dual-projection (qkvg1 + qkvg2) triangle attention
+6. **pLDDT output**: 37 atom positions × 50 bins = 1850 per token (vs AF3's per-atom approach)
 
-Chai-1 integrates **ESM2-3B** (esm2_t36_3B_UR50D) protein language model embeddings as
-a first-class input alongside MSAs. The model is a 3-billion parameter transformer
-producing 2560-dimensional per-residue embeddings.
+### 10.2 Architecture Dimensions Summary
 
-- Non-protein tokens (DNA, RNA, ligands) receive zero/mask embeddings
-- Modified residues use their canonical parent residue; unknown residues get "X"
-- At inference, the model can run with **any combination** of MSAs, templates, and ESM
-  embeddings
+| Component | Chai-1 | AF3 (for reference) |
+|-----------|--------|---------------------|
+| Token single dim | 384 | 384 |
+| Token pair dim | 256 | 128 |
+| MSA dim | 64 | 64 |
+| Atom single dim | 128 | 128 |
+| Atom pair dim | 16 | 16 |
+| Pairformer blocks | 48 | 48 |
+| Pairformer heads | 16 | 16 |
+| Pairformer head dim | 24 | 24 |
+| Diffusion blocks | 16 | 24 |
+| Diffusion heads | 16 | 16 |
+| Diffusion head dim | 48 | 64 |
+| Diffusion working dim | 768 | 768 |
+| Confidence blocks | 4 | 4 |
+| MSA module blocks | 4 (mixed) | 4 |
+| Template blocks | 2 | 2 |
+| Atom attn blocks | 3 | 3 |
+| Atom attn heads | 4 | 4 |
+| Atom attn head dim | 32 | 32 |
 
-**Evidence**: `data/dataset/embeddings/esm.py` (ESM2-3B download URL at line 21,
-tokenizer at lines 54-88, embedding extraction at lines 112-137).
-
-### 10.2 Constraint Features
-
-Chai-1 adds novel constraint/prompting features not present in AF3:
-
-- **Contact constraints**: Token-pair distance thresholds (RBF-encoded)
-- **Pocket constraints**: Token-to-chain proximity constraints
-- **Docking constraints**: Inter-group distance histograms
-- **Covalent bond features**: Explicit bond indicators with dedicated projection
-
-These are trained with 10% inclusion probability and geometric sampling, enabling
-flexible conditioning at inference.
-
-### 10.3 Block Counts
-
-From the architecture diagram:
-- MSA module: **4 blocks** (vs AF3's 4 blocks — same)
-- Pairformer: **48 blocks** (vs AF3's 48 blocks — same)
-- Diffusion module: **16 blocks**
-- Confidence head: **4 blocks**
-
-### 10.4 Other Notable Details
-
-- **Blocked atom-pair attention**: Query block size 32, key block size 128 (matching
-  AF3's atom transformer design)
-- **Diffusion sampling**: Second-order Heun correction with stochastic churn (S_churn=80)
-- **Template restriction**: Templates provide only intra-chain distances; inter-chain
-  structural information comes exclusively from docking constraints
-- **Recycling**: Default 3 trunk recycles with optional MSA subsampling per cycle
-- **Multi-sample diffusion**: Default 5 parallel samples from a single trunk output
+Notable: Chai-1 uses **pair dim 256** (vs AF3's 128), and **16 diffusion blocks**
+(vs AF3's 24), with **48 diffusion head dim** (vs AF3's 64).
 
 ---
 
-## Appendix A: Neural Network Component Summary
+## Appendix A: Layer Building Blocks
 
-| Component | File | Role |
-|-----------|------|------|
-| `feature_embedding.pt` | — | Raw features → dense representations |
-| `bond_loss_input_proj.pt` | — | Bond features → pair representation |
-| `token_embedder.pt` | — | Atom→token aggregation + initial representations |
-| `trunk.pt` | — | MSA module + Pairformer (recycled) |
-| `diffusion_module.pt` | — | Denoising diffusion structure prediction |
-| `confidence_head.pt` | — | PAE, PDE, pLDDT prediction |
-| ESM2-3B | `esm2_t36_3B_UR50D` | Protein language model embeddings |
+### A.1 SwiGLU Transition
 
-All neural network components are downloaded from `chaiassets.com` and cached locally.
+Used throughout (pair transitions, single transitions, MSA transitions):
 
-## Appendix B: Key Constants
+```python
+x = LayerNorm(x)
+ab = Linear_no_bias(x)  # expansion: dim → 2 * expansion * dim
+a, b = ab.chunk(2, dim=-1)
+x = x + Linear(SiLU(a) * b)  # down projection
+```
 
-| Constant | Value | Location |
-|----------|-------|----------|
-| Max tokens | 2048 | `data/collate/utils.py:13` |
-| Atoms per token | 23 | `data/collate/utils.py:35` |
-| Max MSA depth | 16,384 | `data/dataset/all_atom_feature_context.py:20` |
-| Max templates | 4 | `data/dataset/all_atom_feature_context.py:21` |
-| ESM embedding dim | 2560 | `data/dataset/embeddings/embedding_context.py:48` |
-| Query atom block | 32 | `chai1.py:642` |
-| Key atom block | 128 | `chai1.py:641` |
-| σ_data | 16.0 | `chai1.py:247` |
-| Default recycles | 3 | `chai1.py:513` |
-| Default diffusion steps | 200 | `chai1.py:514` |
-| Default diffusion samples | 5 | `chai1.py:515` |
-| PAE/PDE bins | 64, 0–32Å | `chai1.py:932-939` |
+Expansion factor is consistently **4×** across all modules.
+
+### A.2 AdaLayerNorm (Adaptive Layer Normalization)
+
+Used in diffusion transformer and atom transformer:
+
+```python
+scale_shift = Linear(conditioning)  # dim → 2 * dim
+scale, shift = scale_shift.chunk(2, dim=-1)
+x = LayerNorm(x) * (1 + scale) + shift
+```
+
+### A.3 Gated Output with Bias Init -2
+
+Used in conditioned transitions and diffusion attention:
+
+```python
+gate = sigmoid(Linear(conditioning, bias=True))  # bias initialized to -2
+output = gate * value  # gate starts near sigmoid(-2) ≈ 0.12
+```
+
+### A.4 Blocked Local Attention
+
+Atom-level attention uses blocked structure:
+- Query block size: **32 atoms**
+- Key/value block size: **128 atoms**
+- Pair bias from blocked atom pairs projected per-head
+
+---
+
+## Appendix B: Complete Parameter Counts
+
+| Module | Params (exact) |
+|--------|---------------|
+| feature_embedding.pt | ~1,100,000 |
+| bond_loss_input_proj.pt | 512 |
+| token_embedder.pt | ~1,500,000 |
+| trunk.pt | 169,955,072 |
+| diffusion_module.pt | 127,928,768 |
+| confidence_head.pt | 14,812,416 |
+| **Total (excl. ESM)** | **~314M** |
+| ESM2-3B (external) | ~3,000,000,000 |
