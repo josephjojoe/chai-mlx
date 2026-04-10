@@ -29,7 +29,8 @@ pattern documented here is verified against the actual model parameter shapes.
 7. [Diffusion Module](#7-diffusion-module)
 8. [Confidence Head](#8-confidence-head)
 9. [Ranking and Scoring](#9-ranking-and-scoring)
-10. [Key Differences from AlphaFold 3](#10-key-differences-from-alphafold-3)
+10. [Handling of Optional Inputs](#10-handling-of-optional-inputs)
+11. [Key Differences from AlphaFold 3](#11-key-differences-from-alphafold-3)
 
 ---
 
@@ -360,6 +361,36 @@ asymmetric block structure (not all sub-modules have the same number of blocks):
 | `pair_transition` | 4 | Pair → Pair (feed-forward) |
 | `triangular_multiplication` | 4 | Pair → Pair (triangle update) |
 | `triangular_attention` | 4 | Pair → Pair (triangle attention) |
+
+#### Iteration Order (verified from TorchScript graph source lines)
+
+The MSA module runs **4 iterations** with the following per-iteration structure, where
+the MSA self-attention/transition only runs in the first 3:
+
+```
+linear_s2m: project single → MSA (once at start)
+
+For i in 0..3:
+    outer_product_mean[i]: MSA → pair update
+    pair_transition[i]: pair feed-forward
+
+    if i < 3:
+        msa_pair_weighted_averaging[i]: pair-biased MSA attention
+        msa_transition[i]: MSA feed-forward
+
+    triangular_multiplication[i]: pair triangle update
+    triangular_attention[i]: pair triangle attention
+```
+
+The final iteration (i=3) only updates the pair representation — it computes the
+outer product mean from MSA to pairs, runs a pair transition, triangular multiplication,
+and triangular attention, but does NOT run MSA self-attention or MSA transition. This
+makes sense: after the final iteration, the MSA representation is discarded and only
+the pair representation continues to the Pairformer stack.
+
+**Evidence**: Source line numbers in `trunk.py` from TorchScript graph: lines 9408→9572
+(OPM_0 + pair_trans_0 + MSA_avg_0 + MSA_trans_0 + tri_mult_0 + tri_attn_0), repeating
+with MSA_avg/trans absent in the last iteration ending ~11403.
 
 #### 6.3.1 Single-to-MSA Projection
 
@@ -731,9 +762,85 @@ TM_pair(i,j) = 1 / (1 + (PAE_ij / d0)²)
 
 ---
 
-## 10. Key Differences from AlphaFold 3
+## 10. Handling of Optional Inputs
 
-### 10.1 Verified from Model Inspection
+Chai-1 can run with any combination of MSAs, templates, and ESM embeddings. Here is
+how each optional input is handled when absent:
+
+### 10.1 ESM Embeddings (absent)
+
+When `use_esm_embeddings=False`, `EmbeddingContext.empty(n_tokens)` creates a **zero
+tensor** of shape `[n_tokens, 2560]`. These zeros are concatenated into the TOKEN
+feature vector (which has total dim 2638) and projected through `Linear(2638, 384)`.
+There is **no learned mask embedding** — absence is represented as zeros.
+
+**Evidence**: `data/dataset/embeddings/embedding_context.py:48-51`, `data/dataset/embeddings/esm.py:158-161`.
+
+### 10.2 MSA (absent)
+
+When no MSA is provided, `MSAContext.create_empty(n_tokens, depth=MAX_MSA_DEPTH)` creates:
+- **Tokens**: filled with gap character `":"` (residue type index for gap)
+- **Mask**: all `False` (no valid MSA rows)
+- **Deletion matrix**: all zeros
+- **Pairing keys**: all `NO_PAIRING_KEY = -999991`
+- **Sequence source**: all `MSADataSource.NONE`
+
+The MSA features (MSAOneHot, MSAHasDeletion, MSADeletionValue, IsPairedMSA,
+MSADataSource) are computed from this empty context and produce gap-encoded / zero
+features. The MSA mask being all-False means:
+- MSA profile (TOKEN feature) is zero (no sequences to average over)
+- MSA deletion mean is zero
+- The MSA module's pair-weighted averaging uses the mask to zero out attention weights
+
+**Evidence**: `data/dataset/msas/msa_context.py:153-167`.
+
+### 10.3 Templates (absent)
+
+When no templates are available, `TemplateContext.empty(n_templates=4, n_tokens=n)` creates:
+- **Residue types**: filled with gap character `"-"`
+- **Pseudo-beta mask**: all `False`
+- **Backbone frame mask**: all `False`
+- **Distances**: all zeros
+- **Unit vectors**: all zeros
+
+The template mask (`template_restype != "-"`) is all-False, so the template input
+masks (`template_input_masks`) are all-zero. The template embedder processes these
+through its 2 Pairformer blocks but the all-zero masks ensure no information flows.
+
+**Evidence**: `data/dataset/templates/context.py:87-107`.
+
+### 10.4 Constraints (absent)
+
+Each constraint type has its own absent representation:
+- **Contact constraints**: Feature filled with `-1.0` (the `ignore_idx`). The RBF
+  encoding checks for `raw_data == -1.0` and creates a `should_mask` indicator that
+  is concatenated with the RBF output. The feature embedding then zeros the RBF values
+  for masked positions (verified from graph: `aten::eq(%raw_data, -1.0)` → multiply
+  encoding by `~should_mask`).
+- **Pocket constraints**: Same -1.0 / RBF masking as contacts.
+- **Docking constraints**: Feature filled with the `mask_value` (= `num_classes` for
+  one-hot = 6), which maps to a special "masked" one-hot class.
+
+At inference, contact and pocket constraints have `include_probability=1.0` (always
+included when provided), while docking has `include_probability=0.0` (never included
+from random sampling — only from explicit `RestraintGroup` specifications).
+
+**Evidence**: `chai1.py:203-221`, `data/features/generators/token_dist_restraint.py`,
+feature_embedding.pt graph lines 345-378.
+
+### 10.5 Non-Protein ESM Tokens
+
+For non-protein chains (DNA, RNA, ligands), ESM embeddings are set to zero vectors.
+Within protein chains, modified residues use their canonical parent residue for ESM
+tokenization; unknown residues use "X" (token ID 24).
+
+**Evidence**: `data/dataset/embeddings/esm.py:155-161`.
+
+---
+
+## 11. Key Differences from AlphaFold 3
+
+### 11.1 Verified Differences from Model Inspection
 
 1. **ESM2-3B language model** embeddings (2560-dim) as first-class TOKEN input
 2. **Constraint features**: Contact (RBF 6), pocket (RBF 6), docking (one-hot 6 bins)
@@ -744,7 +851,7 @@ TM_pair(i,j) = 1 / (1 + (PAE_ij / d0)²)
    instead of the trunk's dual-projection (qkvg1 + qkvg2) triangle attention
 6. **pLDDT output**: 37 atom positions × 50 bins = 1850 per token (vs AF3's per-atom approach)
 
-### 10.2 Architecture Dimensions Summary
+### 11.2 Architecture Dimensions Summary
 
 | Component | Chai-1 | AF3 (for reference) |
 |-----------|--------|---------------------|
