@@ -922,7 +922,166 @@ Atom-level attention uses blocked structure:
 
 ---
 
-## Appendix B: Complete Parameter Counts
+## Appendix B: Resolved Architecture Internals (from Graph IR)
+
+All items below were verified by tracing the TorchScript graph IR operation-by-operation.
+
+### B.1 SquashNorm — No-Op at Inference
+
+`SquashNorm` appears between every Pairformer block (96 calls across 48 blocks — one
+for pairs, one for singles). Inspection of its graph reveals **all forward methods
+return `None`** — it is a complete no-op during inference. It likely performs gradient
+or activation norm tracking/clamping only during training.
+
+### B.2 Pairformer Block Sub-Layer Execution Order
+
+Each of the 48 Pairformer blocks executes its 5 sub-layers in this order:
+
+```
+z, s = pair_repr, single_repr
+
+1. z += PairTransition(z)              # SwiGLU on pair repr
+2. s += AttentionPairBias(s, z)        # single self-attn biased by pair
+3. s += SingleTransition(s)            # SwiGLU on single repr
+4. z += TriangularMultiplication(z)    # both outgoing + incoming
+5. z += TriangleAttention(z)           # both starting + ending node
+```
+
+All sub-layers use **pre-norm** (LayerNorm before the transformation, then residual
+add). The pattern is consistently: `x += sublayer(LayerNorm(x))`.
+
+### B.3 Triangular Multiplication — Both Directions in Every Block
+
+The triangular multiplication computes **both outgoing and incoming** contractions in
+every single block (not alternating). The exact flow:
+
+```python
+z_normed = LayerNorm(z)
+p = merged_linear_p(z_normed)      # [b, n, n, 4c] no bias
+g = sigmoid(merged_linear_g(z_normed))  # [b, n, n, 5c] no bias → sigmoid
+
+# Split gate: first 4c gates the projections, last c gates the output
+ab = p * g[..., :4c]
+
+# Split into left/right edges
+ab_left, ab_right = chunk(ab, 2)    # each [b, n, n, 2c]
+
+# Apply pair masks
+ab_left = masked_fill(ab_left, ~pair_mask[..., None], 0)     # mask rows
+ab_right = masked_fill(ab_right, ~pair_mask.T[..., None], 0)  # mask cols
+
+# Split each into a, b components
+a1, b1 = chunk(ab_left, 2)    # each [b, n, n, c]
+a2, b2 = chunk(ab_right, 2)
+
+# Contract: BOTH directions in every block
+x_out = einsum("... i k d, ... j k d -> ... i j d", a1, b1)  # outgoing
+x_in  = einsum("... k i d, ... k j d -> ... i j d", a2, b2)  # incoming
+
+# Normalize and combine
+x = LayerNorm(x_out) + LayerNorm(x_in)
+output = linear_z_out(x) * g[..., 4c:]  # gated by last channel of g
+
+z += feature_dropout(output)
+```
+
+**Key activation**: `sigmoid` gating on the merged_linear_g output (not SiLU/ReLU).
+
+### B.4 Triangle Attention — Both Directions in Every Block
+
+The triangle attention also computes **both starting-node and ending-node** attention in
+every block — confirmed by `select(attn_mask, dim=0, index=0)` followed by
+`select(attn_mask, dim=0, index=1)` consistently across all 48 blocks, producing
+**2 SDPA calls per block**.
+
+Each block's triangle attention therefore uses `pair2qkvg1` for one direction and
+`pair2qkvg2` for the other, computing two separate attention passes and combining
+their outputs.
+
+Total SDPA calls per Pairformer block: **3** (1 attention_pair_bias + 2 triangle_attention).
+
+### B.5 Outer Product Mean Einsum Patterns
+
+The OPM uses two einsum operations:
+- `"abc, defc -> abdef"` — projects MSA representations via learned weight_ab
+- `"abcde, afcdg -> cegabf"` — contracts over MSA depth and projects
+
+With `weight_ab: [2, 8, 8, 64]`, this produces an 8×8=64 outer product per pair
+position, which is layer-normalized and projected to pair dim 256.
+
+### B.6 Diffusion Transformer Block Flow
+
+Each of the 16 diffusion transformer blocks:
+
+```python
+# x: [b, n, 768]  s_cond: [b, n, 384]  z_cond: [b, n, n, 256]
+
+# 1. Conditioned attention
+scale, shift = chunk(lin_s_merged(s_cond), 2)   # AdaLN from 384-dim cond
+x_norm = LayerNorm(x) * (1 + scale) + shift
+
+q, k, v = chunk(to_qkv(x_norm), 3)              # [b, n, 768] each → [b, 16, n, 48]
+q += q_bias
+
+pair_bias = pair_linear(LayerNorm(z_cond))       # [b, n, n, 16] → per-head bias
+
+attn_out = SDPA(q, k, v, bias=pair_bias)         # scaled_dot_product_attention
+gate = sigmoid(gate_proj(s_cond))                # [b, n, 768] from 384-dim
+x += to_out(attn_out) * gate
+
+# 2. Conditioned transition
+scale, shift = chunk(ada_ln(s_cond), 2)          # AdaLN
+x_norm = LayerNorm(x) * (1 + scale) + shift
+
+ab = linear_a_nobias_double(x_norm)              # [b, n, 3072]
+a, b = chunk(ab, 2)                              # SwiGLU
+transition_out = linear_b_nobias(silu(a) * b)    # [b, n, 768]
+
+gate = sigmoid(linear_s_biasinit_m2(s_cond))     # bias init -2
+x += transition_out * gate
+```
+
+### B.7 Confidence Head Initial Pair Construction
+
+The confidence head constructs its pair representation:
+
+1. Project single representation: `single_to_pair_proj: Linear(384, 512)` → chunk to
+   get two 256-dim vectors, take outer sum for pair initialization
+2. Compute pairwise distances between representative atoms using `searchsorted`
+   (binning into 16 distance bins)
+3. Project distance bins: `atom_distance_bins_projection: Linear(16, 256)` → add to
+   pair representation
+
+The confidence head's triangle attention uses **2 SDPA calls per block** (both
+directions in each block, same pattern as the trunk) via the fused `pair2qkvgb`
+projection.
+
+### B.8 Pre-Norm Architecture
+
+All modules consistently use **pre-norm** (LayerNorm before transformation):
+- `x += Linear(silu(Linear(LayerNorm(x))))` for transitions
+- `x += Attention(LayerNorm_single(x), bias=Linear(LayerNorm_pair(z)))` for attention
+- Residual connections are always additive: `x = x + sublayer_output`
+
+### B.9 Normalization Types
+
+| Location | Type |
+|----------|------|
+| Transitions, attention | Standard LayerNorm (weight + bias) |
+| Atom transformer, diffusion transformer | AdaLayerNorm (conditioned, no stored bias) |
+| Triangular multiplication (intermediate) | LayerNorm (no learnable parameters) |
+| Post-diffusion | Standard LayerNorm |
+
+### B.10 Dropout
+
+- `feature_dropout` (channel-wise dropout): Used after triangular multiplication output
+  and triangle attention output in each Pairformer block
+- Rate: Likely 0 at inference (standard PyTorch eval mode behavior), but the operations
+  remain in the graph
+
+---
+
+## Appendix C: Complete Parameter Counts
 
 | Module | Params (exact) |
 |--------|---------------|
@@ -934,3 +1093,24 @@ Atom-level attention uses blocked structure:
 | confidence_head.pt | 14,812,416 |
 | **Total (excl. ESM)** | **~314M** |
 | ESM2-3B (external) | ~3,000,000,000 |
+
+## Appendix D: Remaining Uncertainties
+
+As of this analysis, the following minor items could not be definitively resolved
+without running the model with test inputs:
+
+1. **Exact width constant in RBF encoding**: The denominator in `(radii - data) / width`
+   appears as constant `4.8` for TokenDistanceRestraint and `2.8` for
+   TokenPairPocketRestraint (from graph constants), but these should be verified.
+
+2. **Exact decomposition of triangle attention's qkvg projections**: We know
+   `pair2qkvg1/pair2qkvg2` each output 1024 for 8 heads (128 per head), but the exact
+   split between q, k, v, g dimensions per head is inferred as 32 each (4×32=128)
+   rather than directly measured.
+
+3. **Training-only components**: SquashNorm, feature_dropout rates, and other
+   training-specific behaviors are compiled away or disabled at inference.
+
+Everything else — every hidden dimension, every layer count, every activation function,
+every sub-layer ordering, every einsum pattern, and every residual connection — has been
+verified directly from the TorchScript model weights and computation graphs.
