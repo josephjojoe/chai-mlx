@@ -1094,23 +1094,49 @@ All modules consistently use **pre-norm** (LayerNorm before transformation):
 | **Total (excl. ESM)** | **~314M** |
 | ESM2-3B (external) | ~3,000,000,000 |
 
-## Appendix D: Remaining Uncertainties
+## Appendix D: Formerly Uncertain — Now Fully Resolved
 
-As of this analysis, the following minor items could not be definitively resolved
-without running the model with test inputs:
+All three items from the prior version of this document have been resolved:
 
-1. **Exact width constant in RBF encoding**: The denominator in `(radii - data) / width`
-   appears as constant `4.8` for TokenDistanceRestraint and `2.8` for
-   TokenPairPocketRestraint (from graph constants), but these should be verified.
+### D.1 RBF Encoding Width Constants (RESOLVED)
 
-2. **Exact decomposition of triangle attention's qkvg projections**: We know
-   `pair2qkvg1/pair2qkvg2` each output 1024 for 8 heads (128 per head), but the exact
-   split between q, k, v, g dimensions per head is inferred as 32 each (4×32=128)
-   rather than directly measured.
+From graph constants:
+- **TokenDistanceRestraint**: width = **4.8** Å
+- **TokenPairPocketRestraint**: width = **2.8** Å
 
-3. **Training-only components**: SquashNorm, feature_dropout rates, and other
-   training-specific behaviors are compiled away or disabled at inference.
+Formula: `encoding = exp(-((radii - raw_data) / width)²)`, clamped at exponent ≤ 16.
+When clamped, encoding is set to 0. When `raw_data == -1.0` (absent), a `should_mask`
+indicator is appended.
 
-Everything else — every hidden dimension, every layer count, every activation function,
-every sub-layer ordering, every einsum pattern, and every residual connection — has been
-verified directly from the TorchScript model weights and computation graphs.
+Learned RBF radii (from buffers):
+- TokenDistanceRestraint: `[6.0, 10.8, 15.6, 20.4, 25.2, 30.0]` (6 radii spanning 6–30Å)
+- TokenPairPocketRestraint: `[6.0, 8.8, 11.6, 14.4, 17.2, 20.0]` (6 radii spanning 6–20Å)
+
+### D.2 Triangle Attention qkvg Decomposition (RESOLVED)
+
+**Trunk triangle attention** (`pair2qkvg1/pair2qkvg2` each Linear(256, 1024)):
+- Confirmed via `prim::ListUnpack` → `q, k, v, g` (4 equal components)
+- `pair2b: Linear(256, 8)` confirms 8 heads
+- 1024 = **8 heads × 4 components × 32 head_dim**
+- `linear_out: Linear(512, 256)` — 512 = 8 heads × 32 v_dim × 2 directions
+- **Confirmed: 8 heads, 32 head_dim, equal split for q/k/v/g**
+
+**Confidence head triangle attention** (`pair2qkvgb: Linear(256, 2056)`):
+- 2056 = 8 heads × 257 per head = 8 × (4 × 64 + 1)
+- Decomposition: **q(64) + k(64) + v(64) + g(64) + bias(1)** per head
+- `linear_out: Linear(512, 512)` — 512 = 8 heads × 64 v_dim
+- Both directions computed via chunk(2) on q, k, v, bias → two SDPA calls
+- Outputs concatenated, then gated by sigmoid(g)
+- **Confirmed: 8 heads, 64 head_dim, fused bias**
+
+### D.3 Training-Only Components (RESOLVED)
+
+- **SquashNorm**: Returns `None` for all methods — complete no-op at inference
+- **feature_dropout**: Operations remain in graph but rate is 0.0 at eval mode
+  (standard PyTorch behavior)
+- No other training-only components exist in the inference graph
+
+**All architectural details are now fully resolved.** Every hidden dimension, layer
+count, activation function, sub-layer ordering, einsum contraction pattern, gating
+mechanism, residual connection, normalization type, and decomposition has been verified
+directly from the TorchScript model parameter shapes and computation graph IR.
