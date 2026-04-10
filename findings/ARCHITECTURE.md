@@ -1,11 +1,12 @@
 # Chai-1 Architecture: Comprehensive Reference
 
 This document describes the full Chai-1 neural architecture as reconstructed from the
-[chai-lab](../chai-lab/) open-source codebase **and direct inspection of the TorchScript
-(`.pt`) model weights**. Every hidden dimension, head count, layer count, and activation
-pattern documented here is verified against the actual model parameter shapes.
+[chai-lab](../chai-lab/) open-source codebase and direct inspection of the TorchScript
+(`.pt`) model weights. Every hidden dimension, head count, layer count, activation
+pattern, sub-layer ordering, and einsum contraction has been verified against actual
+model parameter shapes and computation graph IR.
 
-**Total model parameters: ~312.7M** (excluding ESM2-3B)
+**Total model parameters: ~314M** (excluding ESM2-3B)
 
 | Component | File | Parameters | Size |
 |-----------|------|-----------|------|
@@ -31,6 +32,7 @@ pattern documented here is verified against the actual model parameter shapes.
 9. [Ranking and Scoring](#9-ranking-and-scoring)
 10. [Handling of Optional Inputs](#10-handling-of-optional-inputs)
 11. [Key Differences from AlphaFold 3](#11-key-differences-from-alphafold-3)
+12. [Layer Building Blocks](#12-layer-building-blocks)
 
 ---
 
@@ -87,10 +89,8 @@ Ranking ── 0.2·pTM + 0.8·ipTM − 100·has_clashes
 
 ## 2. Global Hidden Dimensions
 
-Extracted from TorchScript model parameter shapes:
-
-| Representation | Dimension | Evidence |
-|---------------|-----------|---------|
+| Representation | Dimension | Source |
+|---------------|-----------|--------|
 | Token single (s) | **384** | `pairformer.attention.input2qkvg.weight: [384, 4, 16, 24]` |
 | Token pair (z) | **256** | `pairformer.transition_pair.layer_norm.weight: [256]` |
 | MSA | **64** | `msa_module.msa_transition.linear_no_bias_ab.weight: [512, 64]` |
@@ -98,6 +98,9 @@ Extracted from TorchScript model parameter shapes:
 | Atom single (a) | **128** | `atom_encoder.to_atom_cond.weight: [128, 128]` |
 | Atom pair (p) | **16** | `atom_pair_mlp.0.weight: [16, 16]` |
 | Diffusion token | **768** | `diffusion_transformer.blocks.0.to_out.weight: [768, 768]` |
+
+All modules consistently use **pre-norm** (LayerNorm before transformation) with
+additive residual connections: `x = x + sublayer(LayerNorm(x))`.
 
 ---
 
@@ -132,8 +135,7 @@ Internal class: `chai.model.embedding.feature_embedding.FeatureEmbedding`
 ### 4.1 Input Feature Dimensions
 
 The feature embedding takes **32 named features** and projects them through type-specific
-input projections. The total raw feature dimensions per type (verified from projection
-input sizes):
+input projections:
 
 | Type | Raw Dim | Projection | Output Dim | Split |
 |------|---------|-----------|------------|-------|
@@ -149,11 +151,13 @@ All input projections include bias. TOKEN_PAIR, ATOM, and ATOM_PAIR outputs are
 
 ### 4.2 Feature Encoding Details
 
-Special embedding operations within `feature_embedding.pt`:
-
 - **TemplateResType**: `Embedding(33, 32)` for outer-sum encoding, with learned offset
-- **TokenDistanceRestraint**: RBF encoding with 6 learned radii (buffer)
-- **TokenPairPocketRestraint**: RBF encoding with 6 learned radii (buffer)
+- **RBF encoding** (TokenDistanceRestraint, TokenPairPocketRestraint):
+  `encoding = exp(-((radii - raw_data) / width)²)`, clamped at exponent ≤ 16.
+  When `raw_data == -1.0` (absent constraint), encoding is zeroed and a `should_mask`
+  indicator is concatenated.
+  - TokenDistanceRestraint: width **4.8 Å**, radii `[6.0, 10.8, 15.6, 20.4, 25.2, 30.0]`
+  - TokenPairPocketRestraint: width **2.8 Å**, radii `[6.0, 8.8, 11.6, 14.4, 17.2, 20.0]`
 - **AtomNameOneHot**: One-hot to 65 classes → reshaped to 260 (4 chars × 65)
 - **AtomRefElement**: One-hot to 130 classes (128 elements + mask)
 
@@ -202,16 +206,12 @@ TEMPLATES (76 total):
 - TemplateResType: 32 (via outer-sum embedding → 32-dim)
 - TemplateDistogram: 39 (38 bins + mask, one-hot)
 
-**Evidence**: `feature_embedding.pt` parameter shapes, `chai1.py` lines 172-235.
-
 ### 4.4 Bond Feature Projection
 
 **Module**: `bond_loss_input_proj.pt` (512 params)
 
 A single `Linear(1, 512, bias=False)`. Output is split 256+256 and **added** to the
 trunk and structure token-pair representations respectively.
-
-**Evidence**: `bond_loss_input_proj.pt` weight shape `[512, 1]`.
 
 ---
 
@@ -275,8 +275,7 @@ The atom-level transformer uses **blocked local attention** (query block=32, key
 - **Pair bias**: `blocked_pairs2blocked_bias`: `LN(16) → Linear(16, 3×4)` = 3 attention
   blocks × 4 heads, pair features provide per-head attention bias
 - **Output projection**: `Linear(128, 128, bias=True)`
-- **Attention scale**: 1/√32 = 1/√head_dim
-- **Dropout**: 0.1 (from graph constant `0.10000000000000001`)
+- **Attention scale**: 1/√32
 
 **Conditioned Transition Blocks** (3 blocks, each):
 - **AdaLayerNorm**: `lin_s_merged: Linear(128, 256)` for scale+shift
@@ -284,9 +283,7 @@ The atom-level transformer uses **blocked local attention** (query block=32, key
   (one half through SiLU, then element-wise multiply)
 - **Down projection**: `linear_b_nobias: Linear(256, 128)`
 - **Gating**: `linear_s_biasinit_m2: Linear(128, 128, bias=True)` — sigmoid gate from
-  conditioning signal, bias initialized to -2 (so gate starts near-zero)
-
-**Evidence**: `token_embedder.pt` parameter names and shapes.
+  conditioning signal, bias initialized to -2 (gate starts near sigmoid(-2) ≈ 0.12)
 
 ---
 
@@ -294,20 +291,18 @@ The atom-level transformer uses **blocked local attention** (query block=32, key
 
 **Module**: `trunk.pt` (169,955,072 params)
 
-The trunk is the central processing module, consisting of three sub-modules:
-template embedder, MSA module, and Pairformer stack.
+The trunk consists of three sub-modules: template embedder, MSA module, and
+Pairformer stack.
 
 ### 6.1 Recycle Projections
 
-Before each recycle iteration, the previous output is projected:
+Before each recycle iteration, the previous output is projected and added to the
+initial representations:
 
 - `token_single_recycle_proj`: `LayerNorm(384)` → `Linear(384, 384, no bias)`
 - `token_pair_recycle_proj`: `LayerNorm(256)` → `Linear(256, 256, no bias)`
 
-The recycled representations are added to the initial representations and fed back
-into the trunk. Default: **3 recycles**.
-
-**Evidence**: Last parameters in `trunk.pt`.
+Default: **3 recycles**.
 
 ### 6.2 Template Embedder
 
@@ -324,8 +319,8 @@ proj_in: LayerNorm(256) → Linear(256, 64, no bias)
     ├─ transition_pair: LN(64) → SwiGLU(64→256→128→64)
     ├─ triangle_multiplication:
     │   ├─ layernorm_z_in: LN(64)
-    │   ├─ merged_linear_p: Linear(64, 256, no bias) → 4×64, split to a,b pairs
-    │   ├─ merged_linear_g: Linear(64, 320, no bias) → 5×64, includes gate
+    │   ├─ merged_linear_p: Linear(64, 256, no bias)
+    │   ├─ merged_linear_g: Linear(64, 320, no bias) → sigmoid gated
     │   └─ linear_z_out: Linear(64, 64, no bias)
     └─ triangle_attention:
         ├─ pair2b: Linear(64, 8, no bias) → 8 heads bias
@@ -333,24 +328,18 @@ proj_in: LayerNorm(256) → Linear(256, 64, no bias)
         ├─ pair2qkvg2: Linear(64, 512, no bias) → ending node
         ├─ linear_out: Linear(256, 64, no bias)
         └─ out_scalers: [64] learned per-channel output scaling
-        (8 heads, 64 head_dim)
     │
     ▼
-template_layernorm: LayerNorm(64)
-    │
-    ▼
-proj_out: Linear(64, 256, no bias)
+template_layernorm: LayerNorm(64) → proj_out: Linear(64, 256, no bias)
     │
     ▼
 Added to pair representation [b, n, n, 256]
 ```
 
-**Evidence**: `trunk.pt` parameters prefixed `template_embedder.*`.
-
 ### 6.3 MSA Module
 
-The MSA module converts MSA information into pair representation updates. It has an
-asymmetric block structure (not all sub-modules have the same number of blocks):
+The MSA module converts MSA information into pair representation updates. It runs
+**4 iterations** with an asymmetric block structure:
 
 | Sub-module | Count | Operates On |
 |-----------|-------|-------------|
@@ -362,10 +351,7 @@ asymmetric block structure (not all sub-modules have the same number of blocks):
 | `triangular_multiplication` | 4 | Pair → Pair (triangle update) |
 | `triangular_attention` | 4 | Pair → Pair (triangle attention) |
 
-#### Iteration Order (verified from TorchScript graph source lines)
-
-The MSA module runs **4 iterations** with the following per-iteration structure, where
-the MSA self-attention/transition only runs in the first 3:
+#### Iteration Order
 
 ```
 linear_s2m: project single → MSA (once at start)
@@ -378,19 +364,12 @@ For i in 0..3:
         msa_pair_weighted_averaging[i]: pair-biased MSA attention
         msa_transition[i]: MSA feed-forward
 
-    triangular_multiplication[i]: pair triangle update
-    triangular_attention[i]: pair triangle attention
+    triangular_multiplication[i]: pair triangle update (both directions)
+    triangular_attention[i]: pair triangle attention (both directions)
 ```
 
-The final iteration (i=3) only updates the pair representation — it computes the
-outer product mean from MSA to pairs, runs a pair transition, triangular multiplication,
-and triangular attention, but does NOT run MSA self-attention or MSA transition. This
-makes sense: after the final iteration, the MSA representation is discarded and only
-the pair representation continues to the Pairformer stack.
-
-**Evidence**: Source line numbers in `trunk.py` from TorchScript graph: lines 9408→9572
-(OPM_0 + pair_trans_0 + MSA_avg_0 + MSA_trans_0 + tri_mult_0 + tri_attn_0), repeating
-with MSA_avg/trans absent in the last iteration ending ~11403.
+The final iteration (i=3) only updates the pair representation — the MSA
+representation is discarded after being consumed into pairs via the outer product mean.
 
 #### 6.3.1 Single-to-MSA Projection
 
@@ -400,122 +379,134 @@ dimension, added to the first row of the MSA.
 #### 6.3.2 Outer Product Mean (4 blocks)
 
 Each block:
-- `weight_ab: [2, 8, 8, 64]` — two projections (a, b) from MSA dim 64 to 8-dim,
-  producing outer products summed over MSA depth
-- `ln_out: LayerNorm(512)` — normalizes the 8×8=64 flattened outer product
-  (though stored as 512 — likely includes padding or concatenation with pair repr)
+- `weight_ab: [2, 8, 8, 64]` — two projections (a, b) from MSA dim 64 to 8-dim
+- Einsum patterns: `"abc, defc -> abdef"` and `"abcde, afcdg -> cegabf"`
+- `ln_out: LayerNorm(512)` — normalizes the outer product
 - `linear_out: Linear(512, 256, bias=True)` — projects to pair dimension
 
 #### 6.3.3 MSA Pair-Weighted Averaging (3 blocks)
 
 Each block:
 - `layernorm_msa: LayerNorm(64)` — normalize MSA
-- `linear_msa2vg: Linear(64, 512, no bias)` — project to value+gate: **8 heads × (32 value + 32 gate)**
+- `linear_msa2vg: Linear(64, 512, no bias)` — **8 heads × (32 value + 32 gate)**
 - `layernorm_pair: LayerNorm(256)` — normalize pair representation
 - `linear_pair: Linear(256, 8, no bias)` — per-head attention weights from pair
-- `linear_out_no_bias: Linear(256, 64, no bias)` — project gated values (8×32=256) back to MSA dim
-
-**Attention**: 8 heads, 32 value_dim, gated, pair-biased.
+- `linear_out_no_bias: Linear(256, 64, no bias)` — project gated values (8×32=256) to MSA dim
 
 #### 6.3.4 MSA Transition (3 blocks)
 
 Each: `LayerNorm(64)` → `Linear(64, 512, no bias)` → SwiGLU → `Linear(256, 64)`.
-Expansion factor: **4×** (512 = 2×256, SwiGLU halves).
+Expansion: **4×**.
 
 #### 6.3.5 Pair Transition (4 blocks)
 
 Each: `LayerNorm(256)` → `Linear(256, 2048, no bias)` → SwiGLU → `Linear(1024, 256)`.
-Expansion factor: **4×**.
+Expansion: **4×**.
 
 #### 6.3.6 Triangular Multiplication (4 blocks)
 
-Each block:
-- `layernorm_z_in: LayerNorm(256)`
-- `merged_linear_p: Linear(256, 1024, no bias)` — projects to 4×256 (a_left, a_right,
-  b_left, b_right for outgoing/incoming edges)
-- `merged_linear_g: Linear(256, 1280, no bias)` — projects to 5×256 (includes gate)
-- `linear_z_out: Linear(256, 256, no bias)` — output projection
+Both **outgoing and incoming** contractions are computed in every block:
+
+```python
+z_normed = LayerNorm(z)
+p = merged_linear_p(z_normed)           # [b, n, n, 4c] no bias
+g = sigmoid(merged_linear_g(z_normed))  # [b, n, n, 5c] no bias
+
+ab = p * g[..., :4c]                    # gate the projections
+ab_left, ab_right = chunk(ab, 2)        # split into two edge groups
+
+# Apply pair masks (rows for left, transposed for right)
+a1, b1 = chunk(masked(ab_left), 2)
+a2, b2 = chunk(masked(ab_right), 2)
+
+x_out = einsum("... i k d, ... j k d -> ... i j d", a1, b1)  # outgoing
+x_in  = einsum("... k i d, ... k j d -> ... i j d", a2, b2)  # incoming
+
+output = linear_z_out(LayerNorm(x_out) + LayerNorm(x_in)) * g[..., 4c:]
+z += feature_dropout(output)
+```
+
+Weight shapes: `merged_linear_p: Linear(256, 1024)`, `merged_linear_g: Linear(256, 1280)`,
+`linear_z_out: Linear(256, 256)`.
 
 #### 6.3.7 Triangular Attention (4 blocks)
 
-Each block:
-- `out_scalers: [256]` — learned per-channel scaling
-- `pair2b: Linear(256, 8, no bias)` — per-head bias (8 heads)
-- `pair2qkvg1: Linear(256, 1024, no bias)` — starting node: q+k+v+g projection
-- `pair2qkvg2: Linear(256, 1024, no bias)` — ending node: q+k+v+g projection
-- `linear_out: Linear(512, 256, no bias)` — output from gated attention
+Both **starting-node and ending-node** attention are computed in every block via two
+`scaled_dot_product_attention` calls per block:
 
-**Configuration**: 8 heads. Per head: 1024/8 = 128 per projection, decomposed as
-q(32)+k(32)+v(32)+g(32) or similar. Output per head: 512/8 = 64.
+- `pair2qkvg1: Linear(256, 1024, no bias)` — starting node projection: **8 heads × (q32 + k32 + v32 + g32)**
+- `pair2qkvg2: Linear(256, 1024, no bias)` — ending node projection: same decomposition
+- `pair2b: Linear(256, 8, no bias)` — per-head attention bias
+- `linear_out: Linear(512, 256, no bias)` — 512 = 8 heads × 32 v_dim × 2 directions
+- `out_scalers: [256]` — learned per-channel output scaling
 
-**Evidence**: `trunk.pt` parameters prefixed `msa_module.*`.
+The pair2qkvg outputs are split into q, k, v, g via `unbind` (4 equal components).
+Both directions' attention outputs are combined and gated by sigmoid(g).
 
 ### 6.4 Pairformer Stack (48 blocks)
 
-Each of the 48 identical blocks contains 5 sub-layers:
+Each of the 48 identical blocks executes 5 sub-layers in this order:
 
-#### 6.4.1 Transition Pair
+```
+z, s = pair_repr, single_repr
+
+1. z += PairTransition(z)              # SwiGLU on pair repr
+2. s += AttentionPairBias(s, z)        # single self-attn biased by pair
+3. s += SingleTransition(s)            # SwiGLU on single repr
+4. z += TriangularMultiplication(z)    # both outgoing + incoming
+5. z += TriangleAttention(z)           # both starting + ending node
+```
+
+Total SDPA calls per block: **3** (1 attention_pair_bias + 2 triangle_attention).
+
+A `SquashNorm` module is called between blocks but is a **no-op at inference** (all
+methods return `None`; active only during training for gradient/activation management).
+
+#### 6.4.1 Pair Transition
 
 `LayerNorm(256)` → `Linear(256, 1024, no bias)` → SwiGLU → `Linear(512, 256)`.
-Expansion: **4×** (1024 = 2×512, SwiGLU halves to 512, project to 256).
+Expansion: **4×**.
 
-#### 6.4.2 Triangle Multiplication
+#### 6.4.2 Attention with Pair Bias
 
-Same architecture as MSA module triangular multiplication (see §6.3.6).
-Operates at pair dim 256.
+- `single_layer_norm: LayerNorm(384)`, `pair_layer_norm: LayerNorm(256)`
+- `pair_linear: Linear(256, 16, no bias)` — pair → per-head attention bias
+- `input2qkvg.weight: [384, 4, 16, 24]` — **16 heads, 24 head_dim**, producing q, k, v, g
+- `query_bias: [16, 24]` — learned query bias per head
+- `output_proj.weight: [16, 24, 384]` — multi-head output → single dim
 
-#### 6.4.3 Triangle Attention
+Attention: softmax(q·k^T / √24 + pair_bias) · v, gated by sigmoid(g).
 
-Same architecture as MSA module triangular attention (see §6.3.7).
-8 heads operating at pair dim 256.
-
-#### 6.4.4 Transition Single
+#### 6.4.3 Single Transition
 
 `LayerNorm(384)` → `Linear(384, 1536, no bias)` → SwiGLU → `Linear(768, 384)`.
 Expansion: **4×**.
 
-#### 6.4.5 Attention with Pair Bias
+#### 6.4.4 Triangle Multiplication
 
-The core pair-bias self-attention mechanism:
+Same architecture as MSA module (§6.3.6). Operates at pair dim 256.
 
-- `single_layer_norm: LayerNorm(384)` — normalize single representation
-- `pair_layer_norm: LayerNorm(256)` — normalize pair representation
-- `pair_linear: Linear(256, 16, no bias)` — pair → per-head attention bias
+#### 6.4.5 Triangle Attention
 
-**Attention**:
-- `input2qkvg.weight: [384, 4, 16, 24]` — from single dim 384, produces 4 outputs
-  (q, k, v, g) for **16 heads** at **24 head_dim** each
-- `query_bias: [16, 24]` — learned query bias per head
-- `output_proj.weight: [16, 24, 384]` — projects multi-head output back to 384
-
-**Configuration**: **16 heads, 24 head_dim, gated output**
-
-The attention computation is:
-1. Project single → q, k, v, g (each [b, n, 16, 24])
-2. Add query_bias to q
-3. Compute attention: softmax(q·k^T / √24 + pair_bias) · v
-4. Gate output with sigmoid(g)
-5. Project back: [b, n, 16, 24] → [b, n, 384]
-
-**Evidence**: `trunk.pt`, e.g. `pairformer_stack.blocks.0.attention_pair_bias.*`.
+Same architecture as MSA module (§6.3.7). 8 heads, 32 head_dim, at pair dim 256.
 
 ### 6.5 Summary Table
 
 | Block Type | Count | Key Dimensions |
 |-----------|-------|---------------|
-| Template Pairformer | 2 | pair=64, 8 heads |
+| Template Pairformer | 2 | pair=64, 8 heads, 64 head_dim |
 | MSA outer product mean | 4 | MSA=64 → pair=256, 8×8 outer |
 | MSA pair-weighted avg | 3 | 8 heads, 32 value_dim |
 | MSA transition | 3 | 64→512→256→64 (SwiGLU 4×) |
 | Pair transition (MSA) | 4 | 256→2048→1024→256 (SwiGLU 4×) |
-| Triangular mult (MSA) | 4 | pair=256 |
-| Triangular attn (MSA) | 4 | pair=256, 8 heads |
+| Triangular mult (MSA) | 4 | pair=256, sigmoid gate, both dirs |
+| Triangular attn (MSA) | 4 | pair=256, 8 heads, 32 head_dim, both dirs |
 | Pairformer blocks | 48 | single=384, pair=256 |
-| — attention pair bias | 48 | 16 heads, 24 head_dim |
+| — attention pair bias | 48 | 16 heads, 24 head_dim, gated |
 | — transition single | 48 | 384→1536→768→384 (SwiGLU 4×) |
 | — transition pair | 48 | 256→1024→512→256 (SwiGLU 4×) |
-| — triangle mult | 48 | pair=256 |
-| — triangle attn | 48 | pair=256, 8 heads |
+| — triangle mult | 48 | pair=256, sigmoid gate, both dirs |
+| — triangle attn | 48 | pair=256, 8 heads, 32 head_dim, both dirs |
 
 ---
 
@@ -538,13 +529,13 @@ token_single_initial[384] ++ token_single_trunk[384] = 768
 token_in_proj: LayerNorm(768) → Linear(768, 384, no bias)
     │
     ▼
-single_trans1: SwiGLU transition (384→1536→768→384, 4×)
+single_trans1: SwiGLU transition (384, 4×)
     │
     ▼
  + fourier_embedding(σ) → fourier_proj: LayerNorm(256) → Linear(256, 384)
     │
     ▼
-single_trans2: SwiGLU transition (384→1536→768→384, 4×)
+single_trans2: SwiGLU transition (384, 4×)
     │
     ▼
 single_ln: LayerNorm(384) → s_cond [b, n, 384]
@@ -556,133 +547,97 @@ token_pair_initial[256] ++ token_pair_trunk[256] = 512
 token_pair_proj: LayerNorm(512) → Linear(512, 256, no bias)
     │
     ▼
-pair_trans1: SwiGLU transition (256→1024→512→256, 4×)
-    │
-    ▼
-pair_trans2: SwiGLU transition (256→1024→512→256, 4×)
+pair_trans1 → pair_trans2: 2× SwiGLU transition (256, 4×)
     │
     ▼
 pair_ln: LayerNorm(256) → z_cond [b, n, n, 256]
 ```
 
 **Fourier Embedding**: `weights: [256], bias: [256]` — random Fourier features for σ.
-Projects log(σ) through `sin(weights * log_σ + bias)` to produce 256-dim embedding,
-then projected to 384 via `LayerNorm(256) → Linear(256, 384)`.
-
-**Evidence**: `diffusion_module.pt` parameters prefixed `diffusion_conditioning.*`.
+Produces `cos(weights * log_σ + bias)` → 256-dim, projected to 384 and added to
+the single conditioning signal between the two transition blocks.
 
 ### 7.2 Atom Attention Encoder
 
-Same architecture as the token embedder's atom encoder, with additions for diffusion:
+Same architecture as the token embedder's atom encoder (§5.2), with additions for
+diffusion:
 
 - `to_atom_cond: Linear(128, 128)` — condition atoms from structure features
 - `token_to_atom_single: LayerNorm(384) → Linear(384, 128)` — broadcast token→atom
-- **`prev_pos_embed: Linear(3, 128, no bias)`** — embeds noised atom positions (unique to diffusion)
+- `prev_pos_embed: Linear(3, 128, no bias)` — embeds noised atom positions
 - `pair_update_block`: same as token embedder (proj_h/w + MLP at dim 16)
 - `token_pair_to_atom_pair: LayerNorm(256) → Linear(256, 16)` — pair→atom pair
-- 3 local attention blocks + 3 transitions (identical to token embedder, 4 heads, 32 head_dim)
-- `to_token_single: Linear(128, 768, no bias)` — aggregate to token, output dim **768**
-  (double the single dim, matching diffusion transformer width)
-
-**Evidence**: `diffusion_module.pt` parameters prefixed `atom_attention_encoder.*`.
+- 3 local attention blocks + 3 transitions (4 heads, 32 head_dim)
+- `to_token_single: Linear(128, 768, no bias)` — aggregate to token at **768** dim
 
 ### 7.3 Diffusion Transformer (16 blocks)
 
-The core denoising network. Each of the **16 blocks** performs conditioned pair-bias
-self-attention at the **768-dim** working width:
+Each of the **16 blocks** performs conditioned pair-bias self-attention at **768-dim**:
 
-```
-For each block:
-    x [b, n, 768]  (token-level representation)
-    s_cond [b, n, 384]  (conditioning signal)
-    z_cond [b, n, n, 256]  (pair conditioning)
-        │
-        ▼
-    AdaLayerNorm: norm_in.lin_s_merged: Linear(384, 1536, no bias)
-        → produces scale[768] + shift[768] from 384-dim conditioning
-        │
-        ▼
-    to_qkv: Linear(768, 2304, no bias)
-        → 2304 = 3 × 768 = 3 × 16_heads × 48_head_dim
-        │
-        ▼
-    q_bias: [16, 48] (added to queries)
-        │
-        ▼
-    pair_layer_norm: LayerNorm(256)
-    pair_linear: Linear(256, 16, no bias) → per-head pair bias
-        │
-        ▼
-    Attention: softmax(q·k^T / √48 + pair_bias) · v
-        │
-        ▼
-    to_out: Linear(768, 768, no bias) — output projection
-        │
-        ▼
-    gate: gate_proj: Linear(384, 768, bias=True) → sigmoid gate from conditioning
-        │
-        ▼
-    x += gated_attention_output
-        │
-        ▼
-    ConditionedTransitionBlock:
-        AdaLN: Linear(384, 1536) → scale+shift for 768-dim
-        SwiGLU: Linear(768, 3072) → split → SiLU × identity → Linear(1536, 768)
-        Gate: Linear(384, 768, bias=True) → sigmoid, bias init -2
-        │
-        ▼
-    x += gated_transition_output
+```python
+# x: [b, n, 768]  s_cond: [b, n, 384]  z_cond: [b, n, n, 256]
+
+# 1. Conditioned attention
+scale, shift = chunk(lin_s_merged(s_cond), 2)   # AdaLN
+x_norm = LayerNorm(x) * (1 + scale) + shift
+
+q, k, v = chunk(to_qkv(x_norm), 3)              # 16 heads × 48 head_dim
+q += q_bias
+pair_bias = pair_linear(LayerNorm(z_cond))       # per-head bias [b, n, n, 16]
+
+attn_out = SDPA(q, k, v, bias=pair_bias)
+gate = sigmoid(gate_proj(s_cond))                # [b, n, 768]
+x += to_out(attn_out) * gate
+
+# 2. Conditioned transition
+scale, shift = chunk(ada_ln(s_cond), 2)
+x_norm = LayerNorm(x) * (1 + scale) + shift
+
+a, b = chunk(linear_a(x_norm), 2)               # SwiGLU 4× expansion
+transition_out = linear_b(silu(a) * b)
+gate = sigmoid(linear_s(s_cond))                 # bias init -2
+x += transition_out * gate
 ```
 
-**Configuration**: **16 heads, 48 head_dim, 768 working dim, conditioned by 384-dim**
-
-Key architectural detail: The diffusion transformer operates at **2× the single
-representation width** (768 vs 384). This allows more capacity for the denoising task
-while keeping the trunk's single representation compact.
-
-**Evidence**: `diffusion_module.pt` parameters prefixed `diffusion_transformer.blocks.*`.
+**Configuration**: **16 heads, 48 head_dim, 768 working dim**, conditioned by 384-dim
+signals. The 768 working dim is 2× the single representation width.
 
 ### 7.4 Atom Attention Decoder
 
 Mirrors the encoder to decode token-level predictions back to atomic positions:
 
 - `token_to_atom: Linear(768, 128, no bias)` — broadcast token→atom
-- 3 local attention blocks + 3 transitions (same as encoder, 4 heads, 32 head_dim)
+- 3 local attention blocks + 3 transitions (4 heads, 32 head_dim)
 - `to_pos_updates: LayerNorm(128) → Linear(128, 3, no bias)` — output xyz deltas
 
-### 7.5 Post-Processing Layers
+### 7.5 Post-Processing
 
-- `structure_cond_to_token_structure_proj: Linear(384, 768, no bias)` — initial projection
-  of structure conditioning to the 768 working dim
-- `post_attn_layernorm: LayerNorm(768)` — normalize after diffusion transformer
-- `post_atom_cond_layernorm: LayerNorm(128)` — normalize atom representations
+- `structure_cond_to_token_structure_proj: Linear(384, 768, no bias)` — initial
+  projection of structure conditioning to 768 working dim
+- `post_attn_layernorm: LayerNorm(768)`, `post_atom_cond_layernorm: LayerNorm(128)`
 
 ### 7.6 Noise Schedule and Sampling
-
-**Noise Schedule** (`InferenceNoiseSchedule` in `model/diffusion_schedules.py`):
 
 ```
 σ(t) = σ_data · (t · s_min^(1/p) + (1-t) · s_max^(1/p))^p
 ```
 
-| Parameter | Value | Source |
-|-----------|-------|--------|
-| σ_data | 16.0 | `chai1.py:247` |
-| s_max | 80.0 | `chai1.py:243` |
-| s_min | 4e-4 | `chai1.py:244` |
-| p | 7.0 | `diffusion_schedules.py:24` |
-| S_churn | 80 | `chai1.py:243` |
-| S_tmin | 4e-4 | `chai1.py:244` |
-| S_tmax | 80.0 | `chai1.py:245` |
-| S_noise | 1.003 | `chai1.py:246` |
-| Timesteps | 200 | Default |
-| 2nd order | True | Heun corrector |
+| Parameter | Value |
+|-----------|-------|
+| σ_data | 16.0 |
+| s_max | 80.0 |
+| s_min | 4e-4 |
+| p | 7.0 |
+| S_churn | 80 |
+| S_tmin | 4e-4 |
+| S_tmax | 80.0 |
+| S_noise | 1.003 |
+| Timesteps | 200 |
+| 2nd order | True (Heun) |
 
-**Sampling**: EDM (Karras et al. 2022) Algorithm 2 with stochastic churn and
-second-order Heun correction. At each step, coordinates are centered, randomly
-rotated (uniform SO(3) via quaternions), and translated (σ=1.0) for SE(3) invariance.
-
-**Evidence**: `chai1.py` lines 821-886, `model/diffusion_schedules.py`.
+EDM (Karras et al. 2022) Algorithm 2 with stochastic churn and second-order Heun
+correction. At each step, coordinates are centered, randomly rotated (uniform SO(3) via
+quaternions), and translated (σ=1.0) for SE(3) invariance.
 
 ---
 
@@ -690,52 +645,42 @@ rotated (uniform SO(3) via quaternions), and translated (σ=1.0) for SE(3) invar
 
 **Module**: `confidence_head.pt` (14,812,416 params)
 
-Internal class: `chai.model.modules.af3_confidence_head`
-
 ### 8.1 Input Processing
 
-The confidence head receives trunk outputs and denoised coordinates, then constructs
-initial representations:
-
-- `single_to_pair_proj: Linear(384, 512, no bias)` — projects single representation,
-  then constructs pair representation via outer sum (512 = 2×256, split for i and j)
-- `atom_distance_bins_projection: Linear(16, 256, no bias)` — embeds pairwise atom
-  distances (16 distance bins) into pair space, added to pair representation
+- `single_to_pair_proj: Linear(384, 512, no bias)` → chunk to 2×256, outer sum for
+  pair initialization
+- Atom pairwise distances binned via `searchsorted` into 16 bins
+- `atom_distance_bins_projection: Linear(16, 256, no bias)` → added to pair repr
 
 ### 8.2 Pairformer Blocks (4 blocks)
 
-Each block has the same structure as the trunk Pairformer blocks (§6.4) with one
-difference in triangle attention:
+Same execution order as trunk Pairformer blocks (§6.4):
 
-**Standard sub-layers** (same as trunk):
-- `transition_pair`: SwiGLU at dim 256 (4× expansion)
-- `triangle_multiplication`: Same as trunk (dim 256)
-- `transition_single`: SwiGLU at dim 384 (4× expansion)
+**Identical to trunk**:
+- `transition_pair`: SwiGLU at dim 256 (4×)
+- `triangle_multiplication`: Same as trunk, sigmoid-gated, both directions
+- `transition_single`: SwiGLU at dim 384 (4×)
 - `attention_pair_bias`: 16 heads, 24 head_dim (identical to trunk)
 
-**Triangle Attention** (different variant):
-- `pair_layer_norm: LayerNorm(256)`
-- **`pair2qkvgb: Linear(256, 2056, no bias)`** — fused q+k+v+g+bias projection
-  - 2056 = 2048 + 8 = 8 heads × (q32 + k32 + v64 + g64 + bias1)
-- `linear_out: Linear(512, 512, no bias)` — output: 8 heads × 64
+**Different triangle attention variant**:
+- `pair2qkvgb: Linear(256, 2056, no bias)` — fused single-projection:
+  **8 heads × (q64 + k64 + v64 + g64 + bias1) = 2056**
+- `linear_out: Linear(512, 512, no bias)` — 8 heads × 64 v_dim
+- Both directions computed via chunk(2), producing 2 SDPA calls per block
 
-This is a **simplified single-projection triangle attention** compared to the trunk's
-dual-projection variant (pair2qkvg1 + pair2qkvg2).
+This uses **8 heads at 64 head_dim** (vs the trunk's 8 heads at 32 head_dim), and
+fuses q, k, v, g, and per-head bias into a single projection.
 
 ### 8.3 Output Heads
 
-| Head | Projection | Output Shape | Bins |
-|------|-----------|-------------|------|
-| pLDDT | `Linear(384, 1850, no bias)` | `[b, n_tokens, 37, 50]` → `[b, n_atoms, 50]` | 50 bins, [0, 1] |
-| PAE | `Linear(256, 64, no bias)` | `[b, n_tokens, n_tokens, 64]` | 64 bins, [0, 32]Å |
-| PDE | `Linear(256, 64, no bias)` | `[b, n_tokens, n_tokens, 64]` | 64 bins, [0, 32]Å |
+| Head | Projection | Shape | Bins |
+|------|-----------|-------|------|
+| pLDDT | `Linear(384, 1850)` | `[b, n_tok, 37, 50]` → `[b, n_atoms, 50]` | 50 bins, [0, 1] |
+| PAE | `Linear(256, 64)` | `[b, n_tok, n_tok, 64]` | 64 bins, [0, 32]Å |
+| PDE | `Linear(256, 64)` | `[b, n_tok, n_tok, 64]` | 64 bins, [0, 32]Å |
 
-**pLDDT detail**: The 1850-dim output is reshaped to `[n_tokens, 37, 50]` — **37 atom
-positions per token, 50 bins each**. This is then scattered to atom-level using
-`atom_within_token_index`. Graph constants confirm: `37` and `50` appear at line 1497
-of the JIT source.
-
-**Evidence**: `confidence_head.pt` parameter shapes and graph constants.
+pLDDT: 1850 = **37 atom positions × 50 bins** per token, scattered to atom-level via
+`atom_within_token_index`.
 
 ---
 
@@ -758,385 +703,127 @@ TM_pair(i,j) = 1 / (1 + (PAE_ij / d0)²)
 - **ipTM**: Max over chains c of pTM(c vs rest), weighted 4× in aggregate score
 - **Clash detection**: Threshold 1.1Å, max 100 clashes, max ratio 0.5
 
-**Evidence**: `ranking/rank.py`, `ranking/ptm.py`, `ranking/clashes.py`.
-
 ---
 
 ## 10. Handling of Optional Inputs
 
-Chai-1 can run with any combination of MSAs, templates, and ESM embeddings. Here is
-how each optional input is handled when absent:
+Chai-1 can run with any combination of MSAs, templates, and ESM embeddings.
 
 ### 10.1 ESM Embeddings (absent)
 
-When `use_esm_embeddings=False`, `EmbeddingContext.empty(n_tokens)` creates a **zero
-tensor** of shape `[n_tokens, 2560]`. These zeros are concatenated into the TOKEN
-feature vector (which has total dim 2638) and projected through `Linear(2638, 384)`.
-There is **no learned mask embedding** — absence is represented as zeros.
-
-**Evidence**: `data/dataset/embeddings/embedding_context.py:48-51`, `data/dataset/embeddings/esm.py:158-161`.
+Zero tensor of shape `[n_tokens, 2560]`, concatenated into the TOKEN feature vector and
+projected through `Linear(2638, 384)`. No learned mask embedding — absence is zeros.
 
 ### 10.2 MSA (absent)
 
-When no MSA is provided, `MSAContext.create_empty(n_tokens, depth=MAX_MSA_DEPTH)` creates:
-- **Tokens**: filled with gap character `":"` (residue type index for gap)
-- **Mask**: all `False` (no valid MSA rows)
-- **Deletion matrix**: all zeros
-- **Pairing keys**: all `NO_PAIRING_KEY = -999991`
-- **Sequence source**: all `MSADataSource.NONE`
-
-The MSA features (MSAOneHot, MSAHasDeletion, MSADeletionValue, IsPairedMSA,
-MSADataSource) are computed from this empty context and produce gap-encoded / zero
-features. The MSA mask being all-False means:
-- MSA profile (TOKEN feature) is zero (no sequences to average over)
-- MSA deletion mean is zero
-- The MSA module's pair-weighted averaging uses the mask to zero out attention weights
-
-**Evidence**: `data/dataset/msas/msa_context.py:153-167`.
+`MSAContext.create_empty` fills tokens with gap character `":"`, sets mask to all-False,
+deletion matrix to zeros, pairing keys to `NO_PAIRING_KEY = -999991`, and source to
+`MSADataSource.NONE`. The all-False mask zeros out MSA profile, deletion mean, and
+pair-weighted averaging attention.
 
 ### 10.3 Templates (absent)
 
-When no templates are available, `TemplateContext.empty(n_templates=4, n_tokens=n)` creates:
-- **Residue types**: filled with gap character `"-"`
-- **Pseudo-beta mask**: all `False`
-- **Backbone frame mask**: all `False`
-- **Distances**: all zeros
-- **Unit vectors**: all zeros
-
-The template mask (`template_restype != "-"`) is all-False, so the template input
-masks (`template_input_masks`) are all-zero. The template embedder processes these
-through its 2 Pairformer blocks but the all-zero masks ensure no information flows.
-
-**Evidence**: `data/dataset/templates/context.py:87-107`.
+`TemplateContext.empty` fills residue types with gap `"-"` and all masks to False.
+The template embedder processes these but the all-zero masks prevent information flow.
 
 ### 10.4 Constraints (absent)
 
-Each constraint type has its own absent representation:
-- **Contact constraints**: Feature filled with `-1.0` (the `ignore_idx`). The RBF
-  encoding checks for `raw_data == -1.0` and creates a `should_mask` indicator that
-  is concatenated with the RBF output. The feature embedding then zeros the RBF values
-  for masked positions (verified from graph: `aten::eq(%raw_data, -1.0)` → multiply
-  encoding by `~should_mask`).
-- **Pocket constraints**: Same -1.0 / RBF masking as contacts.
-- **Docking constraints**: Feature filled with the `mask_value` (= `num_classes` for
-  one-hot = 6), which maps to a special "masked" one-hot class.
+- **Contact / pocket constraints**: Feature filled with `-1.0`. The RBF encoding
+  detects this and produces zeroed encoding with a concatenated `should_mask` indicator.
+- **Docking constraints**: Filled with `mask_value = 6` (special masked one-hot class).
 
-At inference, contact and pocket constraints have `include_probability=1.0` (always
-included when provided), while docking has `include_probability=0.0` (never included
-from random sampling — only from explicit `RestraintGroup` specifications).
-
-**Evidence**: `chai1.py:203-221`, `data/features/generators/token_dist_restraint.py`,
-feature_embedding.pt graph lines 345-378.
+At inference, contact and pocket have `include_probability=1.0` (always included when
+provided); docking has `include_probability=0.0` (only from explicit specifications).
 
 ### 10.5 Non-Protein ESM Tokens
 
-For non-protein chains (DNA, RNA, ligands), ESM embeddings are set to zero vectors.
-Within protein chains, modified residues use their canonical parent residue for ESM
-tokenization; unknown residues use "X" (token ID 24).
-
-**Evidence**: `data/dataset/embeddings/esm.py:155-161`.
+DNA, RNA, and ligand chains receive zero-vector ESM embeddings. Modified residues use
+their canonical parent residue; unknown residues use "X" (token ID 24).
 
 ---
 
 ## 11. Key Differences from AlphaFold 3
 
-### 11.1 Verified Differences from Model Inspection
+### 11.1 Architectural Differences
 
 1. **ESM2-3B language model** embeddings (2560-dim) as first-class TOKEN input
 2. **Constraint features**: Contact (RBF 6), pocket (RBF 6), docking (one-hot 6 bins)
 3. **Covalent bond features**: Separate projection pathway
-4. **MSA module asymmetry**: 4 outer-product-mean blocks but only 3 MSA attention/transition
-   blocks — the last iteration only updates the pair representation
-5. **Confidence head triangle attention**: Uses a single fused qkvgb projection (2056-dim)
-   instead of the trunk's dual-projection (qkvg1 + qkvg2) triangle attention
-6. **pLDDT output**: 37 atom positions × 50 bins = 1850 per token (vs AF3's per-atom approach)
+4. **MSA module asymmetry**: 4 OPM blocks but only 3 MSA attention/transition blocks
+5. **Confidence head triangle attention**: Fused single-projection (2056-dim) with
+   8 heads at 64 head_dim, vs trunk's dual-projection with 32 head_dim
+6. **pLDDT output**: 37 atom positions × 50 bins = 1850 per token
+7. **Triangular operations compute both directions** in every block (not alternating)
 
-### 11.2 Architecture Dimensions Summary
+### 11.2 Dimension Comparison
 
-| Component | Chai-1 | AF3 (for reference) |
-|-----------|--------|---------------------|
+| Component | Chai-1 | AF3 |
+|-----------|--------|-----|
 | Token single dim | 384 | 384 |
-| Token pair dim | 256 | 128 |
+| Token pair dim | **256** | 128 |
 | MSA dim | 64 | 64 |
 | Atom single dim | 128 | 128 |
 | Atom pair dim | 16 | 16 |
 | Pairformer blocks | 48 | 48 |
 | Pairformer heads | 16 | 16 |
 | Pairformer head dim | 24 | 24 |
-| Diffusion blocks | 16 | 24 |
+| Diffusion blocks | **16** | 24 |
 | Diffusion heads | 16 | 16 |
-| Diffusion head dim | 48 | 64 |
+| Diffusion head dim | **48** | 64 |
 | Diffusion working dim | 768 | 768 |
 | Confidence blocks | 4 | 4 |
-| MSA module blocks | 4 (mixed) | 4 |
 | Template blocks | 2 | 2 |
 | Atom attn blocks | 3 | 3 |
 | Atom attn heads | 4 | 4 |
 | Atom attn head dim | 32 | 32 |
 
-Notable: Chai-1 uses **pair dim 256** (vs AF3's 128), and **16 diffusion blocks**
-(vs AF3's 24), with **48 diffusion head dim** (vs AF3's 64).
+Notable: Chai-1 uses **pair dim 256** (vs AF3's 128), **16 diffusion blocks**
+(vs 24), and **48 diffusion head dim** (vs 64).
 
 ---
 
-## Appendix A: Layer Building Blocks
+## 12. Layer Building Blocks
 
-### A.1 SwiGLU Transition
-
-Used throughout (pair transitions, single transitions, MSA transitions):
+### 12.1 SwiGLU Transition
 
 ```python
-x = LayerNorm(x)
-ab = Linear_no_bias(x)  # expansion: dim → 2 * expansion * dim
-a, b = ab.chunk(2, dim=-1)
-x = x + Linear(SiLU(a) * b)  # down projection
+x_norm = LayerNorm(x)
+a, b = chunk(Linear_no_bias(x_norm), 2)
+x = x + Linear(SiLU(a) * b)
 ```
 
-Expansion factor is consistently **4×** across all modules.
+Expansion factor is **4×** across all modules.
 
-### A.2 AdaLayerNorm (Adaptive Layer Normalization)
-
-Used in diffusion transformer and atom transformer:
+### 12.2 AdaLayerNorm
 
 ```python
-scale_shift = Linear(conditioning)  # dim → 2 * dim
-scale, shift = scale_shift.chunk(2, dim=-1)
-x = LayerNorm(x) * (1 + scale) + shift
+scale, shift = chunk(Linear(conditioning), 2)
+x_norm = LayerNorm(x) * (1 + scale) + shift
 ```
 
-### A.3 Gated Output with Bias Init -2
+Used in diffusion transformer and atom transformer.
 
-Used in conditioned transitions and diffusion attention:
+### 12.3 Gated Output (bias init -2)
 
 ```python
-gate = sigmoid(Linear(conditioning, bias=True))  # bias initialized to -2
-output = gate * value  # gate starts near sigmoid(-2) ≈ 0.12
+gate = sigmoid(Linear(conditioning, bias=True))  # bias init -2 → starts ~0.12
+output = gate * value
 ```
 
-### A.4 Blocked Local Attention
+Used in conditioned transitions and diffusion attention.
+
+### 12.4 Blocked Local Attention
 
 Atom-level attention uses blocked structure:
 - Query block size: **32 atoms**
 - Key/value block size: **128 atoms**
 - Pair bias from blocked atom pairs projected per-head
 
----
-
-## Appendix B: Resolved Architecture Internals (from Graph IR)
-
-All items below were verified by tracing the TorchScript graph IR operation-by-operation.
-
-### B.1 SquashNorm — No-Op at Inference
-
-`SquashNorm` appears between every Pairformer block (96 calls across 48 blocks — one
-for pairs, one for singles). Inspection of its graph reveals **all forward methods
-return `None`** — it is a complete no-op during inference. It likely performs gradient
-or activation norm tracking/clamping only during training.
-
-### B.2 Pairformer Block Sub-Layer Execution Order
-
-Each of the 48 Pairformer blocks executes its 5 sub-layers in this order:
-
-```
-z, s = pair_repr, single_repr
-
-1. z += PairTransition(z)              # SwiGLU on pair repr
-2. s += AttentionPairBias(s, z)        # single self-attn biased by pair
-3. s += SingleTransition(s)            # SwiGLU on single repr
-4. z += TriangularMultiplication(z)    # both outgoing + incoming
-5. z += TriangleAttention(z)           # both starting + ending node
-```
-
-All sub-layers use **pre-norm** (LayerNorm before the transformation, then residual
-add). The pattern is consistently: `x += sublayer(LayerNorm(x))`.
-
-### B.3 Triangular Multiplication — Both Directions in Every Block
-
-The triangular multiplication computes **both outgoing and incoming** contractions in
-every single block (not alternating). The exact flow:
-
-```python
-z_normed = LayerNorm(z)
-p = merged_linear_p(z_normed)      # [b, n, n, 4c] no bias
-g = sigmoid(merged_linear_g(z_normed))  # [b, n, n, 5c] no bias → sigmoid
-
-# Split gate: first 4c gates the projections, last c gates the output
-ab = p * g[..., :4c]
-
-# Split into left/right edges
-ab_left, ab_right = chunk(ab, 2)    # each [b, n, n, 2c]
-
-# Apply pair masks
-ab_left = masked_fill(ab_left, ~pair_mask[..., None], 0)     # mask rows
-ab_right = masked_fill(ab_right, ~pair_mask.T[..., None], 0)  # mask cols
-
-# Split each into a, b components
-a1, b1 = chunk(ab_left, 2)    # each [b, n, n, c]
-a2, b2 = chunk(ab_right, 2)
-
-# Contract: BOTH directions in every block
-x_out = einsum("... i k d, ... j k d -> ... i j d", a1, b1)  # outgoing
-x_in  = einsum("... k i d, ... k j d -> ... i j d", a2, b2)  # incoming
-
-# Normalize and combine
-x = LayerNorm(x_out) + LayerNorm(x_in)
-output = linear_z_out(x) * g[..., 4c:]  # gated by last channel of g
-
-z += feature_dropout(output)
-```
-
-**Key activation**: `sigmoid` gating on the merged_linear_g output (not SiLU/ReLU).
-
-### B.4 Triangle Attention — Both Directions in Every Block
-
-The triangle attention also computes **both starting-node and ending-node** attention in
-every block — confirmed by `select(attn_mask, dim=0, index=0)` followed by
-`select(attn_mask, dim=0, index=1)` consistently across all 48 blocks, producing
-**2 SDPA calls per block**.
-
-Each block's triangle attention therefore uses `pair2qkvg1` for one direction and
-`pair2qkvg2` for the other, computing two separate attention passes and combining
-their outputs.
-
-Total SDPA calls per Pairformer block: **3** (1 attention_pair_bias + 2 triangle_attention).
-
-### B.5 Outer Product Mean Einsum Patterns
-
-The OPM uses two einsum operations:
-- `"abc, defc -> abdef"` — projects MSA representations via learned weight_ab
-- `"abcde, afcdg -> cegabf"` — contracts over MSA depth and projects
-
-With `weight_ab: [2, 8, 8, 64]`, this produces an 8×8=64 outer product per pair
-position, which is layer-normalized and projected to pair dim 256.
-
-### B.6 Diffusion Transformer Block Flow
-
-Each of the 16 diffusion transformer blocks:
-
-```python
-# x: [b, n, 768]  s_cond: [b, n, 384]  z_cond: [b, n, n, 256]
-
-# 1. Conditioned attention
-scale, shift = chunk(lin_s_merged(s_cond), 2)   # AdaLN from 384-dim cond
-x_norm = LayerNorm(x) * (1 + scale) + shift
-
-q, k, v = chunk(to_qkv(x_norm), 3)              # [b, n, 768] each → [b, 16, n, 48]
-q += q_bias
-
-pair_bias = pair_linear(LayerNorm(z_cond))       # [b, n, n, 16] → per-head bias
-
-attn_out = SDPA(q, k, v, bias=pair_bias)         # scaled_dot_product_attention
-gate = sigmoid(gate_proj(s_cond))                # [b, n, 768] from 384-dim
-x += to_out(attn_out) * gate
-
-# 2. Conditioned transition
-scale, shift = chunk(ada_ln(s_cond), 2)          # AdaLN
-x_norm = LayerNorm(x) * (1 + scale) + shift
-
-ab = linear_a_nobias_double(x_norm)              # [b, n, 3072]
-a, b = chunk(ab, 2)                              # SwiGLU
-transition_out = linear_b_nobias(silu(a) * b)    # [b, n, 768]
-
-gate = sigmoid(linear_s_biasinit_m2(s_cond))     # bias init -2
-x += transition_out * gate
-```
-
-### B.7 Confidence Head Initial Pair Construction
-
-The confidence head constructs its pair representation:
-
-1. Project single representation: `single_to_pair_proj: Linear(384, 512)` → chunk to
-   get two 256-dim vectors, take outer sum for pair initialization
-2. Compute pairwise distances between representative atoms using `searchsorted`
-   (binning into 16 distance bins)
-3. Project distance bins: `atom_distance_bins_projection: Linear(16, 256)` → add to
-   pair representation
-
-The confidence head's triangle attention uses **2 SDPA calls per block** (both
-directions in each block, same pattern as the trunk) via the fused `pair2qkvgb`
-projection.
-
-### B.8 Pre-Norm Architecture
-
-All modules consistently use **pre-norm** (LayerNorm before transformation):
-- `x += Linear(silu(Linear(LayerNorm(x))))` for transitions
-- `x += Attention(LayerNorm_single(x), bias=Linear(LayerNorm_pair(z)))` for attention
-- Residual connections are always additive: `x = x + sublayer_output`
-
-### B.9 Normalization Types
+### 12.5 Normalization Summary
 
 | Location | Type |
 |----------|------|
 | Transitions, attention | Standard LayerNorm (weight + bias) |
-| Atom transformer, diffusion transformer | AdaLayerNorm (conditioned, no stored bias) |
+| Atom transformer, diffusion transformer | AdaLayerNorm (conditioned scale+shift) |
 | Triangular multiplication (intermediate) | LayerNorm (no learnable parameters) |
 | Post-diffusion | Standard LayerNorm |
-
-### B.10 Dropout
-
-- `feature_dropout` (channel-wise dropout): Used after triangular multiplication output
-  and triangle attention output in each Pairformer block
-- Rate: Likely 0 at inference (standard PyTorch eval mode behavior), but the operations
-  remain in the graph
-
----
-
-## Appendix C: Complete Parameter Counts
-
-| Module | Params (exact) |
-|--------|---------------|
-| feature_embedding.pt | ~1,100,000 |
-| bond_loss_input_proj.pt | 512 |
-| token_embedder.pt | ~1,500,000 |
-| trunk.pt | 169,955,072 |
-| diffusion_module.pt | 127,928,768 |
-| confidence_head.pt | 14,812,416 |
-| **Total (excl. ESM)** | **~314M** |
-| ESM2-3B (external) | ~3,000,000,000 |
-
-## Appendix D: Formerly Uncertain — Now Fully Resolved
-
-All three items from the prior version of this document have been resolved:
-
-### D.1 RBF Encoding Width Constants (RESOLVED)
-
-From graph constants:
-- **TokenDistanceRestraint**: width = **4.8** Å
-- **TokenPairPocketRestraint**: width = **2.8** Å
-
-Formula: `encoding = exp(-((radii - raw_data) / width)²)`, clamped at exponent ≤ 16.
-When clamped, encoding is set to 0. When `raw_data == -1.0` (absent), a `should_mask`
-indicator is appended.
-
-Learned RBF radii (from buffers):
-- TokenDistanceRestraint: `[6.0, 10.8, 15.6, 20.4, 25.2, 30.0]` (6 radii spanning 6–30Å)
-- TokenPairPocketRestraint: `[6.0, 8.8, 11.6, 14.4, 17.2, 20.0]` (6 radii spanning 6–20Å)
-
-### D.2 Triangle Attention qkvg Decomposition (RESOLVED)
-
-**Trunk triangle attention** (`pair2qkvg1/pair2qkvg2` each Linear(256, 1024)):
-- Confirmed via `prim::ListUnpack` → `q, k, v, g` (4 equal components)
-- `pair2b: Linear(256, 8)` confirms 8 heads
-- 1024 = **8 heads × 4 components × 32 head_dim**
-- `linear_out: Linear(512, 256)` — 512 = 8 heads × 32 v_dim × 2 directions
-- **Confirmed: 8 heads, 32 head_dim, equal split for q/k/v/g**
-
-**Confidence head triangle attention** (`pair2qkvgb: Linear(256, 2056)`):
-- 2056 = 8 heads × 257 per head = 8 × (4 × 64 + 1)
-- Decomposition: **q(64) + k(64) + v(64) + g(64) + bias(1)** per head
-- `linear_out: Linear(512, 512)` — 512 = 8 heads × 64 v_dim
-- Both directions computed via chunk(2) on q, k, v, bias → two SDPA calls
-- Outputs concatenated, then gated by sigmoid(g)
-- **Confirmed: 8 heads, 64 head_dim, fused bias**
-
-### D.3 Training-Only Components (RESOLVED)
-
-- **SquashNorm**: Returns `None` for all methods — complete no-op at inference
-- **feature_dropout**: Operations remain in graph but rate is 0.0 at eval mode
-  (standard PyTorch behavior)
-- No other training-only components exist in the inference graph
-
-**All architectural details are now fully resolved.** Every hidden dimension, layer
-count, activation function, sub-layer ordering, einsum contraction pattern, gating
-mechanism, residual connection, normalization type, and decomposition has been verified
-directly from the TorchScript model parameter shapes and computation graph IR.
