@@ -1008,9 +1008,21 @@ Details relevant to porting inference to MLX, confirmed from the Python source.
 
 ### 13.2 Numerical Precision
 
+**All six Chai-1 `.pt` modules store weights in float32.** Confirmed by loading each
+file and inspecting `param.dtype` — 100% `torch.float32` in every module:
+
+| Module | Parameters | dtype |
+|--------|-----------|-------|
+| `feature_embedding.pt` | 1,207,936 | float32 |
+| `bond_loss_input_proj.pt` | 512 | float32 |
+| `token_embedder.pt` | 1,660,768 | float32 |
+| `trunk.pt` | 169,955,072 | float32 |
+| `diffusion_module.pt` | 127,928,768 | float32 |
+| `confidence_head.pt` | 14,812,416 | float32 |
+
 - **ESM2-3B**: stored as fp16 (filename `*_fp16.pt`), loaded with `.eval()`
-- **Main Chai-1 modules**: dtype inside `.pt` files not specified in Python; tensors
-  passed to diffusion and confidence modules are explicitly cast to `.float()` (fp32)
+- **Python-side casts**: tensors passed to diffusion and confidence modules are
+  explicitly cast to `.float()` (fp32)
 - **Rigid transforms** (`tools/rigid.py`): forced to `float32` with
   `torch.autocast("cuda", enabled=False)`
 - **Softmax**: `logits.float().softmax(dim=-1)` — explicit fp32 upcast
@@ -1029,22 +1041,34 @@ Details relevant to porting inference to MLX, confirmed from the Python source.
 
 ### 13.3 Dropout
 
-- **No `nn.Dropout` in the Python source.** Neural dropout rates (e.g., attention
-  dropout 0.1 discovered from TorchScript graph constants) are embedded inside the
-  `.pt` modules.
-- **Docking constraint masking**: `structure_dropout_prob=0.75`,
+**All dropout in the exported models is effectively disabled.** Confirmed by inspecting
+the TorchScript graph constants in every `.pt` file:
+
+| Module | Dropout Type | Rate | Training Flag |
+|--------|-------------|------|---------------|
+| `feature_embedding.pt` | none | — | — |
+| `bond_loss_input_proj.pt` | none | — | — |
+| `token_embedder.pt` | none | — | — |
+| `trunk.pt` | `aten::feature_dropout` | **0.0** | True |
+| `diffusion_module.pt` | none | — | — |
+| `confidence_head.pt` | `aten::feature_dropout` | **0.0** | True |
+
+The trunk and confidence head contain `aten::feature_dropout` calls with `probability=0.`
+and `training=True` baked in. With rate 0, these are **no-ops** regardless of the
+training flag. No `aten::dropout` (regular dropout) calls exist in any module.
+
+- **Docking constraint masking** (Python-side): `structure_dropout_prob=0.75`,
   `chain_dropout_prob=0.75` — stochastic feature zeroing in the data pipeline, not
   neural dropout.
 - **ESM2**: `.eval()` is called, disabling any internal dropout.
-- TorchScript modules are loaded and called directly without `.train()`/`.eval()`
-  toggles. Traced models typically bake in eval-mode behavior, but the exact dropout
-  state inside `.pt` files is not confirmed from Python alone.
 
 ### 13.4 SquashNorm
 
-Called between Pairformer blocks in the trunk. All methods return `None` at inference
-(confirmed from TorchScript graph). Training behavior is **unknown** from this
-codebase — not present in the open-source Python.
+Called between Pairformer blocks in the trunk. Confirmed from TorchScript graph: all
+calls are `prim::CallMethod` on `%squash_norm.1` returning `NoneType`. Two calls per
+block (one for single repr, one for pair repr). The method implementations return
+`None` unconditionally — **no conditional logic or training-mode check**; this is a
+pure no-op in the exported model. Not present in any other module.
 
 ### 13.5 The 32 Named Features
 
@@ -1088,18 +1112,32 @@ The complete feature list, as registered in `chai1.py` lines 172–235:
 RBF and OUTER_SUM encodings are applied **inside** `feature_embedding.pt`, not in
 Python. Python passes raw feature values; the TorchScript module handles the encoding.
 
-### 13.6 Remaining Unknowns
+### 13.6 Attention Masking
 
-Items that are **not determinable** from the open-source Python or documented
-TorchScript inspection:
+**All modules use `aten::masked_fill` with value `-10000`** (not `-inf`) on attention
+bias tensors. Confirmed from TorchScript graphs of all modules that contain attention:
 
-1. **Internal attention masking**: How mask tensors are applied to attention logits
-   inside the `.pt` modules (presumably additive −∞ bias, but unconfirmed)
-2. **Exact weight dtypes**: Whether `.pt` files store weights in fp32 or fp16
-   (inspecting tensor data in the TorchScript files would resolve this)
-3. **Neural dropout rates**: The 0.1 attention dropout was found in one TorchScript
-   graph constant; rates for Pairformer attention, triangle operations, and diffusion
-   transformer are not extracted
-4. **SquashNorm training behavior**: What it does when not returning `None`
-5. **`feature_dropout` in triangle multiplication**: Rate and implementation details
-   are inside the `.pt` files
+- `token_embedder.pt`: `masked_fill(blocked_pair_bias, mask, -10000)` — atom local attn
+- `trunk.pt`: `masked_fill(..., -10000)` — Pairformer attn, triangle attn, MSA attn
+- `diffusion_module.pt`: `masked_fill(..., -10000)` — atom local attn, diffusion attn
+- `confidence_head.pt`: `masked_fill(..., -10000)` — Pairformer attn, triangle attn
+
+The mask value `-10000` is applied to the **attention bias** (added before softmax),
+not directly to logits. After softmax, `exp(-10000) ≈ 0`, effectively zeroing out
+masked positions. Token-level padding is propagated via `token_pair_mask` (§6.3.9);
+atom-level via `block_atom_pair_mask` (§3.3). Invalid positions are also zero-filled
+with `masked_fill(..., 0.)` on single representations.
+
+### 13.7 Remaining Unknowns
+
+All major architectural details for inference have been resolved. The only items not
+fully determined:
+
+1. **SquashNorm training behavior**: The exported model unconditionally returns `None`.
+   What the original training code does in this module is unknown. Irrelevant for
+   inference porting.
+2. **The previously-reported 0.1 attention dropout** (from SCRATCHPAD.md) was observed
+   in a TorchScript graph constant but does not appear as an active dropout rate in any
+   `aten::dropout` or `aten::feature_dropout` call. All dropout rates in the exported
+   models are **0.0**. The 0.1 constant may have been a default parameter that was
+   overridden, or observed in a different context.

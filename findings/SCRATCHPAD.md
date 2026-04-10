@@ -168,7 +168,12 @@ confidence_head.pt
   - Gating bias initialized to **-2** (sigmoid(-2) ≈ 0.12) for near-zero initial gating
 
 ### Dropout
-- Attention dropout: **0.1** (from graph constant in token_embedder)
+- ~~Attention dropout: **0.1** (from graph constant in token_embedder)~~ **CORRECTED**:
+  Direct inspection of all 6 `.pt` files shows **all dropout rates are 0.0**. The 0.1
+  was likely a default parameter constant, not an active dropout rate. Trunk and
+  confidence head contain `aten::feature_dropout(prob=0., training=True)` calls (no-ops).
+  Token embedder, diffusion module, feature embedding, and bond projection contain no
+  dropout calls at all.
 
 ## MSA Module Block Count Asymmetry
 
@@ -233,5 +238,9 @@ the `chai-lab/` Python source:
 - **Template distances**: Pseudo-beta (CB/C2/C4), 38 bins from
   `linspace(3.25, 50.75, 38)[1:]`.
 - **Causal masking**: Not used anywhere.
-- **Dropout in Python**: None (only docking feature masking). Neural dropout is inside
-  `.pt` files.
+- **Dropout**: All dropout rates in exported `.pt` files are **0.0** — effectively
+  disabled. No `aten::dropout` calls exist. Only `aten::feature_dropout(prob=0.)` in
+  trunk and confidence head (no-ops).
+- **Weight dtypes**: All 6 modules store weights in **float32**.
+- **Attention masking**: All modules use `masked_fill(..., -10000)` on attention bias
+  (not `-inf`).
