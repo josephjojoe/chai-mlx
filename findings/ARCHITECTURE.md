@@ -33,6 +33,7 @@ model parameter shapes and computation graph IR.
 10. [Handling of Optional Inputs](#10-handling-of-optional-inputs)
 11. [Key Differences from AlphaFold 3](#11-key-differences-from-alphafold-3)
 12. [Layer Building Blocks](#12-layer-building-blocks)
+13. [Inference Implementation Notes](#13-inference-implementation-notes)
 
 ---
 
@@ -124,6 +125,36 @@ Bundled in `AllAtomFeatureContext` (`data/dataset/all_atom_feature_context.py`):
 | `embedding_context` | 2560-dim | ESM2-3B per-residue embeddings |
 | `restraint_context` | — | Docking, contact, pocket constraints |
 
+### 3.3 Blocked Atom Geometry
+
+Atom-level attention uses a blocked local scheme. The blocking is computed in Python
+(`model/utils.py:get_qkv_indices_for_blocks`) before being passed to the TorchScript
+modules.
+
+**Block assignment** (`data/collate/collate.py`, `model/utils.py`):
+- `n_atoms = 23 * n_tokens`, enforced divisible by 32
+- `num_blocks = n_atoms / 32`
+- Query blocks: non-overlapping consecutive chunks of **32 atoms**
+- KV window: **128 atoms**, **centered** on the query block:
+  `kv_start = first_query_index + (32 - 128) / 2 = first_query_index - 48`
+- The 32 query atoms sit at positions **48–79** within their 128-wide KV window
+- Consecutive KV windows overlap by **96 atoms** (shift 32, window 128)
+
+**Boundary handling**:
+- `sequence_length` must be exactly divisible by 32 (no partial last block)
+- KV indices that fall below 0 or above `sequence_length` are marked invalid in
+  `kv_mask`, then taken `% sequence_length` (modular wrap for indexing only)
+- Invalid KV positions are excluded from `block_atom_pair_mask` and never attend
+
+**Block pair mask** (`model/utils.py:get_block_atom_pair_mask`):
+- `atom_q_mask = atom_single_mask[:, q_idx]` and `atom_kv_mask = ..[:, kv_idx]`
+- Outer product: `mask = atom_q_mask & atom_kv_mask` → `[b, bl, 32, 128]`
+- ANDed with `kv_is_wrapped_mask` broadcast over queries
+- Distance features additionally require `atom_ref_space_uid` match (same residue)
+
+**Pair tensor layout**: `[b, num_blocks, 32, 128, feature_dim]` — block index, query
+slot within block, key slot within KV window, feature channels.
+
 ---
 
 ## 4. Feature Embedding
@@ -166,15 +197,21 @@ All input projections include bias. TOKEN_PAIR, ATOM, and ATOM_PAIR outputs are
 TOKEN (2638 total):
 - ResidueType: 33 (32 types + mask, one-hot)
 - ESMEmbeddings: 2560 (ESM2-3B embedding dim)
-- MSAProfile: 32 (distribution over residue types)
-- MSADeletionMean: 1
+- MSAProfile: 32 — masked frequency distribution over residue types, computed via
+  `scatter_add` of `main_msa_mask` by token type index, divided by sum
+- MSADeletionMean: 1 — `masked_mean(deletion_matrix, mask=main_msa_mask, dim=depth)`;
+  raw deletion counts from A3M are consecutive lowercase (insertion) chars to the
+  left of each match column, capped at 255
 - IsDistillation: 1, TokenBFactor: 1, TokenPLDDT: 1
 - ChainIsCropped: 1, MissingChainContact: 1
 - Residual from encodings: ~7
 
 TOKEN_PAIR (163 total):
-- RelativeSequenceSeparation: 67 (±32 bins + 2 special + 1)
-- RelativeTokenSeparation: 67 (r_max=32, 2×32+3)
+- RelativeSequenceSeparation: 67 — `sep_bins = arange(-32, 33)` (65 values),
+  `searchsorted(sep_bins, rel_sep + 1e-4)` gives indices 0–65 for same-chain;
+  inter-chain pairs get class 66. Total: `len(sep_bins) + 2 = 67`.
+- RelativeTokenSeparation: 67 — `r_max=32`, only within same residue AND same chain;
+  `clamp(token_i - token_j + 32, 0, 65)`, off-mask class 66. Total: `2*32+3 = 67`.
 - RelativeEntity: 3
 - RelativeChain: 6 (2×2+2)
 - DockingConstraintGenerator: 6 (5 dist bins + mask, one-hot)
@@ -196,15 +233,19 @@ ATOM_PAIR (14 total):
 MSA (42 total):
 - MSAOneHot: 32 (residue types, one-hot)
 - MSAHasDeletion: 1
-- MSADeletionValue: 1
-- IsPairedMSA: 1
+- MSADeletionValue: 1 — transformed as `(2/π) * arctan(deletion_count / 3)`
+- IsPairedMSA: 1 — True where `msa_mask & (pairing_key != NO_PAIRING_KEY)`
 - MSADataSource: 7 (6 classes + mask, one-hot)
 
 TEMPLATES (76 total):
 - TemplateMask: 2 (backbone + pseudo-beta)
 - TemplateUnitVector: 3
 - TemplateResType: 32 (via outer-sum embedding → 32-dim)
-- TemplateDistogram: 39 (38 bins + mask, one-hot)
+- TemplateDistogram: 39 (38 bins + mask, one-hot) — bin edges from
+  `linspace(3.25, 50.75, 38)[1:]` (37 edges, spacing ~1.284 Å, first edge ~4.53 Å,
+  last 50.75 Å). Distances are **pseudo-beta** (CB for protein, C2/C4 for nucleic
+  acids, sole atom for atom tokens) via Euclidean `cdist`. Cross-asym pairs set to
+  mask class 38. Absent/masked positions filled with 100.0 Å (last bin).
 
 ### 4.4 Bond Feature Projection
 
@@ -443,6 +484,45 @@ Both **starting-node and ending-node** attention are computed in every block via
 The pair2qkvg outputs are split into q, k, v, g via `unbind` (4 equal components).
 Both directions' attention outputs are combined and gated by sigmoid(g).
 
+#### 6.3.8 MSA Pairing Algorithm
+
+MSAs from multiple chains are paired by species before being merged
+(`data/dataset/msas/preprocess.py`):
+
+1. **Pairing keys**: Each MSA row has a string pairing key (typically a species/taxonomy
+   identifier; for ColabFold paired outputs, the row index). Keys are hashed to stable
+   ints via SHA-256 (first 7 hex chars → int). `NO_PAIRING_KEY = -999991` marks
+   unpaired/absent/padding rows.
+
+2. **Ranking**: For each chain's MSA, compute edit distance (Hamming) of every row vs
+   the query sequence (row 0). Rows sharing the same pairing key hash are ranked by
+   ascending edit distance, producing a unique key `(hash, rank)`.
+
+3. **Cross-chain matching**: A `(hash, rank)` is selected for pairing only if it appears
+   in **every** non-empty chain MSA. At most `MAX_PAIRED_DEPTH = 8,192` unique keys are
+   kept.
+
+4. **Merge**: Per-chain MSAs are reordered with **paired rows first** (same order of
+   selected keys), then unpaired rows, truncated to `FULL_DEPTH = 16,384`.
+   `merge_main_msas_by_chain` concatenates along the token dimension, padding to common
+   depth.
+
+5. **Inference subsampling**: Optional (`recycle_msa_subsample`), keeps up to **4,096**
+   rows via biased random scoring.
+
+#### 6.3.9 Mask Propagation
+
+Masks are constructed in Python and passed into TorchScript modules:
+
+- **Token pair mask**: `und_self(token_exists_mask, "b i, b j -> b i j")` — outer
+  product of the token exists mask. Passed to `trunk.forward()` as `token_pair_mask`.
+- **MSA mask**: `main_msa_mask` (bool, `[b, depth, tokens]`) gates profile computation
+  via `scatter_add` and deletion mean via `masked_mean`. An all-False mask (empty MSA)
+  zeros out all MSA-derived features.
+- **Atom-level masks**: `block_atom_pair_mask` (see §3.3) and `atom_single_mask` from
+  `atom_exists_mask` are passed to the token embedder and diffusion module.
+- **No causal masking** is used anywhere in the pipeline.
+
 ### 6.4 Pairformer Stack (48 blocks)
 
 Each of the 48 identical blocks executes 5 sub-layers in this order:
@@ -559,8 +639,13 @@ the single conditioning signal between the two transition blocks.
 
 ### 7.2 Atom Attention Encoder
 
-Same architecture as the token embedder's atom encoder (§5.2), with additions for
-diffusion:
+Same architecture as the token embedder's atom encoder (§5.2), but **weights are not
+shared** — `token_embedder.pt` and `diffusion_module.pt` are separate artifacts loaded
+independently. The diffusion encoder has additional components and a different output
+width (768 vs 384). The atom attention decoder (§7.4) is likewise a separate submodule
+within `diffusion_module.pt`, not weight-tied to either encoder.
+
+Additions beyond the token embedder's encoder:
 
 - `to_atom_cond: Linear(128, 128)` — condition atoms from structure features
 - `token_to_atom_single: LayerNorm(384) → Linear(384, 128)` — broadcast token→atom
@@ -618,6 +703,11 @@ Mirrors the encoder to decode token-level predictions back to atomic positions:
 
 ### 7.6 Noise Schedule and Sampling
 
+EDM (Karras et al. 2022) Algorithm 2 with stochastic churn and second-order Heun
+correction. Implementation in `model/diffusion_schedules.py` and `chai1.py`.
+
+#### 7.6.1 Noise Schedule
+
 ```
 σ(t) = σ_data · (t · s_min^(1/p) + (1-t) · s_max^(1/p))^p
 ```
@@ -635,9 +725,59 @@ Mirrors the encoder to decode token-level predictions back to atomic positions:
 | Timesteps | 200 |
 | 2nd order | True (Heun) |
 
-EDM (Karras et al. 2022) Algorithm 2 with stochastic churn and second-order Heun
-correction. At each step, coordinates are centered, randomly rotated (uniform SO(3) via
-quaternions), and translated (σ=1.0) for SE(3) invariance.
+#### 7.6.2 Timestep Spacing
+
+200 time points via `torch.linspace(0, 1, 2*200+1)[1::2]` — **uniformly spaced in
+t ∈ (0, 1)**, strictly interior (never hits 0 or 1). σ(t) follows the power-7 curve
+above, so spacing is **nonlinear in σ** (denser at low noise). The sampling loop
+iterates over **199 consecutive σ pairs** (`zip(sigmas[:-1], sigmas[1:], gammas[:-1])`).
+
+#### 7.6.3 Stochastic Churn
+
+```
+gamma = min(S_churn / num_timesteps, sqrt(2) - 1)   if S_tmin ≤ σ ≤ S_tmax
+gamma = 0                                            otherwise
+```
+
+Since early σ values (after scaling by σ_data=16) can exceed S_tmax=80, the first
+high-noise steps have gamma=0 (no stochastic inflation).
+
+#### 7.6.4 Sampling Loop (per step)
+
+```python
+# 1. SE(3) augmentation (before noise injection)
+atom_pos = center_random_augmentation(atom_pos, atom_single_mask)
+
+# 2. Stochastic noise inflation
+sigma_hat = sigma_curr + gamma * sigma_curr
+noise = S_noise * randn_like(atom_pos)
+atom_pos_hat = atom_pos + noise * sqrt(clamp(sigma_hat² - sigma_curr², min=1e-6))
+
+# 3. First denoising + Euler step
+denoised = denoise(atom_pos_hat, sigma_hat)
+d_i = (atom_pos_hat - denoised) / sigma_hat
+atom_pos = atom_pos_hat + (sigma_next - sigma_hat) * d_i
+
+# 4. Second-order Heun correction (if second_order=True and sigma_next != 0)
+denoised = denoise(atom_pos, sigma_next)
+d_i_prime = (atom_pos - denoised) / sigma_next
+atom_pos = atom_pos_hat + (sigma_next - sigma_hat) * (d_i + d_i_prime) / 2
+```
+
+The Heun correction replaces the Euler result with a trapezoid average of two score
+estimates. It is skipped at the final step (sigma_next=0).
+
+#### 7.6.5 SE(3) Augmentation
+
+Applied at the **start of each diffusion step**, before noise injection
+(`model/utils.py:center_random_augmentation`):
+
+1. **Centering**: Compute one centroid per batch item via masked mean over all atoms
+   (**global**, not per-chain). Subtract centroid. Denominator clamped at 1e-4.
+2. **Rotation**: Uniform SO(3) via random quaternions → rotation matrix, applied as
+   `einsum("b i j, b a j -> b a i", R, centered_coords)`.
+3. **Translation**: `s_trans * randn_like(centroid)` with `s_trans = 1.0`, added to
+   all atom positions.
 
 ---
 
@@ -701,7 +841,24 @@ TM_pair(i,j) = 1 / (1 + (PAE_ij / d0)²)
 
 - **pTM**: Max over alignment rows of sum of pairwise TM scores, normalized by total tokens
 - **ipTM**: Max over chains c of pTM(c vs rest), weighted 4× in aggregate score
-- **Clash detection**: Threshold 1.1Å, max 100 clashes, max ratio 0.5
+- **Clash detection** (`ranking/clashes.py`): Pairwise atom distances via `cdist`;
+  clash if distance < **1.1 Å** (valid atom pairs, not self). Aggregated to chain–chain
+  matrices. `has_inter_chain_clashes` uses thresholds `max_clashes=100`,
+  `max_clash_ratio=0.5`, **polymer–polymer chain pairs only**.
+
+### 9.3 Post-Processing
+
+**No energy minimization, relaxation, or structural correction is applied.** Clashes
+only affect the ranking score (−100 penalty); they are not repaired. All diffusion
+samples are written to separate CIF files regardless of quality.
+
+CIF export (`data/io/cif_utils.py`) uses the `modelcif` library. B-factors are set
+from pLDDT scores. Ligand atoms receive unique names via a counter suffix (`_1`, `_2`,
+etc.) to avoid duplicate atom IDs.
+
+Atom symmetries (intra-residue, computed via RDKit at tokenization time) are stored in
+`AllAtomStructureContext` but are **not applied** as post-processing during inference.
+They are relevant only for training loss computation.
 
 ---
 
@@ -814,10 +971,16 @@ Used in conditioned transitions and diffusion attention.
 
 ### 12.4 Blocked Local Attention
 
-Atom-level attention uses blocked structure:
-- Query block size: **32 atoms**
-- Key/value block size: **128 atoms**
-- Pair bias from blocked atom pairs projected per-head
+Atom-level attention uses a blocked local structure (see §3.3 for geometry):
+
+- **Query block**: 32 atoms (non-overlapping, consecutive)
+- **KV window**: 128 atoms, **centered** on the query block (Q at positions 48–79)
+- **Overlap**: consecutive KV windows share 96 atoms
+- **Boundary**: modular wrap with invalid positions masked out
+- **Pair bias**: `blocked_pairs2blocked_bias` projects `[b, bl, 32, 128, 16]` pair
+  features through `LayerNorm(16) → Linear(16, n_blocks × n_heads)` to produce
+  per-head attention bias for each local block. For the atom transformer: 3 attention
+  blocks × 4 heads = 12 bias channels, reshaped per-block per-layer.
 
 ### 12.5 Normalization Summary
 
@@ -827,3 +990,116 @@ Atom-level attention uses blocked structure:
 | Atom transformer, diffusion transformer | AdaLayerNorm (conditioned scale+shift) |
 | Triangular multiplication (intermediate) | LayerNorm (no learnable parameters) |
 | Post-diffusion | Standard LayerNorm |
+
+---
+
+## 13. Inference Implementation Notes
+
+Details relevant to porting inference to MLX, confirmed from the Python source.
+
+### 13.1 Weight Storage and Loading
+
+- Each component is a separate TorchScript artifact loaded via `torch.jit.load`
+- A `_component_cache` (dict keyed by filename) reuses loaded modules across calls
+  (e.g., `trunk.pt` is loaded once and reused across 3 recycle iterations)
+- **No cross-file weight sharing**: each `.pt` file has fully independent parameters
+- Components are moved to/from GPU on demand via `_component_moved_to` context manager
+  (low-memory mode moves back to CPU after each use)
+
+### 13.2 Numerical Precision
+
+- **ESM2-3B**: stored as fp16 (filename `*_fp16.pt`), loaded with `.eval()`
+- **Main Chai-1 modules**: dtype inside `.pt` files not specified in Python; tensors
+  passed to diffusion and confidence modules are explicitly cast to `.float()` (fp32)
+- **Rigid transforms** (`tools/rigid.py`): forced to `float32` with
+  `torch.autocast("cuda", enabled=False)`
+- **Softmax**: `logits.float().softmax(dim=-1)` — explicit fp32 upcast
+- **No global `torch.autocast`** wrapping the main inference loop
+
+**Numerical stability constants** used in Python:
+
+| Location | Value | Purpose |
+|----------|-------|---------|
+| `calc_centroid` | `clamp(min=1e-4)` | Denominator for masked mean |
+| Diffusion sigma sqrt | `clamp_min(1e-6)` | Inside `sqrt(σ_hat² - σ_curr²)` |
+| Pairwise distances | `eps=1e-10` | Inside sqrt in `_naive_pairwise_distances` |
+| Template unit vectors | `eps=1e-12` | `torch.rsqrt(eps + ...)` |
+| Rigid transforms | `1e-8` to `1e-20` | Various quaternion/rotation operations |
+| `searchsorted` epsilon | `+1e-4` | Relative sequence separation bin assignment |
+
+### 13.3 Dropout
+
+- **No `nn.Dropout` in the Python source.** Neural dropout rates (e.g., attention
+  dropout 0.1 discovered from TorchScript graph constants) are embedded inside the
+  `.pt` modules.
+- **Docking constraint masking**: `structure_dropout_prob=0.75`,
+  `chain_dropout_prob=0.75` — stochastic feature zeroing in the data pipeline, not
+  neural dropout.
+- **ESM2**: `.eval()` is called, disabling any internal dropout.
+- TorchScript modules are loaded and called directly without `.train()`/`.eval()`
+  toggles. Traced models typically bake in eval-mode behavior, but the exact dropout
+  state inside `.pt` files is not confirmed from Python alone.
+
+### 13.4 SquashNorm
+
+Called between Pairformer blocks in the trunk. All methods return `None` at inference
+(confirmed from TorchScript graph). Training behavior is **unknown** from this
+codebase — not present in the open-source Python.
+
+### 13.5 The 32 Named Features
+
+The complete feature list, as registered in `chai1.py` lines 172–235:
+
+| # | Generator | Type | Encoding |
+|---|-----------|------|----------|
+| 1 | `RelativeSequenceSeparation` | TOKEN_PAIR | ONE_HOT |
+| 2 | `RelativeTokenSeparation(r_max=32)` | TOKEN_PAIR | ONE_HOT |
+| 3 | `RelativeEntity` | TOKEN_PAIR | ONE_HOT |
+| 4 | `RelativeChain` | TOKEN_PAIR | ONE_HOT |
+| 5 | `ResidueType` | TOKEN | ONE_HOT |
+| 6 | `ESMEmbeddings` | TOKEN | IDENTITY |
+| 7 | `BlockedAtomPairDistogram` | ATOM_PAIR | ONE_HOT |
+| 8 | `InverseSquaredBlockedAtomPairDistances` | ATOM_PAIR | IDENTITY |
+| 9 | `AtomRefPos` | ATOM | IDENTITY |
+| 10 | `AtomRefCharge` | ATOM | IDENTITY |
+| 11 | `AtomRefMask` | ATOM | IDENTITY |
+| 12 | `AtomRefElement` | ATOM | ONE_HOT |
+| 13 | `AtomNameOneHot` | ATOM | ONE_HOT |
+| 14 | `TemplateMask` | TEMPLATES | IDENTITY |
+| 15 | `TemplateUnitVector` | TEMPLATES | IDENTITY |
+| 16 | `TemplateResType` | TEMPLATES | OUTER_SUM |
+| 17 | `TemplateDistogram` | TEMPLATES | ONE_HOT |
+| 18 | `TokenDistanceRestraint` | TOKEN_PAIR | RBF |
+| 19 | `DockingConstraintGenerator` | TOKEN_PAIR | ONE_HOT |
+| 20 | `TokenPairPocketRestraint` | TOKEN_PAIR | RBF |
+| 21 | `MSAProfileGenerator` | TOKEN | IDENTITY |
+| 22 | `MSADeletionMeanGenerator` | TOKEN | IDENTITY |
+| 23 | `IsDistillation` | TOKEN | IDENTITY |
+| 24 | `TokenBFactor` | TOKEN | IDENTITY |
+| 25 | `TokenPLDDT` | TOKEN | IDENTITY |
+| 26 | `ChainIsCropped` | TOKEN | IDENTITY |
+| 27 | `MissingChainContact` | TOKEN | IDENTITY |
+| 28 | `MSAOneHotGenerator` | MSA | ONE_HOT |
+| 29 | `MSAHasDeletionGenerator` | MSA | IDENTITY |
+| 30 | `MSADeletionValueGenerator` | MSA | IDENTITY |
+| 31 | `IsPairedMSAGenerator` | MSA | IDENTITY |
+| 32 | `MSADataSourceGenerator` | MSA | ONE_HOT |
+
+RBF and OUTER_SUM encodings are applied **inside** `feature_embedding.pt`, not in
+Python. Python passes raw feature values; the TorchScript module handles the encoding.
+
+### 13.6 Remaining Unknowns
+
+Items that are **not determinable** from the open-source Python or documented
+TorchScript inspection:
+
+1. **Internal attention masking**: How mask tensors are applied to attention logits
+   inside the `.pt` modules (presumably additive −∞ bias, but unconfirmed)
+2. **Exact weight dtypes**: Whether `.pt` files store weights in fp32 or fp16
+   (inspecting tensor data in the TorchScript files would resolve this)
+3. **Neural dropout rates**: The 0.1 attention dropout was found in one TorchScript
+   graph constant; rates for Pairformer attention, triangle operations, and diffusion
+   transformer are not extracted
+4. **SquashNorm training behavior**: What it does when not returning `None`
+5. **`feature_dropout` in triangle multiplication**: Rate and implementation details
+   are inside the `.pt` files

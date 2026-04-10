@@ -207,10 +207,31 @@ gate channel beyond the four projection channels.
 The confidence head uses `pair2qkvgb: Linear(256, 2056)` instead of the trunk's
 dual-projection `pair2qkvg1 + pair2qkvg2`.
 
-Decomposition: 2056 = 2048 + 8
-- 2048 = 8 heads × 256 per head = 8 × (q32 + k32 + v64 + g64) ← possible decomposition
+Decomposition: 2056 = 8 heads × (q64 + k64 + v64 + g64 + bias1) = 8 × 257
 - 8 = 1 per head for attention bias
-- linear_out: (512, 512) = 8 heads × 64 output dim
+- linear_out: (512, 512) = 8 heads × 64 v_dim × 2 directions
 
 This is a **single fused projection** variant, vs the trunk's **starting/ending node**
 dual projection for proper triangular attention.
+
+## Resolved Questions (from Python source investigation)
+
+The following questions were originally open and have since been answered by reading
+the `chai-lab/` Python source:
+
+- **Weight sharing**: No. Token embedder and diffusion module encoders are separate
+  `.pt` files with independent weights. Decoder is a separate submodule in
+  `diffusion_module.pt`.
+- **Blocked attention geometry**: Centered Q (positions 48–79 in 128-wide KV window),
+  96-atom overlap, modular wrap with kv_mask. See ARCHITECTURE.md §3.3.
+- **Timestep spacing**: Uniform in t via `linspace(0,1,401)[1::2]`, nonlinear in σ
+  (power-7). 199 loop iterations.
+- **SE(3) augmentation**: Global centering (not per-chain), rotation, then translation.
+  Applied before noise injection at each step.
+- **Post-processing**: None. No relaxation or energy minimization.
+- **MSA pairing**: Species-hash + edit-distance ranking across chains.
+- **Template distances**: Pseudo-beta (CB/C2/C4), 38 bins from
+  `linspace(3.25, 50.75, 38)[1:]`.
+- **Causal masking**: Not used anywhere.
+- **Dropout in Python**: None (only docking feature masking). Neural dropout is inside
+  `.pt` files.
