@@ -1,12 +1,9 @@
-# Chai-1 Architecture: Comprehensive Reference
+# Chai-1 Architecture Reference
 
-This document describes the full Chai-1 neural architecture as reconstructed from the
-[chai-lab](../chai-lab/) open-source codebase and direct inspection of the TorchScript
-(`.pt`) model weights. Every hidden dimension, head count, layer count, activation
-pattern, sub-layer ordering, and einsum contraction has been verified against actual
-model parameter shapes and computation graph IR.
+This document describes the full Chai-1 neural architecture based on the
+[chai-lab](../chai-lab/) open-source codebase and the TorchScript (`.pt`) model weights.
 
-**Total model parameters: ~314M** (excluding ESM2-3B)
+**Total model parameters: ~314M** (excluding ESM2-3B). All weights are **float32**.
 
 | Component | File | Parameters | Size |
 |-----------|------|-----------|------|
@@ -16,6 +13,9 @@ model parameter shapes and computation graph IR.
 | Trunk | `trunk.pt` | 169,955,072 | 604 MB |
 | Diffusion Module | `diffusion_module.pt` | 127,928,768 | 454 MB |
 | Confidence Head | `confidence_head.pt` | 14,812,416 | 53 MB |
+
+Models are downloaded from `https://chaiassets.com/chai1-inference-depencencies/models_v2/{comp_key}`.
+ESM2-3B: `https://chaiassets.com/chai1-inference-depencencies/esm2/traced_sdpa_esm2_t36_3B_UR50D_fp16.pt`.
 
 ---
 
@@ -90,15 +90,15 @@ Ranking ── 0.2·pTM + 0.8·ipTM − 100·has_clashes
 
 ## 2. Global Hidden Dimensions
 
-| Representation | Dimension | Source |
-|---------------|-----------|--------|
-| Token single (s) | **384** | `pairformer.attention.input2qkvg.weight: [384, 4, 16, 24]` |
-| Token pair (z) | **256** | `pairformer.transition_pair.layer_norm.weight: [256]` |
-| MSA | **64** | `msa_module.msa_transition.linear_no_bias_ab.weight: [512, 64]` |
-| Template pair | **64** | `template_embedder.pairformer.blocks.0.transition_pair.layer_norm.weight: [64]` |
-| Atom single (a) | **128** | `atom_encoder.to_atom_cond.weight: [128, 128]` |
-| Atom pair (p) | **16** | `atom_pair_mlp.0.weight: [16, 16]` |
-| Diffusion token | **768** | `diffusion_transformer.blocks.0.to_out.weight: [768, 768]` |
+| Representation | Dimension |
+|---------------|-----------|
+| Token single (s) | **384** |
+| Token pair (z) | **256** |
+| MSA | **64** |
+| Template pair | **64** |
+| Atom single (a) | **128** |
+| Atom pair (p) | **16** |
+| Diffusion token | **768** |
 
 All modules consistently use **pre-norm** (LayerNorm before transformation) with
 additive residual connections: `x = x + sublayer(LayerNorm(x))`.
@@ -995,7 +995,7 @@ Atom-level attention uses a blocked local structure (see §3.3 for geometry):
 
 ## 13. Inference Implementation Notes
 
-Details relevant to porting inference to MLX, confirmed from the Python source.
+Details relevant to porting inference to MLX.
 
 ### 13.1 Weight Storage and Loading
 
@@ -1008,27 +1008,14 @@ Details relevant to porting inference to MLX, confirmed from the Python source.
 
 ### 13.2 Numerical Precision
 
-**All six Chai-1 `.pt` modules store weights in float32.** Confirmed by loading each
-file and inspecting `param.dtype` — 100% `torch.float32` in every module:
+All six Chai-1 `.pt` modules store weights in **float32**. ESM2-3B is stored as **fp16**.
 
-| Module | Parameters | dtype |
-|--------|-----------|-------|
-| `feature_embedding.pt` | 1,207,936 | float32 |
-| `bond_loss_input_proj.pt` | 512 | float32 |
-| `token_embedder.pt` | 1,660,768 | float32 |
-| `trunk.pt` | 169,955,072 | float32 |
-| `diffusion_module.pt` | 127,928,768 | float32 |
-| `confidence_head.pt` | 14,812,416 | float32 |
+- Tensors passed to diffusion and confidence modules are explicitly cast to fp32
+- Rigid transforms (`tools/rigid.py`) force fp32 with `torch.autocast("cuda", enabled=False)`
+- Softmax uses explicit fp32 upcast: `logits.float().softmax(dim=-1)`
+- No global `torch.autocast` wrapping the main inference loop
 
-- **ESM2-3B**: stored as fp16 (filename `*_fp16.pt`), loaded with `.eval()`
-- **Python-side casts**: tensors passed to diffusion and confidence modules are
-  explicitly cast to `.float()` (fp32)
-- **Rigid transforms** (`tools/rigid.py`): forced to `float32` with
-  `torch.autocast("cuda", enabled=False)`
-- **Softmax**: `logits.float().softmax(dim=-1)` — explicit fp32 upcast
-- **No global `torch.autocast`** wrapping the main inference loop
-
-**Numerical stability constants** used in Python:
+**Numerical stability constants**:
 
 | Location | Value | Purpose |
 |----------|-------|---------|
@@ -1041,21 +1028,9 @@ file and inspecting `param.dtype` — 100% `torch.float32` in every module:
 
 ### 13.3 Dropout
 
-**All dropout in the exported models is effectively disabled.** Confirmed by inspecting
-the TorchScript graph constants in every `.pt` file:
-
-| Module | Dropout Type | Rate | Training Flag |
-|--------|-------------|------|---------------|
-| `feature_embedding.pt` | none | — | — |
-| `bond_loss_input_proj.pt` | none | — | — |
-| `token_embedder.pt` | none | — | — |
-| `trunk.pt` | `aten::feature_dropout` | **0.0** | True |
-| `diffusion_module.pt` | none | — | — |
-| `confidence_head.pt` | `aten::feature_dropout` | **0.0** | True |
-
-The trunk and confidence head contain `aten::feature_dropout` calls with `probability=0.`
-and `training=True` baked in. With rate 0, these are **no-ops** regardless of the
-training flag. No `aten::dropout` (regular dropout) calls exist in any module.
+All dropout in the exported models is effectively **disabled**. The trunk and confidence
+head contain `aten::feature_dropout` calls with `probability=0.0` and `training=True`
+baked in — these are no-ops. No other dropout calls exist in any module.
 
 - **Docking constraint masking** (Python-side): `structure_dropout_prob=0.75`,
   `chain_dropout_prob=0.75` — stochastic feature zeroing in the data pipeline, not
@@ -1064,11 +1039,9 @@ training flag. No `aten::dropout` (regular dropout) calls exist in any module.
 
 ### 13.4 SquashNorm
 
-Called between Pairformer blocks in the trunk. Confirmed from TorchScript graph: all
-calls are `prim::CallMethod` on `%squash_norm.1` returning `NoneType`. Two calls per
-block (one for single repr, one for pair repr). The method implementations return
-`None` unconditionally — **no conditional logic or training-mode check**; this is a
-pure no-op in the exported model. Not present in any other module.
+Called between Pairformer blocks in the trunk. Two calls per block (one for single repr,
+one for pair repr). In the exported model, all implementations return `None`
+unconditionally — a **pure no-op at inference**. Not present in any other module.
 
 ### 13.5 The 32 Named Features
 
@@ -1114,30 +1087,11 @@ Python. Python passes raw feature values; the TorchScript module handles the enc
 
 ### 13.6 Attention Masking
 
-**All modules use `aten::masked_fill` with value `-10000`** (not `-inf`) on attention
-bias tensors. Confirmed from TorchScript graphs of all modules that contain attention:
+All modules use `masked_fill` with value **`-10000`** (not `-inf`) on attention bias
+tensors. This is applied before softmax; after softmax, `exp(-10000) ≈ 0` effectively
+zeroes out masked positions.
 
-- `token_embedder.pt`: `masked_fill(blocked_pair_bias, mask, -10000)` — atom local attn
-- `trunk.pt`: `masked_fill(..., -10000)` — Pairformer attn, triangle attn, MSA attn
-- `diffusion_module.pt`: `masked_fill(..., -10000)` — atom local attn, diffusion attn
-- `confidence_head.pt`: `masked_fill(..., -10000)` — Pairformer attn, triangle attn
+Token-level padding is propagated via `token_pair_mask` (§6.3.9); atom-level via
+`block_atom_pair_mask` (§3.3). Invalid positions are also zero-filled with
+`masked_fill(..., 0.)` on single representations.
 
-The mask value `-10000` is applied to the **attention bias** (added before softmax),
-not directly to logits. After softmax, `exp(-10000) ≈ 0`, effectively zeroing out
-masked positions. Token-level padding is propagated via `token_pair_mask` (§6.3.9);
-atom-level via `block_atom_pair_mask` (§3.3). Invalid positions are also zero-filled
-with `masked_fill(..., 0.)` on single representations.
-
-### 13.7 Remaining Unknowns
-
-All major architectural details for inference have been resolved. The only items not
-fully determined:
-
-1. **SquashNorm training behavior**: The exported model unconditionally returns `None`.
-   What the original training code does in this module is unknown. Irrelevant for
-   inference porting.
-2. **The previously-reported 0.1 attention dropout** (from SCRATCHPAD.md) was observed
-   in a TorchScript graph constant but does not appear as an active dropout rate in any
-   `aten::dropout` or `aten::feature_dropout` call. All dropout rates in the exported
-   models are **0.0**. The 0.1 constant may have been a default parameter that was
-   overridden, or observed in a different context.
