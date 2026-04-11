@@ -157,7 +157,8 @@ being passed to the TorchScript modules.
 - `atom_q_mask = atom_single_mask[:, q_idx]` and `atom_kv_mask = ..[:, kv_idx]`
 - Outer product: `mask = atom_q_mask & atom_kv_mask` → `[b, bl, 32, 128]`
 - ANDed with `kv_is_wrapped_mask` broadcast over queries
-- Distance features additionally require `atom_ref_space_uid` match (same residue)
+- **Uncited**: Distance features may additionally require same-residue matching
+  (the term `atom_ref_space_uid` appears in AF3 but is not found in this codebase)
 
 **Pair tensor layout**: `[b, num_blocks, 32, 128, feature_dim]` — block index, query
 slot within block, key slot within KV window, feature channels.
@@ -178,7 +179,8 @@ using generators registered in
 ### 4.1 Input Feature Dimensions
 
 The feature embedding takes **32 named features** and projects them through type-specific
-input projections:
+input projections. All raw dimensions below are verified from the TorchScript weight
+shapes in `feature_embedding.pt` (attribute `input_projs.{TYPE}.0.weight`):
 
 | Type | Raw Dim | Projection | Output Dim | Split |
 |------|---------|-----------|------------|-------|
@@ -194,42 +196,56 @@ All input projections include bias. TOKEN_PAIR, ATOM, and ATOM_PAIR outputs are
 
 ### 4.2 Feature Encoding Details
 
+Details in this section come from inside the `feature_embedding.pt` TorchScript module
+unless otherwise noted. The Python generators
+([`data/features/generators/`](../chai-lab/chai_lab/data/features/generators/)) pass raw
+scalar values; encoding (RBF, one-hot, outer-sum) happens inside the TorchScript.
+
 - **TemplateResType**: `Embedding(33, 32)` for outer-sum encoding, with learned offset
 - **RBF encoding** (TokenDistanceRestraint, TokenPairPocketRestraint):
   `encoding = exp(-((radii - raw_data) / width)²)`, clamped at exponent ≤ 16.
   When `raw_data == -1.0` (absent constraint), encoding is zeroed and a `should_mask`
   indicator is concatenated.
-  - TokenDistanceRestraint: width **4.8 Å**, radii `[6.0, 10.8, 15.6, 20.4, 25.2, 30.0]`
-  - TokenPairPocketRestraint: width **2.8 Å**, radii `[6.0, 8.8, 11.6, 14.4, 17.2, 20.0]`
+  - TokenDistanceRestraint: width **4.8 Å** (constant c0), radii
+    `[6.0, 10.8, 15.6, 20.4, 25.2, 30.0]` (buffer `TokenDistanceRestraint.radii`)
+  - TokenPairPocketRestraint: width **2.8 Å** (constant c2), radii
+    `[6.0, 8.8, 11.6, 14.4, 17.2, 20.0]` (buffer `TokenPairPocketRestraint.radii`)
 - **AtomNameOneHot**: One-hot to 65 classes → reshaped to 260 (4 chars × 65)
 - **AtomRefElement**: One-hot to 130 classes (128 elements + mask)
 
 ### 4.3 Raw Feature Dimension Breakdown
 
-TOKEN (2638 total):
-- ResidueType: 33 (32 types + mask, one-hot)
+TOKEN (2638 total — verified breakdown: 33+2560+33+1+2+3+4+1+1 = 2638):
+- ResidueType: 33 (32 types + mask, one-hot,
+  [`generators/residue_type.py`](../chai-lab/chai_lab/data/features/generators/residue_type.py))
 - ESMEmbeddings: 2560 (ESM2-3B embedding dim)
-- MSAProfile: 32 — masked frequency distribution over residue types, computed via
+- MSAProfile: 33 — masked frequency distribution over 33 residue types, computed via
   `scatter_add` of `main_msa_mask` by token type index, divided by sum
+  ([`generators/msa.py:MSAProfileGenerator`](../chai-lab/chai_lab/data/features/generators/msa.py))
 - MSADeletionMean: 1 — `masked_mean(deletion_matrix, mask=main_msa_mask, dim=depth)`;
   raw deletion counts from A3M are consecutive lowercase (insertion) chars to the
   left of each match column, capped at 255
-- IsDistillation: 1, TokenBFactor: 1, TokenPLDDT: 1
+- IsDistillation: 2 (one-hot, 1 class + mask, `can_mask=True`)
+- TokenBFactor: 3 (one-hot, 1 bin → 2 classes + mask; `include_prob=0.0` → always masked,
+  [`generators/structure_metadata.py`](../chai-lab/chai_lab/data/features/generators/structure_metadata.py))
+- TokenPLDDT: 4 (one-hot, 2 bins → 3 classes + mask; `include_prob=0.0` → always masked)
 - ChainIsCropped: 1, MissingChainContact: 1
-- Residual from encodings: ~7
 
-TOKEN_PAIR (163 total):
+TOKEN_PAIR (163 total — verified: 67+67+3+6+6+7+7 = 163):
 - RelativeSequenceSeparation: 67 — `sep_bins = arange(-32, 33)` (65 values),
   `searchsorted(sep_bins, rel_sep + 1e-4)` gives indices 0–65 for same-chain;
-  inter-chain pairs get class 66. Total: `len(sep_bins) + 2 = 67`.
+  inter-chain pairs get class 66. Total: `len(sep_bins) + 2 = 67`
+  ([`data/features/generators/relative_sep.py`](../chai-lab/chai_lab/data/features/generators/relative_sep.py))
 - RelativeTokenSeparation: 67 — `r_max=32`, only within same residue AND same chain;
-  `clamp(token_i - token_j + 32, 0, 65)`, off-mask class 66. Total: `2*32+3 = 67`.
+  `clamp(token_i - token_j + 32, 0, 65)`, off-mask class 66. Total: `2*32+3 = 67`
+  ([`data/features/generators/relative_token.py`](../chai-lab/chai_lab/data/features/generators/relative_token.py))
 - RelativeEntity: 3
-- RelativeChain: 6 (2×2+2)
+  ([`data/features/generators/relative_entity.py`](../chai-lab/chai_lab/data/features/generators/relative_entity.py))
+- RelativeChain: 6 (`2×s_max+2`, `s_max=2`)
+  ([`data/features/generators/relative_chain.py`](../chai-lab/chai_lab/data/features/generators/relative_chain.py))
 - DockingConstraintGenerator: 6 (5 dist bins + mask, one-hot)
-- TokenDistanceRestraint: 6 (RBF radii) + mask
-- TokenPairPocketRestraint: 6 (RBF radii) + mask
-- Residual from concatenation: ~2
+- TokenDistanceRestraint: 7 (6 RBF radii + 1 mask indicator)
+- TokenPairPocketRestraint: 7 (6 RBF radii + 1 mask indicator)
 
 ATOM (395 total):
 - AtomNameOneHot: 260 (4 chars × 65 classes)
@@ -242,12 +258,17 @@ ATOM_PAIR (14 total):
 - BlockedAtomPairDistogram: 12 (11 classes + mask, one-hot)
 - InverseSquaredBlockedAtomPairDistances: 2 (value + mask)
 
-MSA (42 total):
-- MSAOneHot: 32 (residue types, one-hot)
+MSA (42 total — verified from `feature_embedding.pt` weight `input_projs.MSA.0.weight:
+[64, 42]`; `feature_embedding.pt` constant c3=33 confirms residue vocab size):
+- MSAOneHot: 33 (residue types one-hot; vocab defined in
+  [`residue_constants.py:519–526`](../chai-lab/chai_lab/data/residue_constants.py) =
+  20 AA + X + 5 RNA + 5 DNA + gap + non-existent)
 - MSAHasDeletion: 1
 - MSADeletionValue: 1 — transformed as `(2/π) * arctan(deletion_count / 3)`
 - IsPairedMSA: 1 — True where `msa_mask & (pairing_key != NO_PAIRING_KEY)`
-- MSADataSource: 7 (6 classes + mask, one-hot)
+- MSADataSource: 6 (6 classes; Python `num_classes=6`, `can_mask=True` sets mask index
+  to 6, but the TorchScript one-hot encoding appears to use 6 classes, mapping mask
+  positions to a zeroed vector rather than adding a 7th class)
 
 TEMPLATES (76 total):
 - TemplateMask: 2 (backbone + pseudo-beta)
@@ -715,8 +736,9 @@ pair_ln: LayerNorm(256) → z_cond [b, n, n, 256]
 ```
 
 **Fourier Embedding**: `weights: [256], bias: [256]` — random Fourier features for σ.
-Produces `cos(weights * log_σ + bias)` → 256-dim, projected to 384 and added to
-the single conditioning signal between the two transition blocks.
+Produces `cos((weights · ln(σ)/4 + bias) · 2π)` → 256-dim, projected to 384 and added
+to the single conditioning signal between the two transition blocks. See §7.6.0 for the
+full EDM preconditioning constants.
 
 ### 7.2 Atom Attention Encoder
 
@@ -923,7 +945,11 @@ confidence_head
 - Predicted atom positions are selected at representative atoms via
   `token_reference_atom_index`, then pairwise distances computed via `torch.cdist`
   (visible at `confidence_head.pt` TorchScript line 521)
-- Distances binned via `searchsorted` into 16 bins, one-hot encoded
+- Distances binned via `searchsorted` with **15 bin edges** (from `confidence_head.pt`
+  attribute `atom_distance_v_bins`):
+  `[3.375, 4.661, 5.946, 7.232, 8.518, 9.804, 11.089, 12.375, 13.661, 14.946,
+   16.232, 17.518, 18.804, 20.089, 21.375]` — uniformly spaced at ~1.286 Å
+- One-hot to **16 classes** (15 bins + 1 overflow)
 - `atom_distance_bins_projection: Linear(16, 256, no bias)` → added to pair repr
 
 ### 8.2 Pairformer Blocks (4 blocks)
@@ -1011,20 +1037,25 @@ Chai-1 can run with any combination of MSAs, templates, and ESM embeddings.
 
 ### 10.1 ESM Embeddings (absent)
 
-Zero tensor of shape `[n_tokens, 2560]`, concatenated into the TOKEN feature vector and
-projected through `Linear(2638, 384)`. No learned mask embedding — absence is zeros.
+Zero tensor of shape `[n_tokens, 2560]`
+([`data/dataset/embeddings/embedding_context.py:EmbeddingContext.empty`](../chai-lab/chai_lab/data/dataset/embeddings/embedding_context.py)),
+concatenated into the TOKEN feature vector and projected through `Linear(2638, 384)`.
+No learned mask embedding — absence is zeros.
 
 ### 10.2 MSA (absent)
 
-`MSAContext.create_empty` fills tokens with gap character `":"`, sets mask to all-False,
-deletion matrix to zeros, pairing keys to `NO_PAIRING_KEY = -999991`, and source to
-`MSADataSource.NONE`. The all-False mask zeros out MSA profile, deletion mean, and
-pair-weighted averaging attention.
+[`MSAContext.create_empty`](../chai-lab/chai_lab/data/dataset/msas/msa_context.py)
+fills tokens with the non-existent character `":"` (index for "should get masked", per
+[`residue_constants.py:525`](../chai-lab/chai_lab/data/residue_constants.py)),
+sets mask to all-False, deletion matrix to zeros, pairing keys to
+`NO_PAIRING_KEY = -999991`, and source to `MSADataSource.NONE`. The all-False mask
+zeros out MSA profile, deletion mean, and pair-weighted averaging attention.
 
 ### 10.3 Templates (absent)
 
-`TemplateContext.empty` fills residue types with gap `"-"` and all masks to False.
-The template embedder processes these but the all-zero masks prevent information flow.
+[`TemplateContext.empty`](../chai-lab/chai_lab/data/dataset/templates/context.py) fills
+residue types with gap `"-"` and all masks to False. The template embedder processes
+these but the all-zero masks prevent information flow.
 
 ### 10.4 Constraints (absent)
 
@@ -1043,6 +1074,10 @@ their canonical parent residue; unknown residues use "X" (token ID 24).
 ---
 
 ## 11. Key Differences from AlphaFold 3
+
+Chai-1 values are verified from the TorchScript `.pt` files. AF3 values are from
+Abramson et al. 2024 (Nature) and the
+[preprint modifications document](../auxiliary/preprint-af3-modifications.md).
 
 ### 11.1 Architectural Differences
 
@@ -1131,7 +1166,7 @@ Atom-level attention uses a blocked local structure (see §3.3 for geometry):
 |----------|------|
 | Transitions, attention | Standard LayerNorm (weight + bias) |
 | Atom transformer, diffusion transformer | AdaLayerNorm (conditioned scale+shift) |
-| Triangular multiplication (intermediate) | LayerNorm (no learnable parameters) |
+| Triangular multiplication (intermediate) | Standard LayerNorm (weight + bias) |
 | Post-diffusion | Standard LayerNorm |
 
 ---
