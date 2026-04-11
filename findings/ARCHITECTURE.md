@@ -160,8 +160,18 @@ being passed to the TorchScript modules.
 - `atom_q_mask = atom_single_mask[:, q_idx]` and `atom_kv_mask = ..[:, kv_idx]`
 - Outer product: `mask = atom_q_mask & atom_kv_mask` → `[b, bl, 32, 128]`
 - ANDed with `kv_is_wrapped_mask` broadcast over queries
-- **Uncited**: Distance features may additionally require same-residue matching
-  (the term `atom_ref_space_uid` appears in AF3 but is not found in this codebase)
+- **ATOM_PAIR distance features** additionally require `atom_ref_space_uid` match
+  (same residue). `atom_ref_space_uid` is set to `atom_residue_index` at
+  [`all_atom_residue_tokenizer.py:433`](../chai-lab/chai_lab/data/dataset/structure/all_atom_residue_tokenizer.py),
+  stored in `AllAtomStructureContext`
+  ([`all_atom_structure_context.py:51`](../chai-lab/chai_lab/data/dataset/structure/all_atom_structure_context.py)),
+  and used in
+  [`blocked_atom_pair_distances.py:167–173`](../chai-lab/chai_lab/data/features/generators/blocked_atom_pair_distances.py)
+  to AND the block pair mask with a same-residue constraint before computing distances.
+  This filtering applies to the ATOM_PAIR **feature generation** (distogram and
+  inverse-squared distances), NOT to the general `block_atom_pair_mask` used for
+  attention. Atoms in different residues get masked distance features (mask class for
+  distogram, zero+mask for inverse-squared), but can still attend to each other
 
 **Pair tensor layout**: `[b, num_blocks, 32, 128, feature_dim]` — block index, query
 slot within block, key slot within KV window, feature channels.
