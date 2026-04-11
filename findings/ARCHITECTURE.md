@@ -34,13 +34,14 @@ ESM2-3B: `https://chaiassets.com/chai1-inference-depencencies/esm2/traced_sdpa_e
 11. [Key Differences from AlphaFold 3](#11-key-differences-from-alphafold-3)
 12. [Layer Building Blocks](#12-layer-building-blocks)
 13. [Inference Implementation Notes](#13-inference-implementation-notes)
+14. [Inference Linearity and Parallelism](#14-inference-linearity-and-parallelism)
 
 ---
 
 ## 1. High-Level Pipeline
 
 The end-to-end inference pipeline is orchestrated by `run_folding_on_context()` in
-`chai_lab/chai1.py`:
+[`chai_lab/chai1.py:580–1059`](../chai-lab/chai_lab/chai1.py):
 
 ```
 Input (FASTA + optional MSAs/templates/constraints/ESM embeddings)
@@ -110,12 +111,15 @@ additive residual connections: `x = x + sublayer(LayerNorm(x))`.
 ### 3.1 Token-Atom Hierarchy
 
 - **Tokens**: One token per residue (protein/nucleotide) or per atom (ligands/modified residues)
-- **Atoms**: Up to **23 atoms per token** (`n_atoms = 23 * n_tokens` in `data/collate/utils.py:35`)
+- **Atoms**: Up to **23 atoms per token** (`n_atoms = 23 * n_tokens` in
+  [`data/collate/utils.py:35`](../chai-lab/chai_lab/data/collate/utils.py))
 - Model exported for static sizes: **[256, 384, 512, 768, 1024, 1536, 2048]** tokens
+  ([`data/collate/utils.py:AVAILABLE_MODEL_SIZES`](../chai-lab/chai_lab/data/collate/utils.py))
 
 ### 3.2 Input Contexts
 
-Bundled in `AllAtomFeatureContext` (`data/dataset/all_atom_feature_context.py`):
+Bundled in `AllAtomFeatureContext`
+([`data/dataset/all_atom_feature_context.py`](../chai-lab/chai_lab/data/dataset/all_atom_feature_context.py)):
 
 | Context | Max Size | Description |
 |---------|----------|-------------|
@@ -128,10 +132,12 @@ Bundled in `AllAtomFeatureContext` (`data/dataset/all_atom_feature_context.py`):
 ### 3.3 Blocked Atom Geometry
 
 Atom-level attention uses a blocked local scheme. The blocking is computed in Python
-(`model/utils.py:get_qkv_indices_for_blocks`) before being passed to the TorchScript
-modules.
+([`model/utils.py:get_qkv_indices_for_blocks`](../chai-lab/chai_lab/model/utils.py)) before
+being passed to the TorchScript modules.
 
-**Block assignment** (`data/collate/collate.py`, `model/utils.py`):
+**Block assignment**
+([`data/collate/collate.py`](../chai-lab/chai_lab/data/collate/collate.py),
+[`model/utils.py`](../chai-lab/chai_lab/model/utils.py)):
 - `n_atoms = 23 * n_tokens`, enforced divisible by 32
 - `num_blocks = n_atoms / 32`
 - Query blocks: non-overlapping consecutive chunks of **32 atoms**
@@ -146,7 +152,8 @@ modules.
   `kv_mask`, then taken `% sequence_length` (modular wrap for indexing only)
 - Invalid KV positions are excluded from `block_atom_pair_mask` and never attend
 
-**Block pair mask** (`model/utils.py:get_block_atom_pair_mask`):
+**Block pair mask**
+([`model/utils.py:get_block_atom_pair_mask`](../chai-lab/chai_lab/model/utils.py)):
 - `atom_q_mask = atom_single_mask[:, q_idx]` and `atom_kv_mask = ..[:, kv_idx]`
 - Outer product: `mask = atom_q_mask & atom_kv_mask` → `[b, bl, 32, 128]`
 - ANDed with `kv_is_wrapped_mask` broadcast over queries
@@ -159,9 +166,14 @@ slot within block, key slot within KV window, feature channels.
 
 ## 4. Feature Embedding
 
-**Module**: `feature_embedding.pt` (~1.1M params)
+**Module**: [`feature_embedding.pt`](../chai-lab/downloads/models_v2/feature_embedding.pt) (~1.1M params)
 
 Internal class: `chai.model.embedding.feature_embedding.FeatureEmbedding`
+
+Features are generated in Python by `FeatureFactory`
+([`data/features/feature_factory.py`](../chai-lab/chai_lab/data/features/feature_factory.py))
+using generators registered in
+[`chai1.py:172–235`](../chai-lab/chai_lab/chai1.py).
 
 ### 4.1 Input Feature Dimensions
 
@@ -249,18 +261,30 @@ TEMPLATES (76 total):
 
 ### 4.4 Bond Feature Projection
 
-**Module**: `bond_loss_input_proj.pt` (512 params)
+**Module**: [`bond_loss_input_proj.pt`](../chai-lab/downloads/models_v2/bond_loss_input_proj.pt)
+(512 params)
 
 A single `Linear(1, 512, bias=False)`. Output is split 256+256 and **added** to the
-trunk and structure token-pair representations respectively.
+trunk and structure token-pair representations respectively
+([`chai1.py:705–715`](../chai-lab/chai_lab/chai1.py)).
+
+**Important**: Despite the name "bond_loss", this is NOT a bond prediction head. Covalent
+bonds are **input features**, not predicted outputs. The `TokenBondRestraint` generator
+([`data/features/generators/token_bond.py`](../chai-lab/chai_lab/data/features/generators/token_bond.py))
+creates a binary `[n_tokens, n_tokens]` adjacency feature from the input structure's
+covalent bond indices. The name "bond_loss" reflects training-time usage (a bond
+reconstruction loss); at inference, this module simply projects bond topology features
+into the pair representation.
 
 ---
 
 ## 5. Token Input Embedder
 
-**Module**: `token_embedder.pt` (~1.5M params)
+**Module**: [`token_embedder.pt`](../chai-lab/downloads/models_v2/token_embedder.pt) (~1.5M params)
 
 Internal class: `chai.model.af3.token_input_emb.TokenInputEmbedding`
+
+Called at [`chai1.py:721–738`](../chai-lab/chai_lab/chai1.py).
 
 This module aggregates atom-level information to token-level representations using an
 atom transformer with blocked local attention.
@@ -330,10 +354,34 @@ The atom-level transformer uses **blocked local attention** (query block=32, key
 
 ## 6. Trunk
 
-**Module**: `trunk.pt` (169,955,072 params)
+**Module**: [`trunk.pt`](../chai-lab/downloads/models_v2/trunk.pt) (169,955,072 params)
 
 The trunk consists of three sub-modules: template embedder, MSA module, and
-Pairformer stack.
+Pairformer stack. Recycling is orchestrated in Python at
+[`chai1.py:746–777`](../chai-lab/chai_lab/chai1.py).
+
+TorchScript submodule hierarchy (from `trunk.pt`):
+```
+trunk
+├── token_single_recycle_proj   (LN → Linear)
+├── token_pair_recycle_proj     (LN → Linear)
+├── template_embedder
+│   ├── proj_in                 (LN → Linear)
+│   ├── pairformer              (2 blocks)
+│   ├── template_layernorm
+│   └── proj_out
+├── msa_module
+│   ├── linear_s2m
+│   ├── outer_product_mean      (4 blocks)
+│   ├── msa_pair_weighted_averaging (3 blocks)
+│   ├── msa_transition          (3 blocks)
+│   ├── pair_transition         (4 blocks)
+│   ├── triangular_multiplication (4 blocks)
+│   └── triangular_attention    (4 blocks)
+└── pairformer_stack
+    ├── blocks                  (48 blocks)
+    └── squash_norm             (no-op at inference)
+```
 
 ### 6.1 Recycle Projections
 
@@ -487,7 +535,7 @@ Both directions' attention outputs are combined and gated by sigmoid(g).
 #### 6.3.8 MSA Pairing Algorithm
 
 MSAs from multiple chains are paired by species before being merged
-(`data/dataset/msas/preprocess.py`):
+([`data/dataset/msas/preprocess.py`](../chai-lab/chai_lab/data/dataset/msas/preprocess.py)):
 
 1. **Pairing keys**: Each MSA row has a string pairing key (typically a species/taxonomy
    identifier; for ColabFold paired outputs, the row index). Keys are hashed to stable
@@ -592,11 +640,44 @@ Same architecture as MSA module (§6.3.7). 8 heads, 32 head_dim, at pair dim 256
 
 ## 7. Diffusion Module
 
-**Module**: `diffusion_module.pt` (127,928,768 params)
+**Module**: [`diffusion_module.pt`](../chai-lab/downloads/models_v2/diffusion_module.pt)
+(127,928,768 params)
 
 The diffusion module predicts 3D atomic coordinates via denoising diffusion. It consists
 of four sub-systems: conditioning, atom attention encoder, diffusion transformer, and
-atom attention decoder.
+atom attention decoder. The diffusion loop is orchestrated in Python at
+[`chai1.py:844–886`](../chai-lab/chai_lab/chai1.py).
+
+TorchScript submodule hierarchy (from `diffusion_module.pt`):
+```
+diffusion_module
+├── diffusion_conditioning
+│   ├── token_pair_proj         (LN → Linear(512, 256))
+│   ├── token_in_proj           (LN → Linear(768, 384))
+│   ├── single_trans1, single_trans2   (SwiGLU 384→1536→768→384)
+│   ├── pair_trans1, pair_trans2       (SwiGLU 256→1024→512→256)
+│   ├── fourier_embedding       (weights[256], bias[256])
+│   ├── fourier_proj            (LN(256) → Linear(256, 384))
+│   ├── single_ln               (LN(384))
+│   └── pair_ln                 (LN(256))
+├── atom_attention_encoder      (same arch as token embedder's encoder)
+│   ├── to_atom_cond            (Linear(128, 128))
+│   ├── token_to_atom_single    (LN(384) → Linear(384, 128))
+│   ├── prev_pos_embed          (Linear(3, 128, no bias))
+│   ├── pair_update_block
+│   ├── token_pair_to_atom_pair (LN(256) → Linear(256, 16))
+│   ├── atom_transformer        (3 local attn blocks + 3 transitions)
+│   └── to_token_single         (Linear(128, 768, no bias))
+├── diffusion_transformer
+│   └── blocks                  (16 blocks, 768-dim)
+├── atom_attention_decoder
+│   ├── token_to_atom           (Linear(768, 128, no bias))
+│   ├── atom_transformer        (3 local attn blocks + 3 transitions)
+│   └── to_pos_updates          (LN(128) → Linear(128, 3, no bias))
+├── structure_cond_to_token_structure_proj (Linear(384, 768, no bias))
+├── post_attn_layernorm         (LN(768))
+└── post_atom_cond_layernorm    (LN(128))
+```
 
 ### 7.1 Diffusion Conditioning
 
@@ -704,7 +785,41 @@ Mirrors the encoder to decode token-level predictions back to atomic positions:
 ### 7.6 Noise Schedule and Sampling
 
 EDM (Karras et al. 2022) Algorithm 2 with stochastic churn and second-order Heun
-correction. Implementation in `model/diffusion_schedules.py` and `chai1.py`.
+correction. Implementation in
+[`model/diffusion_schedules.py`](../chai-lab/chai_lab/model/diffusion_schedules.py) and
+[`chai1.py:821–886`](../chai-lab/chai_lab/chai1.py).
+
+### 7.6.0 EDM Parameterization (Preconditioning)
+
+The network output is preconditioned following Karras et al. 2022 Table 1 (VP column
+adapted for protein coordinates). Constants extracted from `diffusion_module.pt` constants
+archive:
+
+| Constant | Value | Role |
+|----------|-------|------|
+| c0 | 0.25 | `c_noise = ln(σ) × 0.25` — Fourier log-sigma scaling |
+| c1 | 1 (int) | Identity multiplier for TorchScript size math |
+| c2 | 2π | Fourier frequency factor (`cos(w·ln(σ) + b) × 2π`) |
+| c3 | 256.0 | σ_data² = 16² |
+| c4 | 2 (int) | Block index centering divisor |
+| c5 | 16 (int) | Number of heads (diffusion transformer) |
+| c6 | 16.0 | σ_data |
+
+The denoising output formula (visible at `diffusion_module.pt` TorchScript lines
+3502–3509):
+
+```
+c_in   = (σ² + σ_data²)^(-0.5)              # input scaling
+c_skip = σ_data² / (σ² + σ_data²)           # skip connection weight
+c_out  = σ · σ_data / √(σ² + σ_data²)       # output scaling
+c_noise = ln(σ) / 4                          # noise conditioning
+
+D(x; σ) = c_skip · x + c_out · F_θ(c_in · x; c_noise(σ))
+```
+
+Where `F_θ` is the full encoder → transformer → decoder network. The network predicts
+a "unit noise error" which is scaled by `c_out` and combined with the skip-connected
+noised input scaled by `c_skip`.
 
 #### 7.6.1 Noise Schedule
 
@@ -770,7 +885,8 @@ estimates. It is skipped at the final step (sigma_next=0).
 #### 7.6.5 SE(3) Augmentation
 
 Applied at the **start of each diffusion step**, before noise injection
-(`model/utils.py:center_random_augmentation`):
+([`model/utils.py:center_random_augmentation`](../chai-lab/chai_lab/model/utils.py),
+called at [`chai1.py:849–856`](../chai-lab/chai_lab/chai1.py)):
 
 1. **Centering**: Compute one centroid per batch item via masked mean over all atoms
    (**global**, not per-chain). Subtract centroid. Denominator clamped at 1e-4.
@@ -783,13 +899,31 @@ Applied at the **start of each diffusion step**, before noise injection
 
 ## 8. Confidence Head
 
-**Module**: `confidence_head.pt` (14,812,416 params)
+**Module**: [`confidence_head.pt`](../chai-lab/downloads/models_v2/confidence_head.pt)
+(14,812,416 params)
+
+Called once per diffusion sample in a sequential loop at
+[`chai1.py:894–910`](../chai-lab/chai_lab/chai1.py).
+
+TorchScript submodule hierarchy (from `confidence_head.pt`):
+```
+confidence_head
+├── single_to_pair_proj         (Linear(384, 512, no bias))
+├── atom_distance_bins_projection (Linear(16, 256, no bias))
+├── blocks                      (4 Pairformer blocks)
+├── plddt_projection            (Linear(384, 1850))
+├── pae_projection              (Linear(256, 64))
+└── pde_projection              (Linear(256, 64))
+```
 
 ### 8.1 Input Processing
 
 - `single_to_pair_proj: Linear(384, 512, no bias)` → chunk to 2×256, outer sum for
   pair initialization
-- Atom pairwise distances binned via `searchsorted` into 16 bins
+- Predicted atom positions are selected at representative atoms via
+  `token_reference_atom_index`, then pairwise distances computed via `torch.cdist`
+  (visible at `confidence_head.pt` TorchScript line 521)
+- Distances binned via `searchsorted` into 16 bins, one-hot encoded
 - `atom_distance_bins_projection: Linear(16, 256, no bias)` → added to pair repr
 
 ### 8.2 Pairformer Blocks (4 blocks)
@@ -826,11 +960,17 @@ pLDDT: 1850 = **37 atom positions × 50 bins** per token, scattered to atom-leve
 
 ## 9. Ranking and Scoring
 
+Ranking is computed in Python at
+[`chai1.py:988–1015`](../chai-lab/chai_lab/chai1.py), delegating to
+[`ranking/rank.py`](../chai-lab/chai_lab/ranking/rank.py).
+
 ### 9.1 Aggregate Score
 
 ```
 aggregate_score = 0.2 × pTM + 0.8 × ipTM − 100 × has_inter_chain_clashes
 ```
+
+([`ranking/rank.py:94–99`](../chai-lab/chai_lab/ranking/rank.py))
 
 ### 9.2 TM-Score Normalization
 
@@ -841,7 +981,9 @@ TM_pair(i,j) = 1 / (1 + (PAE_ij / d0)²)
 
 - **pTM**: Max over alignment rows of sum of pairwise TM scores, normalized by total tokens
 - **ipTM**: Max over chains c of pTM(c vs rest), weighted 4× in aggregate score
-- **Clash detection** (`ranking/clashes.py`): Pairwise atom distances via `cdist`;
+- **Clash detection**
+  ([`ranking/clashes.py`](../chai-lab/chai_lab/ranking/clashes.py)): Pairwise atom
+  distances via `cdist`;
   clash if distance < **1.1 Å** (valid atom pairs, not self). Aggregated to chain–chain
   matrices. `has_inter_chain_clashes` uses thresholds `max_clashes=100`,
   `max_clash_ratio=0.5`, **polymer–polymer chain pairs only**.
@@ -852,7 +994,8 @@ TM_pair(i,j) = 1 / (1 + (PAE_ij / d0)²)
 only affect the ranking score (−100 penalty); they are not repaired. All diffusion
 samples are written to separate CIF files regardless of quality.
 
-CIF export (`data/io/cif_utils.py`) uses the `modelcif` library. B-factors are set
+CIF export ([`data/io/cif_utils.py`](../chai-lab/chai_lab/data/io/cif_utils.py)) uses the
+`modelcif` library. B-factors are set
 from pLDDT scores. Ligand atoms receive unique names via a counter suffix (`_1`, `_2`,
 etc.) to avoid duplicate atom IDs.
 
@@ -1000,18 +1143,26 @@ Details relevant to porting inference to MLX.
 ### 13.1 Weight Storage and Loading
 
 - Each component is a separate TorchScript artifact loaded via `torch.jit.load`
+  ([`chai1.py:139–148`](../chai-lab/chai_lab/chai1.py))
 - A `_component_cache` (dict keyed by filename) reuses loaded modules across calls
   (e.g., `trunk.pt` is loaded once and reused across 3 recycle iterations)
+  ([`chai1.py:151–166`](../chai-lab/chai_lab/chai1.py))
 - **No cross-file weight sharing**: each `.pt` file has fully independent parameters
 - Components are moved to/from GPU on demand via `_component_moved_to` context manager
   (low-memory mode moves back to CPU after each use)
+- Each `.pt` file exports **size-specific forward methods**: `forward_256`, `forward_384`,
+  `forward_512`, `forward_768`, `forward_1024`, `forward_1536`, `forward_2048`. The
+  `ModuleWrapper` class dispatches to the correct method via
+  `getattr(jit_module, f"forward_{crop_size}")`
+  ([`chai1.py:115–136`](../chai-lab/chai_lab/chai1.py))
 
 ### 13.2 Numerical Precision
 
 All six Chai-1 `.pt` modules store weights in **float32**. ESM2-3B is stored as **fp16**.
 
 - Tensors passed to diffusion and confidence modules are explicitly cast to fp32
-- Rigid transforms (`tools/rigid.py`) force fp32 with `torch.autocast("cuda", enabled=False)`
+- Rigid transforms ([`tools/rigid.py`](../chai-lab/chai_lab/tools/rigid.py)) force fp32
+  with `torch.autocast("cuda", enabled=False)`
 - Softmax uses explicit fp32 upcast: `logits.float().softmax(dim=-1)`
 - No global `torch.autocast` wrapping the main inference loop
 
@@ -1094,4 +1245,130 @@ zeroes out masked positions.
 Token-level padding is propagated via `token_pair_mask` (§6.3.9); atom-level via
 `block_atom_pair_mask` (§3.3). Invalid positions are also zero-filled with
 `masked_fill(..., 0.)` on single representations.
+
+---
+
+## 14. Inference Linearity and Parallelism
+
+### 14.1 Is the Pipeline Linear?
+
+**Yes — the Chai-1 inference pipeline is fundamentally sequential.** There are no
+parallel prediction branches, no concurrent heads, and no fork-join topology. Each stage
+depends on the previous stage's output:
+
+```
+Feature Construction → Feature Embedding → Bond Projection → Token Input Embedder
+    → Trunk (×3 recycles) → Diffusion Module (×200 steps) → Confidence Head → Ranking
+```
+
+This is visible in
+[`run_folding_on_context()`](../chai-lab/chai_lab/chai1.py) (lines 580–1059), which
+executes each stage in strict sequence using Python `with` blocks that load/unload
+modules.
+
+### 14.2 Where Parallelism Does Exist
+
+#### 14.2.1 Diffusion Sample Batching
+
+The only architectural parallelism is in the diffusion module: all `num_diffn_samples`
+(default 5) noise trajectories are processed **simultaneously** via a `ds` batch
+dimension. Inside the diffusion module, tensors have shape `[b, ds, ...]`:
+
+- `atom_noised_coords`: `[b, ds, n_atoms, 3]` — different noise per sample
+- `noise_sigma`: `[b, ds]` — same σ for all samples at a given timestep
+
+The `_denoise` helper at [`chai1.py:806–819`](../chai-lab/chai_lab/chai1.py) reshapes the
+`(b*ds)` batch into `[b, ds, ...]` before passing to the module:
+
+```python
+atom_noised_coords = rearrange(atom_pos, "(b ds) ... -> b ds ...", ds=ds)
+noise_sigma = repeat(sigma, " -> b ds", b=batch_size, ds=ds)
+```
+
+Inside `diffusion_module.pt`, the conditioning signals are handled asymmetrically:
+- **Pair conditioning** (`z_cond`): `[b, n, n, 256]` — shared across all `ds` samples
+  (computed once from trunk outputs, independent of σ)
+- **Single conditioning** (`s_cond`): `[b, ds, n, 384]` — includes the Fourier σ
+  embedding, so conceptually per-sample. However, since all ds samples share the same σ
+  at a given timestep, the conditioning is actually identical across samples.
+
+The practical implication: while the conditioning tensors are formally broadcast across
+the `ds` dimension, the only thing that truly differs across samples is the atom
+coordinates themselves (different random noise realizations).
+
+#### 14.2.2 Confidence Head — No Parallelism
+
+The confidence head is called **sequentially** per diffusion sample in a Python for-loop:
+
+```python
+confidence_outputs = [
+    confidence_head.forward(..., atom_coords=atom_pos[ds:ds+1], ...)
+    for ds in range(num_diffn_samples)
+]
+```
+
+([`chai1.py:895–910`](../chai-lab/chai_lab/chai1.py))
+
+This is not batched — each sample is processed independently. This is likely because
+the confidence head computes `torch.cdist` on predicted atom positions
+(`confidence_head.pt` TorchScript line 521), producing an O(n²) distance matrix that
+would be expensive to batch across multiple samples.
+
+#### 14.2.3 Ranking — No Parallelism
+
+Ranking is also sequential per sample ([`chai1.py:984–1015`](../chai-lab/chai_lab/chai1.py)),
+computing PTM, clashes, and pLDDT for each sample independently
+([`ranking/rank.py`](../chai-lab/chai_lab/ranking/rank.py)).
+
+### 14.3 There Is No Bond Prediction
+
+**Covalent bonds are input features, not predicted outputs.** There is no bond prediction
+head anywhere in the architecture. The `bond_loss_input_proj.pt` module is a simple
+`Linear(1, 512)` that projects a binary bond adjacency matrix (from input constraints)
+into the pair representation. The name "bond_loss" refers to a training-time bond
+reconstruction loss, not an inference prediction.
+
+The bond adjacency feature is generated by `TokenBondRestraint`
+([`data/features/generators/token_bond.py`](../chai-lab/chai_lab/data/features/generators/token_bond.py)),
+which reads `atom_covalent_bond_indices` from the input structure context and maps atom-
+level bond pairs to token-level pairs via `atom_token_index`. The resulting binary
+`[n_tokens, n_tokens]` feature is projected and split 256+256 into trunk and structure
+pair representations.
+
+The model's outputs are exclusively:
+1. **Atom coordinates** `[n_atoms, 3]` — from the diffusion module
+2. **PAE logits** `[n_tokens, n_tokens, 64]` — from the confidence head
+3. **PDE logits** `[n_tokens, n_tokens, 64]` — from the confidence head
+4. **pLDDT logits** `[n_atoms, 50]` — from the confidence head
+
+### 14.4 Diffusion Step Budget
+
+With the default settings, the diffusion module runs:
+
+| Configuration | Value | Forward Passes |
+|---------------|-------|----------------|
+| Timesteps | 200 | |
+| Heun correction | Yes (except last step) | |
+| Steps with 2 passes | 199 | |
+| Steps with 1 pass | 1 (final) | |
+| **Total per trajectory** | | **399** |
+| Diffusion samples | 5 | |
+| **Total diffusion calls** | | **399** (batched) |
+
+Each forward pass processes all 5 samples simultaneously via the `ds` dimension, so the
+total number of diffusion module invocations is 399, not 399×5.
+
+### 14.5 Overall Inference Call Counts
+
+| Module | Calls | Notes |
+|--------|-------|-------|
+| `feature_embedding.pt` | 1 | Once |
+| `bond_loss_input_proj.pt` | 1 | Once |
+| `token_embedder.pt` | 1 | Once |
+| `trunk.pt` | 3 | Once per recycle |
+| `diffusion_module.pt` | 399 | 200 steps × ~2 passes (Heun) |
+| `confidence_head.pt` | 5 | Once per diffusion sample |
+| **Total** | **410** | |
+
+The diffusion module dominates inference time (399/410 calls, ~97%).
 
