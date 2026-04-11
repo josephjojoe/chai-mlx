@@ -1,0 +1,95 @@
+digraph confidence_ranking {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=10, style="filled,rounded", shape=box];
+    edge [fontname="Helvetica", fontsize=8];
+    bgcolor="white";
+    pad=0.4;
+    nodesep=0.3;
+    ranksep=0.45;
+
+    // ── Inputs ──
+    in_s_init [label="single_initial [384]", fillcolor="#E3F2FD", color="#1565C0"];
+    in_s_trunk [label="single_trunk [384]", fillcolor="#E3F2FD", color="#1565C0"];
+    in_z_trunk [label="pair_trunk [256]", fillcolor="#E3F2FD", color="#1565C0"];
+    in_coords [label="predicted atom coords\n[1, n_atoms, 3]\n(per sample, sequential)", fillcolor="#FFECB3", color="#FF8F00"];
+
+    // ── Confidence Head ──
+    subgraph cluster_conf {
+        label="Confidence Head  (confidence_head.pt, 14.8M params)"; labeljust=l;
+        style="filled,rounded"; fillcolor="#E0F7FA"; color="#00838F"; fontsize=10; margin=12;
+
+        // Input processing
+        s2p [label="single_to_pair_proj\nLinear(384, 512, no bias)\nchunk → 256+256\nouter sum → pair init", fillcolor="#B2EBF2", color="#00838F"];
+
+        dist [label="Pairwise Distances\nselect repr atoms via\ntoken_reference_atom_index\n→ torch.cdist\n→ searchsorted (15 bin edges)\n→ one_hot(16 classes)", fillcolor="#B2EBF2", color="#00838F"];
+
+        dist_proj [label="atom_distance_bins_projection\nLinear(16, 256, no bias)\n→ added to pair repr", fillcolor="#B2EBF2", color="#00838F"];
+
+        // Pairformer
+        subgraph cluster_conf_pf {
+            label="  4× PairformerBlock"; labeljust=l;
+            style="dashed,rounded"; color="#0097A7"; fontsize=9; margin=10;
+
+            cf_pt [label="Pair Transition\nSwiGLU (4×)  dim 256", fillcolor="#80DEEA", color="#00838F"];
+            cf_apb [label="Attention Pair Bias\n16 heads, 24 head_dim", fillcolor="#80DEEA", color="#00838F"];
+            cf_st [label="Single Transition\nSwiGLU (4×)  dim 384", fillcolor="#80DEEA", color="#00838F"];
+            cf_tm [label="Triangle Multiplication\nboth dirs, sigmoid gated", fillcolor="#80DEEA", color="#00838F"];
+            cf_ta [label="Triangle Attention\n(different variant)\n8 heads, 64 head_dim\nfused 2056-d projection\nboth dirs", fillcolor="#4DD0E1", color="#006064"];
+        }
+
+        // Output heads
+        plddt_head [label="pLDDT\nLinear(384, 1850)\nreshape → [n_tok, 37, 50]\nscatter to atoms\n→ [n_atoms, 50]", fillcolor="#B2EBF2", color="#00838F"];
+        pae_head [label="PAE\nLinear(256, 64)\n→ [n_tok, n_tok, 64]\n64 bins over [0, 32]Å", fillcolor="#B2EBF2", color="#00838F"];
+        pde_head [label="PDE\nLinear(256, 64)\n→ [n_tok, n_tok, 64]\n64 bins over [0, 32]Å", fillcolor="#B2EBF2", color="#00838F"];
+    }
+
+    // ── Score Computation ──
+    subgraph cluster_scoring {
+        label="Score Computation (Python)"; labeljust=l;
+        style="filled,rounded"; fillcolor="#FFF3E0"; color="#E65100"; fontsize=10; margin=12;
+
+        plddt_score [label="pLDDT Score\nsoftmax → weighted expectation\nof bin centers over [0, 1]", fillcolor="#FFE0B2", color="#E65100"];
+        tm_score [label="TM-Score\nd₀ = 1.24·(max(N,19)−15)^⅓ − 1.8\nTM = 1/(1 + (PAE/d₀)²)", fillcolor="#FFE0B2", color="#E65100"];
+        ptm [label="pTM\nmax over alignment rows\nof sum of pairwise TM", fillcolor="#FFE0B2", color="#E65100"];
+        iptm [label="ipTM\nmax over chains c\nof pTM(c vs rest)", fillcolor="#FFE0B2", color="#E65100"];
+        clash [label="Clash Detection\ncdist < 1.1 Å\npolymer–polymer pairs\nmax_clashes=100\nmax_clash_ratio=0.5", fillcolor="#FFE0B2", color="#E65100"];
+    }
+
+    // ── Aggregate Score ──
+    agg [label="Aggregate Score\n0.2·pTM + 0.8·ipTM − 100·has_clashes", fillcolor="#FCE4EC", color="#C62828"];
+
+    // ── Output ──
+    out [label="Ranked CIF files\n+ per-sample scores\n(no relaxation/minimization)", fillcolor="#F5F5F5", color="#424242", shape=box];
+
+    // ── Edges ──
+    in_s_init -> s2p [label="single"];
+    in_s_trunk -> s2p [style=dotted];
+    in_z_trunk -> cf_pt [label="pair"];
+    in_coords -> dist;
+
+    s2p -> dist_proj [label="pair init"];
+    dist -> dist_proj;
+    dist_proj -> cf_pt;
+
+    cf_pt -> cf_apb;
+    cf_apb -> cf_st;
+    cf_st -> cf_tm;
+    cf_tm -> cf_ta;
+
+    cf_ta -> plddt_head [label="single"];
+    cf_ta -> pae_head [label="pair"];
+    cf_ta -> pde_head [label="pair"];
+
+    plddt_head -> plddt_score;
+    pae_head -> tm_score;
+
+    in_coords -> clash [label="atom\npositions"];
+    tm_score -> ptm;
+    tm_score -> iptm;
+    ptm -> agg;
+    iptm -> agg;
+    clash -> agg;
+    plddt_score -> out [style=dotted, label="B-factors"];
+    agg -> out;
+}

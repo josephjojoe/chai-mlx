@@ -1,0 +1,108 @@
+digraph feature_embedding {
+    rankdir=LR;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=10, style="filled,rounded", shape=box];
+    edge [fontname="Helvetica", fontsize=8];
+    bgcolor="white";
+    pad=0.4;
+    nodesep=0.25;
+    ranksep=0.6;
+
+    // ── Raw Features (left column) ──
+    subgraph cluster_token_raw {
+        label="TOKEN features (2638-d)"; labeljust=l;
+        style="dashed,rounded"; color="#1565C0"; fontcolor="#1565C0"; fontsize=10; margin=10;
+        t1 [label="ResidueType\n33", fillcolor="#BBDEFB", color="#1565C0"];
+        t2 [label="ESM2 Embeddings\n2560", fillcolor="#BBDEFB", color="#1565C0"];
+        t3 [label="MSA Profile\n33", fillcolor="#BBDEFB", color="#1565C0"];
+        t4 [label="MSA Deletion Mean\n1", fillcolor="#BBDEFB", color="#1565C0"];
+        t5 [label="IsDistillation\n2", fillcolor="#BBDEFB", color="#1565C0"];
+        t6 [label="TokenBFactor · TokenPLDDT\n3 + 4", fillcolor="#BBDEFB", color="#1565C0"];
+        t7 [label="ChainIsCropped · Missing\n1 + 1", fillcolor="#BBDEFB", color="#1565C0"];
+    }
+
+    subgraph cluster_tp_raw {
+        label="TOKEN_PAIR features (163-d)"; labeljust=l;
+        style="dashed,rounded"; color="#2E7D32"; fontcolor="#2E7D32"; fontsize=10; margin=10;
+        tp1 [label="RelativeSeqSep\n67", fillcolor="#C8E6C9", color="#2E7D32"];
+        tp2 [label="RelativeTokenSep\n67", fillcolor="#C8E6C9", color="#2E7D32"];
+        tp3 [label="RelativeEntity\n3", fillcolor="#C8E6C9", color="#2E7D32"];
+        tp4 [label="RelativeChain\n6", fillcolor="#C8E6C9", color="#2E7D32"];
+        tp5 [label="Docking · Contact · Pocket\n6 + 7 + 7", fillcolor="#C8E6C9", color="#2E7D32"];
+    }
+
+    subgraph cluster_atom_raw {
+        label="ATOM features (395-d)"; labeljust=l;
+        style="dashed,rounded"; color="#E65100"; fontcolor="#E65100"; fontsize=10; margin=10;
+        a1 [label="AtomNameOneHot\n260 (4×65)", fillcolor="#FFE0B2", color="#E65100"];
+        a2 [label="AtomRefCharge · Mask · Pos\n1 + 1 + 3", fillcolor="#FFE0B2", color="#E65100"];
+        a3 [label="AtomRefElement\n130", fillcolor="#FFE0B2", color="#E65100"];
+    }
+
+    subgraph cluster_ap_raw {
+        label="ATOM_PAIR features (14-d)"; labeljust=l;
+        style="dashed,rounded"; color="#AD1457"; fontcolor="#AD1457"; fontsize=10; margin=10;
+        ap1 [label="BlockedAtomPairDistogram\n12", fillcolor="#F8BBD0", color="#AD1457"];
+        ap2 [label="InvSqBlockedDist\n2", fillcolor="#F8BBD0", color="#AD1457"];
+    }
+
+    subgraph cluster_msa_raw {
+        label="MSA features (42-d)"; labeljust=l;
+        style="dashed,rounded"; color="#4527A0"; fontcolor="#4527A0"; fontsize=10; margin=10;
+        m1 [label="MSAOneHot\n33", fillcolor="#D1C4E9", color="#4527A0"];
+        m2 [label="DataSource · IsPaired\n6 + 1", fillcolor="#D1C4E9", color="#4527A0"];
+        m3 [label="DeletionValue · HasDel\n1 + 1", fillcolor="#D1C4E9", color="#4527A0"];
+    }
+
+    subgraph cluster_templ_raw {
+        label="TEMPLATES features (76-d)"; labeljust=l;
+        style="dashed,rounded"; color="#00695C"; fontcolor="#00695C"; fontsize=10; margin=10;
+        tl1 [label="TemplateDistogram\n39", fillcolor="#B2DFDB", color="#00695C"];
+        tl2 [label="TemplateResType\n32 (Emb 33→32)", fillcolor="#B2DFDB", color="#00695C"];
+        tl3 [label="UnitVector · Mask\n3 + 2", fillcolor="#B2DFDB", color="#00695C"];
+    }
+
+    // ── Projections (middle column) ──
+    proj_t  [label="Linear(2638, 384)\n+ bias", fillcolor="#E8EAF6", color="#283593", shape=box];
+    proj_tp [label="Linear(163, 512)\n+ bias\nchunk → 256+256", fillcolor="#E8EAF6", color="#283593"];
+    proj_a  [label="Linear(395, 256)\n+ bias\nchunk → 128+128", fillcolor="#E8EAF6", color="#283593"];
+    proj_ap [label="Linear(14, 32)\n+ bias\nchunk → 16+16", fillcolor="#E8EAF6", color="#283593"];
+    proj_m  [label="Linear(42, 64)\n+ bias", fillcolor="#E8EAF6", color="#283593"];
+    proj_tl [label="Linear(76, 64)\n+ bias", fillcolor="#E8EAF6", color="#283593"];
+
+    // ── Outputs (right column) ──
+    out_t    [label="TOKEN\n[b, n, 384]", fillcolor="#C5CAE9", color="#1A237E"];
+    out_tp_t [label="TOKEN_PAIR trunk\n[b, n, n, 256]", fillcolor="#C5CAE9", color="#1A237E"];
+    out_tp_s [label="TOKEN_PAIR struct\n[b, n, n, 256]", fillcolor="#C5CAE9", color="#1A237E"];
+    out_a_t  [label="ATOM trunk\n[b, a, 128]", fillcolor="#C5CAE9", color="#1A237E"];
+    out_a_s  [label="ATOM struct\n[b, a, 128]", fillcolor="#C5CAE9", color="#1A237E"];
+    out_ap_t [label="ATOM_PAIR trunk\n[b, bl, 32, 128, 16]", fillcolor="#C5CAE9", color="#1A237E"];
+    out_ap_s [label="ATOM_PAIR struct\n[b, bl, 32, 128, 16]", fillcolor="#C5CAE9", color="#1A237E"];
+    out_m    [label="MSA\n[b, depth, n, 64]", fillcolor="#C5CAE9", color="#1A237E"];
+    out_tl   [label="TEMPLATES\n[b, 4, n, n, 64]", fillcolor="#C5CAE9", color="#1A237E"];
+
+    // ── Edges ──
+    {t1 t2 t3 t4 t5 t6 t7} -> proj_t [style=solid, arrowsize=0.6];
+    {tp1 tp2 tp3 tp4 tp5}  -> proj_tp [style=solid, arrowsize=0.6];
+    {a1 a2 a3}             -> proj_a  [style=solid, arrowsize=0.6];
+    {ap1 ap2}              -> proj_ap [style=solid, arrowsize=0.6];
+    {m1 m2 m3}             -> proj_m  [style=solid, arrowsize=0.6];
+    {tl1 tl2 tl3}          -> proj_tl [style=solid, arrowsize=0.6];
+
+    proj_t  -> out_t;
+    proj_tp -> out_tp_t [label="first half"];
+    proj_tp -> out_tp_s [label="second half"];
+    proj_a  -> out_a_t  [label="first half"];
+    proj_a  -> out_a_s  [label="second half"];
+    proj_ap -> out_ap_t [label="first half"];
+    proj_ap -> out_ap_s [label="second half"];
+    proj_m  -> out_m;
+    proj_tl -> out_tl;
+
+    // ── Bond sidecar ──
+    bond_feat [label="TokenBondRestraint\nbinary [n, n, 1]", fillcolor="#FFF9C4", color="#F57F17"];
+    bond_proj [label="bond_loss_input_proj.pt\nLinear(1, 512, no bias)\nchunk → 256+256", fillcolor="#FFF9C4", color="#F57F17"];
+    bond_feat -> bond_proj;
+    bond_proj -> out_tp_t [label="+", color="#F57F17"];
+    bond_proj -> out_tp_s [label="+", color="#F57F17"];
+}

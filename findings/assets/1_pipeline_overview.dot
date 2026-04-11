@@ -1,0 +1,116 @@
+digraph pipeline {
+    rankdir=TB;
+    newrank=true;
+    compound=true;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=11, style="filled,rounded", shape=box];
+    edge [fontname="Helvetica", fontsize=9];
+    bgcolor="white";
+    pad=0.4;
+    nodesep=0.35;
+    ranksep=0.5;
+
+    // ── Inputs ──
+    subgraph cluster_inputs {
+        label="Inputs"; labeljust=l; labelloc=t;
+        style="dashed,rounded"; color="#888888"; fontcolor="#555555"; fontsize=12;
+        margin=16;
+
+        fasta  [label="FASTA\nsequences",   fillcolor="#E3F2FD", color="#1565C0"];
+        msa    [label="MSAs\n(optional)",    fillcolor="#E3F2FD", color="#1565C0"];
+        templ  [label="Templates\n(optional, ≤4)", fillcolor="#E3F2FD", color="#1565C0"];
+        esm    [label="ESM2-3B\nembeddings\n(optional, 2560-d)", fillcolor="#E3F2FD", color="#1565C0"];
+        constr [label="Constraints\n(contact/pocket/\ndocking, optional)", fillcolor="#E3F2FD", color="#1565C0"];
+    }
+
+    // ── Feature Construction ──
+    feat_ctx [label="Feature Construction\n(Python)\n─────────────────────\nAllAtomFeatureContext\n+ FeatureFactory\n→ 32 named features", fillcolor="#FFF9C4", color="#F9A825", shape=box];
+
+    // ── Feature Embedding ──
+    feat_emb [label="Feature Embedding\nfeature_embedding.pt  (~1.1M params)\n───────────────────────────\nTOKEN → 384\nTOKEN_PAIR → 256 + 256\nATOM → 128 + 128\nATOM_PAIR → 16 + 16\nMSA → 64   |   TEMPLATES → 64", fillcolor="#E8F5E9", color="#2E7D32"];
+
+    bond [label="Bond Projection\nbond_loss_input_proj.pt\n─────────────────────\nLinear(1 → 512)\nsplit 256+256 → pair", fillcolor="#E8F5E9", color="#2E7D32"];
+
+    // ── Token Input Embedder ──
+    tok_emb [label="Token Input Embedder\ntoken_embedder.pt  (~1.5M params)\n──────────────────────────────\nAtom Transformer (3 blocks)\n→ aggregate atoms → tokens\n→ single_initial [384]\n   single_structure [384]\n   pair_initial [256]", fillcolor="#E8F5E9", color="#2E7D32"];
+
+    // ── Trunk ──
+    subgraph cluster_trunk {
+        label="Trunk  ×3 recycles\ntrunk.pt  (170M params)"; labeljust=l; labelloc=t;
+        style="filled,rounded"; fillcolor="#F3E5F5"; color="#7B1FA2";
+        fontcolor="#4A148C"; fontsize=12; margin=16;
+
+        templ_emb [label="Template Embedder\n2 Pairformer blocks\nat dim 64", fillcolor="#E1BEE7", color="#7B1FA2"];
+        msa_mod   [label="MSA Module\n4 iterations\n(OPM, pair-weighted attn,\ntriangle ops)", fillcolor="#E1BEE7", color="#7B1FA2"];
+        pf_stack  [label="Pairformer Stack\n48 blocks\n(pair transition, attn pair bias,\nsingle transition, △ mult, △ attn)", fillcolor="#CE93D8", color="#6A1B9A"];
+    }
+
+    // ── Diffusion Module ──
+    subgraph cluster_diff {
+        label="Diffusion Module  ×200 steps (Heun)\ndiffusion_module.pt  (128M params)"; labeljust=l; labelloc=t;
+        style="filled,rounded"; fillcolor="#FFF3E0"; color="#E65100";
+        fontcolor="#BF360C"; fontsize=12; margin=16;
+
+        diff_cond [label="Diffusion Conditioning\nFourier σ embedding\n→ s_cond [384], z_cond [256]", fillcolor="#FFE0B2", color="#E65100"];
+        atom_enc  [label="Atom Attention Encoder\n3 local attn blocks\nat dim 128 → 768", fillcolor="#FFE0B2", color="#E65100"];
+        diff_xfmr [label="Diffusion Transformer\n16 blocks at dim 768\n(16 heads, 48 head_dim)", fillcolor="#FFCC80", color="#E65100"];
+        atom_dec  [label="Atom Attention Decoder\n3 local attn blocks\n→ Δxyz [n_atoms, 3]", fillcolor="#FFE0B2", color="#E65100"];
+    }
+
+    // ── Confidence Head ──
+    conf [label="Confidence Head\nconfidence_head.pt  (14.8M params)\n──────────────────────────────\n4 Pairformer blocks\n→ PAE [n×n×64]\n   PDE [n×n×64]\n   pLDDT [n_atoms×50]", fillcolor="#E0F7FA", color="#00838F"];
+
+    // ── Ranking ──
+    rank [label="Ranking\n(Python)\n────────────────────────\n0.2·pTM + 0.8·ipTM\n− 100·has_clashes", fillcolor="#FCE4EC", color="#C62828"];
+
+    // ── Output ──
+    output [label="Ranked CIF structures\n+ confidence scores", fillcolor="#F5F5F5", color="#424242", shape=box];
+
+    // ── Edges ──
+    fasta  -> feat_ctx;
+    msa    -> feat_ctx;
+    templ  -> feat_ctx;
+    esm    -> feat_ctx;
+    constr -> feat_ctx;
+
+    feat_ctx -> feat_emb;
+    feat_emb -> bond [style=dashed, label="bond\nfeatures"];
+    feat_emb -> tok_emb [label="TOKEN, ATOM,\nATOM_PAIR"];
+    bond -> tok_emb [style=dashed, label="+pair"];
+
+    tok_emb -> templ_emb [lhead=cluster_trunk, label="single, pair\ninitial reprs"];
+
+    templ_emb -> msa_mod [label="+ pair"];
+    msa_mod -> pf_stack [label="pair"];
+    feat_emb -> templ_emb [label="TEMPLATES\n[64]", style=dotted, color="#7B1FA2"];
+    feat_emb -> msa_mod [label="MSA\n[64]", style=dotted, color="#7B1FA2"];
+
+    pf_stack -> diff_cond [lhead=cluster_diff, label="single_trunk [384]\npair_trunk [256]"];
+
+    diff_cond -> atom_enc;
+    atom_enc -> diff_xfmr [label="token [768]"];
+    diff_xfmr -> atom_dec;
+
+    atom_dec -> conf [label="atom coords\n[n_atoms, 3]\n×5 samples"];
+    pf_stack -> conf [label="single, pair\ntrunk reprs", style=dotted, color="#00838F"];
+
+    conf -> rank [label="PAE, PDE,\npLDDT logits"];
+    rank -> output;
+
+    // ── Annotations ──
+    subgraph cluster_legend {
+        label="Call Budget"; labeljust=l; labelloc=t;
+        style="rounded"; color="#BDBDBD"; fontsize=10; margin=10;
+        node [shape=plaintext, fillcolor=white, fontsize=9];
+        leg [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">
+            <TR><TD ALIGN="LEFT"><B>Module</B></TD><TD ALIGN="RIGHT"><B>Calls</B></TD></TR>
+            <TR><TD ALIGN="LEFT">feature_embedding</TD><TD ALIGN="RIGHT">1</TD></TR>
+            <TR><TD ALIGN="LEFT">bond_projection</TD><TD ALIGN="RIGHT">1</TD></TR>
+            <TR><TD ALIGN="LEFT">token_embedder</TD><TD ALIGN="RIGHT">1</TD></TR>
+            <TR><TD ALIGN="LEFT">trunk</TD><TD ALIGN="RIGHT">3</TD></TR>
+            <TR><TD ALIGN="LEFT">diffusion_module</TD><TD ALIGN="RIGHT">398</TD></TR>
+            <TR><TD ALIGN="LEFT">confidence_head</TD><TD ALIGN="RIGHT">5</TD></TR>
+            <TR><TD ALIGN="LEFT"><B>Total</B></TD><TD ALIGN="RIGHT"><B>409</B></TD></TR>
+        </TABLE>>];
+    }
+}

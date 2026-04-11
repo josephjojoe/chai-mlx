@@ -1,0 +1,107 @@
+digraph building_blocks {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=10, style="filled,rounded", shape=box];
+    edge [fontname="Helvetica", fontsize=8];
+    bgcolor="white";
+    pad=0.5;
+    nodesep=0.3;
+    ranksep=0.4;
+    newrank=true;
+
+    // ═══════════ SwiGLU Transition ═══════════
+    subgraph cluster_swiglu {
+        label="SwiGLU Transition"; labeljust=l;
+        style="filled,rounded"; fillcolor="#E8F5E9"; color="#2E7D32"; fontsize=11; margin=14;
+
+        sg_in [label="x [d]", fillcolor="#C8E6C9", color="#2E7D32", shape=ellipse];
+        sg_ln [label="LayerNorm(d)", fillcolor="#C8E6C9", color="#2E7D32"];
+        sg_up [label="Linear(d, n×d, no bias)\n\nn=4× (Pairformer, diffusion,\natom transformer)\nn=8× (MSA module)", fillcolor="#A5D6A7", color="#1B5E20"];
+        sg_chunk [label="chunk(2)\na [n×d/2]  |  b [n×d/2]", fillcolor="#C8E6C9", color="#2E7D32"];
+        sg_gate [label="SiLU(a) ⊙ b\n→ [n×d/2]", fillcolor="#81C784", color="#1B5E20"];
+        sg_down [label="Linear(n×d/2, d)", fillcolor="#C8E6C9", color="#2E7D32"];
+        sg_res [label="x + output\n(residual)", fillcolor="#C8E6C9", color="#2E7D32", shape=ellipse];
+
+        sg_in -> sg_ln -> sg_up -> sg_chunk -> sg_gate -> sg_down -> sg_res;
+        sg_in -> sg_res [style=dashed, label="skip", constraint=false];
+    }
+
+    // ═══════════ AdaLayerNorm ═══════════
+    subgraph cluster_adaln {
+        label="AdaLayerNorm (Adaptive Layer Norm)"; labeljust=l;
+        style="filled,rounded"; fillcolor="#FFF3E0"; color="#E65100"; fontsize=11; margin=14;
+
+        aln_x [label="x [d]", fillcolor="#FFE0B2", color="#E65100", shape=ellipse];
+        aln_cond [label="conditioning [d_c]", fillcolor="#FFCC80", color="#E65100", shape=ellipse];
+        aln_proj [label="Linear(d_c, 2d)\nchunk → scale, shift", fillcolor="#FFE0B2", color="#E65100"];
+        aln_ln [label="LayerNorm(x)", fillcolor="#FFE0B2", color="#E65100"];
+        aln_apply [label="LN(x) × (1 + scale) + shift", fillcolor="#FFCC80", color="#E65100"];
+
+        aln_cond -> aln_proj;
+        aln_x -> aln_ln -> aln_apply;
+        aln_proj -> aln_apply;
+    }
+
+    // ═══════════ Gated Output ═══════════
+    subgraph cluster_gate {
+        label="Gated Output (bias init -2)"; labeljust=l;
+        style="filled,rounded"; fillcolor="#FCE4EC"; color="#C62828"; fontsize=11; margin=14;
+
+        g_cond [label="conditioning [d_c]", fillcolor="#F8BBD0", color="#C62828", shape=ellipse];
+        g_val [label="value [d]", fillcolor="#F8BBD0", color="#C62828", shape=ellipse];
+        g_proj [label="Linear(d_c, d, bias=True)\nbias initialized to -2", fillcolor="#F8BBD0", color="#C62828"];
+        g_sig [label="sigmoid\nstarts ≈ 0.12", fillcolor="#EF9A9A", color="#B71C1C"];
+        g_mul [label="gate ⊙ value", fillcolor="#F8BBD0", color="#C62828"];
+
+        g_cond -> g_proj -> g_sig -> g_mul;
+        g_val -> g_mul;
+    }
+
+    // ═══════════ Triangle Multiplication ═══════════
+    subgraph cluster_trimul {
+        label="Triangle Multiplication (both directions per block)"; labeljust=l;
+        style="filled,rounded"; fillcolor="#E8EAF6"; color="#283593"; fontsize=11; margin=14;
+
+        tm_in [label="z [n, n, d]\n(pair repr)", fillcolor="#C5CAE9", color="#283593", shape=ellipse];
+        tm_ln [label="LayerNorm(d)", fillcolor="#C5CAE9", color="#283593"];
+        tm_p [label="merged_linear_p\nLinear(d, 4d, no bias)\n→ a₁, b₁, a₂, b₂", fillcolor="#C5CAE9", color="#283593"];
+        tm_g [label="merged_linear_g\nLinear(d, 5d, no bias)\n→ sigmoid gates", fillcolor="#C5CAE9", color="#283593"];
+        tm_out_e [label="outgoing: Σ_k a₁(i,k)·b₁(j,k)\nincoming: Σ_k a₂(k,i)·b₂(k,j)", fillcolor="#9FA8DA", color="#1A237E"];
+        tm_combine [label="LN(outgoing) + LN(incoming)\n→ Linear(d, d, no bias)\n× gate[4d:]", fillcolor="#C5CAE9", color="#283593"];
+        tm_res [label="z += output", fillcolor="#C5CAE9", color="#283593", shape=ellipse];
+
+        tm_in -> tm_ln;
+        tm_ln -> tm_p;
+        tm_ln -> tm_g;
+        tm_p -> tm_out_e [label="gated by\ng[:4d]"];
+        tm_g -> tm_out_e [style=dashed];
+        tm_out_e -> tm_combine;
+        tm_g -> tm_combine [style=dashed, label="g[4d:]"];
+        tm_combine -> tm_res;
+        tm_in -> tm_res [style=dashed, label="skip", constraint=false];
+    }
+
+    // ═══════════ Triangle Attention ═══════════
+    subgraph cluster_triatt {
+        label="Triangle Attention (both directions per block)"; labeljust=l;
+        style="filled,rounded"; fillcolor="#F3E5F5"; color="#7B1FA2"; fontsize=11; margin=14;
+
+        ta_in [label="z [n, n, d]\n(pair repr)", fillcolor="#E1BEE7", color="#7B1FA2", shape=ellipse];
+        ta_qkv1 [label="pair2qkvg1\nLinear(d, 4·h·hd, no bias)\n→ q, k, v, g  (starting node)", fillcolor="#E1BEE7", color="#7B1FA2"];
+        ta_qkv2 [label="pair2qkvg2\nLinear(d, 4·h·hd, no bias)\n→ q, k, v, g  (ending node)", fillcolor="#E1BEE7", color="#7B1FA2"];
+        ta_bias [label="pair2b\nLinear(d, h, no bias)\n→ per-head attn bias", fillcolor="#E1BEE7", color="#7B1FA2"];
+        ta_sdpa [label="2× SDPA\nstarting: attn over rows\nending: attn over columns", fillcolor="#CE93D8", color="#6A1B9A"];
+        ta_out [label="concat both directions\n→ Linear(2·h·hd, d, no bias)\n× out_scalers [d]", fillcolor="#E1BEE7", color="#7B1FA2"];
+        ta_res [label="z += output", fillcolor="#E1BEE7", color="#7B1FA2", shape=ellipse];
+
+        ta_in -> ta_qkv1;
+        ta_in -> ta_qkv2;
+        ta_in -> ta_bias;
+        ta_qkv1 -> ta_sdpa;
+        ta_qkv2 -> ta_sdpa;
+        ta_bias -> ta_sdpa;
+        ta_sdpa -> ta_out [label="sigmoid(g)\ngating"];
+        ta_out -> ta_res;
+        ta_in -> ta_res [style=dashed, label="skip", constraint=false];
+    }
+}
