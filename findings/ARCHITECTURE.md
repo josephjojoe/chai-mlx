@@ -128,9 +128,17 @@ Bundled in `AllAtomFeatureContext`
 |---------|----------|-------------|
 | `structure_context` | 2048 tokens | All-atom coordinates, types, masks, bonds |
 | `msa_context` | 16,384 depth | MSA tokens, deletion matrix, pairing keys |
+| `profile_msa_context` | unpadded depth | MSA for TOKEN-level profile/deletion stats |
 | `template_context` | 4 templates | Distances, unit vectors, residue types |
 | `embedding_context` | 2560-dim | ESM2-3B per-residue embeddings |
 | `restraint_context` | — | Docking, contact, pocket constraints |
+
+**Two MSA contexts**: `msa_context` provides tensors `msa_tokens`, `msa_mask`,
+`msa_deletion_matrix` etc. (used by MSA-type features: MSAOneHot, MSADataSource,
+MSADeletionValue, MSAHasDeletion, IsPairedMSA). `profile_msa_context` provides
+`main_msa_tokens`, `main_msa_mask`, `main_msa_deletion_matrix` (used by TOKEN-type
+features: MSAProfileGenerator, MSADeletionMeanGenerator). In `to_dict()` these produce
+distinct tensor namespaces.
 
 ### 3.3 Blocked Atom Geometry
 
@@ -637,24 +645,27 @@ MSAs from multiple chains are paired by species before being merged
 
 1. **Pairing keys**: Each MSA row has a string pairing key (typically a species/taxonomy
    identifier; for ColabFold paired outputs, the row index). Keys are hashed to stable
-   ints via SHA-256 (first 7 hex chars → int). `NO_PAIRING_KEY = -999991` marks
-   unpaired/absent/padding rows.
+   ints via SHA-256 (first 7 hex chars → int) in
+   [`data/parsing/msas/aligned_pqt.py`](../chai-lab/chai_lab/data/parsing/msas/aligned_pqt.py).
+   `NO_PAIRING_KEY = -999991` marks unpaired/absent/padding rows.
 
 2. **Ranking**: For each chain's MSA, compute edit distance (Hamming) of every row vs
    the query sequence (row 0). Rows sharing the same pairing key hash are ranked by
    ascending edit distance, producing a unique key `(hash, rank)`.
 
 3. **Cross-chain matching**: A `(hash, rank)` is selected for pairing only if it appears
-   in **every** non-empty chain MSA. At most `MAX_PAIRED_DEPTH = 8,192` unique keys are
-   kept.
+   in **every** chain MSA with `depth > 1` (i.e., has sequences beyond the query row).
+   At most `MAX_PAIRED_DEPTH = 8,192` unique keys are kept.
 
 4. **Merge**: Per-chain MSAs are reordered with **paired rows first** (same order of
    selected keys), then unpaired rows, truncated to `FULL_DEPTH = 16,384`.
    `merge_main_msas_by_chain` concatenates along the token dimension, padding to common
    depth.
 
-5. **Inference subsampling**: Optional (`recycle_msa_subsample`), keeps up to **4,096**
-   rows via biased random scoring.
+5. **Inference subsampling**: Optional, disabled by default (`recycle_msa_subsample=0`
+   in `chai1.py`). When enabled, keeps up to **4,096** rows (default of
+   [`data/dataset/msas/utils.py:_subsample_msa_rows`](../chai-lab/chai_lab/data/dataset/msas/utils.py))
+   via biased random scoring (row size × uniform random, select highest-scoring).
 
 #### 6.3.9 Mask Propagation
 
@@ -929,7 +940,7 @@ noised input scaled by `c_skip`.
 | Parameter | Value |
 |-----------|-------|
 | σ_data | 16.0 |
-| s_max | 80.0 |
+| s_max | 80.0 (= S_tmax; `InferenceNoiseSchedule` default is 160.0, overridden) |
 | s_min | 4e-4 |
 | p | 7.0 |
 | S_churn | 80 |
@@ -937,7 +948,7 @@ noised input scaled by `c_skip`.
 | S_tmax | 80.0 |
 | S_noise | 1.003 |
 | Timesteps | 200 |
-| 2nd order | True (Heun) |
+| 2nd order | True (non-standard; see §7.6.4 note) |
 
 #### 7.6.2 Timestep Spacing
 
@@ -972,14 +983,18 @@ denoised = denoise(atom_pos_hat, sigma_hat)
 d_i = (atom_pos_hat - denoised) / sigma_hat
 atom_pos = atom_pos_hat + (sigma_next - sigma_hat) * d_i
 
-# 4. Second-order Heun correction (if second_order=True and sigma_next != 0)
+# 4. Second-order correction (if second_order=True and sigma_next != 0)
 denoised = denoise(atom_pos, sigma_next)
 d_i_prime = (atom_pos - denoised) / sigma_next
-atom_pos = atom_pos_hat + (sigma_next - sigma_hat) * (d_i + d_i_prime) / 2
+atom_pos = atom_pos + (sigma_next - sigma_hat) * (d_i_prime + d_i) / 2
 ```
 
-The Heun correction replaces the Euler result with a trapezoid average of two score
-estimates. It is skipped at the final step (sigma_next=0).
+**Note**: This is NOT standard Heun. Standard Heun would replace the Euler result by
+recomputing from `atom_pos_hat`: `atom_pos_hat + h * (d_i + d_i') / 2`. Instead, the
+code **adds** the trapezoid term on top of the Euler result. Expanding:
+`x_final = x_hat + h*d_i + h*(d_i + d_i')/2 = x_hat + h*(3d_i/2 + d_i'/2)`,
+which gives `d_i` a weight of 3/2 and `d_i'` a weight of 1/2 (vs equal 1/2 weights in
+Heun). The correction is skipped at the final step (sigma_next=0).
 
 #### 7.6.5 SE(3) Augmentation
 
