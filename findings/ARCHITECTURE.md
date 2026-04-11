@@ -338,10 +338,10 @@ block_atom_pair_feat     [b, bl, q, kv, 16]   ─┤
                                                 ▼
                                     AtomAttentionBlockedEncoder
                                     ├─ to_atom_cond: Linear(128, 128)
-                                    ├─ Pair Update Block
-                                    │   ├─ proj_h: Linear(128, 16)
-                                    │   ├─ proj_w: Linear(128, 16)
-                                    │   └─ MLP: Linear(16,16) → Linear(16,16)
+                                    ├─ Pair Update Block (outer-sum + residual MLP)
+                                    │   ├─ proj_h: LN(128) → Linear(128, 16, no bias)
+                                    │   ├─ proj_w: LN(128) → Linear(128, 16, no bias)
+                                    │   └─ MLP: Linear(16,16) → ReLU → Linear(16,16)
                                     ├─ LocalDiffusionTransformer (3 blocks)
                                     │   ├─ blocked_pairs2blocked_bias:
                                     │   │    LN(16) → [3, 4, 16] per-head bias
@@ -351,7 +351,7 @@ block_atom_pair_feat     [b, bl, q, kv, 16]   ─┤
                                     │        (SwiGLU, 4× expansion)
                                     └─ to_token_single: Linear(128, 384)
                                                 │
-                                                ▼ aggregate via atom_token_indices
+                                                ▼ masked mean via scatter_reduce("sum")
                            concat [token_single(384) + atom_agg(384)] = 768
                                                 │
                                     ┌───────────┴───────────┐
@@ -389,6 +389,64 @@ The atom-level transformer uses **blocked local attention** (query block=32, key
 - **Down projection**: `linear_b_nobias: Linear(256, 128)`
 - **Gating**: `linear_s_biasinit_m2: Linear(128, 128, bias=True)` — sigmoid gate from
   conditioning signal, bias initialized to -2 (gate starts near sigmoid(-2) ≈ 0.12)
+
+### 5.3 Pair Update Block
+
+Updates the blocked atom pair representation using an outer-sum of atom single
+representations plus a residual MLP (`token_embedder.pt` submodule
+`atom_encoder.pair_update_block`; identical structure in `diffusion_module.pt`
+`atom_attention_encoder.pair_update_block`):
+
+```python
+# atom_single_q: [b, bl, 32, 128]  — query atoms (blocked)
+# atom_single_kv: [b, bl, 128, 128] — key atoms (blocked)
+# block_atom_pair_feat: [b, bl, 32, 128, 16]
+
+h = proj_h(atom_single_q)       # LN(128) → Linear(128, 16) → [b, bl, 32, 16]
+w = proj_w(atom_single_kv)      # LN(128) → Linear(128, 16) → [b, bl, 128, 16]
+
+# outer-sum: add query + key contributions to existing pair features
+pair = block_atom_pair_feat + h[:,:,:,None,:] + w[:,:,None,:,:]
+
+# residual MLP
+pair = pair + MLP(pair)          # Linear(16,16) → ReLU → Linear(16,16)
+```
+
+This runs **once** before the local attention blocks (not per-block).
+
+### 5.4 Atom-to-Token Aggregation
+
+After the 3 local attention blocks, atom representations are aggregated to token level
+via **masked mean** (`token_embedder.pt` TorchScript lines 639–643; same pattern in
+`diffusion_module.pt` lines 1967–1971):
+
+```python
+# atom_single_repr: [b, n_atoms, d]  (d=128 in embedder, d=768 via to_token_single)
+# atom_single_mask: [b, n_atoms]
+# atom_token_indices: [b, n_atoms] — maps each atom to its parent token
+
+masked_repr = atom_single_repr * atom_single_mask[..., None]
+pooled_sum  = scatter_reduce(zeros, 1, atom_token_indices, masked_repr, "sum")
+pooled_count = scatter_reduce(zeros, 1, atom_token_indices, atom_single_mask, "sum")
+aggregated = pooled_sum / clamp(pooled_count[..., None], min=1)
+```
+
+The aggregated token representation is then concatenated with the original
+`token_single_input_feats` to form a 768-dim vector, which is split into trunk (384)
+and structure (384) representations via two separate linear projections.
+
+### 5.5 Pair Representation Assembly
+
+The token pair representation is assembled via an outer-sum of the projected single
+representation (`token_embedder.pt` TorchScript lines 664–682):
+
+```python
+projected = single_to_pair_proj(trunk_single)     # Linear(384, 512, no bias)
+half_row, half_col = chunk(projected, 2, dim=-1)  # 256 each
+
+pair[i,j] = token_pair_input_feats[i,j] + half_row[i] + half_col[j]
+pair_initial = token_pair_proj_in_trunk(pair)      # Linear(256, 256, no bias)
+```
 
 ---
 
