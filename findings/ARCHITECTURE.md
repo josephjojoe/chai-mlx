@@ -14,7 +14,8 @@ This document describes the full Chai-1 neural architecture based on the
 | Diffusion Module | `diffusion_module.pt` | 127,928,768 | 454 MB |
 | Confidence Head | `confidence_head.pt` | 14,812,416 | 53 MB |
 
-Models are downloaded from `https://chaiassets.com/chai1-inference-depencencies/models_v2/{comp_key}`.
+Models are downloaded from `https://chaiassets.com/chai1-inference-depencencies/models_v2/{comp_key}`
+([`utils/paths.py`](../chai-lab/chai_lab/utils/paths.py)).
 ESM2-3B: `https://chaiassets.com/chai1-inference-depencencies/esm2/traced_sdpa_esm2_t36_3B_UR50D_fp16.pt`.
 
 ---
@@ -90,6 +91,8 @@ Ranking ── 0.2·pTM + 0.8·ipTM − 100·has_clashes
 ---
 
 ## 2. Global Hidden Dimensions
+
+All dimensions verified from TorchScript weight shapes across the six `.pt` modules.
 
 | Representation | Dimension |
 |---------------|-----------|
@@ -247,15 +250,15 @@ TOKEN_PAIR (163 total — verified: 67+67+3+6+6+7+7 = 163):
 - TokenDistanceRestraint: 7 (6 RBF radii + 1 mask indicator)
 - TokenPairPocketRestraint: 7 (6 RBF radii + 1 mask indicator)
 
-ATOM (395 total):
-- AtomNameOneHot: 260 (4 chars × 65 classes)
+ATOM (395 total — verified: 260+1+130+1+3 = 395):
+- AtomNameOneHot: 260 (4 chars × `one_hot(x, 65)`, TorchScript line 63)
 - AtomRefCharge: 1
-- AtomRefElement: 130 (128 + mask, one-hot)
+- AtomRefElement: 130 (`one_hot(x, 130)`, TorchScript line 73; 128 elements + 2 mask)
 - AtomRefMask: 1
 - AtomRefPos: 3
 
-ATOM_PAIR (14 total):
-- BlockedAtomPairDistogram: 12 (11 classes + mask, one-hot)
+ATOM_PAIR (14 total — verified: 12+2 = 14):
+- BlockedAtomPairDistogram: 12 (`one_hot(x, 12)`, TorchScript line 89)
 - InverseSquaredBlockedAtomPairDistances: 2 (value + mask)
 
 MSA (42 total — verified from `feature_embedding.pt` TorchScript line 274:
@@ -276,11 +279,11 @@ MSADeletionValue[...,1], MSAHasDeletion[...,1], MSAOneHot_onehot[...,33]], -1)`)
   20 AA + X + 5 RNA + 5 DNA + gap + non-existent
   ([`residue_constants.py:519–526`](../chai-lab/chai_lab/data/residue_constants.py))
 
-TEMPLATES (76 total):
+TEMPLATES (76 total — verified: 2+3+32+39 = 76):
 - TemplateMask: 2 (backbone + pseudo-beta)
 - TemplateUnitVector: 3
-- TemplateResType: 32 (via outer-sum embedding → 32-dim)
-- TemplateDistogram: 39 (38 bins + mask, one-hot) — bin edges from
+- TemplateResType: 32 (via outer-sum `Embedding(33, 32)`)
+- TemplateDistogram: 39 (`one_hot(x, 39)`, TorchScript line 276) — bin edges from
   `linspace(3.25, 50.75, 38)[1:]` (37 edges, spacing ~1.284 Å, first edge ~4.53 Å,
   last 50.75 Å). Distances are **pseudo-beta** (CB for protein, C2/C4 for nucleic
   acids, sole atom for atom tokens) via Euclidean `cdist`. Cross-asym pairs set to
@@ -649,7 +652,7 @@ Same architecture as MSA module (§6.3.7). 8 heads, 32 head_dim, at pair dim 256
 
 | Block Type | Count | Key Dimensions |
 |-----------|-------|---------------|
-| Template Pairformer | 2 | pair=64, 8 heads, 64 head_dim |
+| Template Pairformer | 2 | pair=64, 8 heads, 16 head_dim |
 | MSA outer product mean | 4 | MSA=64 → pair=256, 8×8 outer |
 | MSA pair-weighted avg | 3 | 8 heads, 32 value_dim |
 | MSA transition | 3 | 64→512→256→64 (SwiGLU 4×) |
@@ -1263,9 +1266,9 @@ The complete feature list, as registered in `chai1.py` lines 172–235:
 | 20 | `TokenPairPocketRestraint` | TOKEN_PAIR | RBF |
 | 21 | `MSAProfileGenerator` | TOKEN | IDENTITY |
 | 22 | `MSADeletionMeanGenerator` | TOKEN | IDENTITY |
-| 23 | `IsDistillation` | TOKEN | IDENTITY |
-| 24 | `TokenBFactor` | TOKEN | IDENTITY |
-| 25 | `TokenPLDDT` | TOKEN | IDENTITY |
+| 23 | `IsDistillation` | TOKEN | ONE_HOT |
+| 24 | `TokenBFactor` | TOKEN | ONE_HOT |
+| 25 | `TokenPLDDT` | TOKEN | ONE_HOT |
 | 26 | `ChainIsCropped` | TOKEN | IDENTITY |
 | 27 | `MissingChainContact` | TOKEN | IDENTITY |
 | 28 | `MSAOneHotGenerator` | MSA | ONE_HOT |
