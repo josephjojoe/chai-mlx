@@ -16,7 +16,16 @@ This document describes the full Chai-1 neural architecture based on the
 
 Models are downloaded from `https://chaiassets.com/chai1-inference-depencencies/models_v2/{comp_key}`
 ([`utils/paths.py`](../chai-lab/chai_lab/utils/paths.py)).
-ESM2-3B: `https://chaiassets.com/chai1-inference-depencencies/esm2/traced_sdpa_esm2_t36_3B_UR50D_fp16.pt`.
+ESM2-3B: `https://chaiassets.com/chai1-inference-depencencies/esm2/traced_sdpa_esm2_t36_3B_UR50D_fp16.pt`
+([`data/dataset/embeddings/esm.py:21`](../chai-lab/chai_lab/data/dataset/embeddings/esm.py)).
+
+> **Citation convention.** Claims in this document cite either Python source files in
+> `chai-lab/` (linked to the repo) or TorchScript `.pt` model weights. The `.pt` files
+> are not committed to the repository — they are downloaded on demand to
+> `chai-lab/downloads/models_v2/` at first inference. TorchScript line numbers (e.g.
+> "TorchScript line 274") refer to the readable source embedded in those serialized
+> modules, viewable via `torch.jit.load(path).code`. Weight shapes, parameter counts,
+> constants, and submodule hierarchies were verified by loading the `.pt` files directly.
 
 ---
 
@@ -188,7 +197,7 @@ slot within block, key slot within KV window, feature channels.
 
 ## 4. Feature Embedding
 
-**Module**: [`feature_embedding.pt`](../chai-lab/downloads/models_v2/feature_embedding.pt) (~1.1M params)
+**Module**: `feature_embedding.pt` (~1.1M params)
 
 Internal class: `chai.model.embedding.feature_embedding.FeatureEmbedding`
 
@@ -309,7 +318,7 @@ TEMPLATES (76 total — verified: 2+3+32+39 = 76):
 
 ### 4.4 Bond Feature Projection
 
-**Module**: [`bond_loss_input_proj.pt`](../chai-lab/downloads/models_v2/bond_loss_input_proj.pt)
+**Module**: `bond_loss_input_proj.pt`
 (512 params)
 
 A single `Linear(1, 512, bias=False)`. Output is split 256+256 and **added** to the
@@ -328,7 +337,7 @@ into the pair representation.
 
 ## 5. Token Input Embedder
 
-**Module**: [`token_embedder.pt`](../chai-lab/downloads/models_v2/token_embedder.pt) (~1.5M params)
+**Module**: `token_embedder.pt` (~1.5M params)
 
 Internal class: `chai.model.af3.token_input_emb.TokenInputEmbedding`
 
@@ -460,7 +469,7 @@ pair_initial = token_pair_proj_in_trunk(pair)      # Linear(256, 256, no bias)
 
 ## 6. Trunk
 
-**Module**: [`trunk.pt`](../chai-lab/downloads/models_v2/trunk.pt) (169,955,072 params)
+**Module**: `trunk.pt` (169,955,072 params)
 
 The trunk consists of three sub-modules: template embedder, MSA module, and
 Pairformer stack. Recycling is orchestrated in Python at
@@ -591,12 +600,12 @@ Each block:
 #### 6.3.4 MSA Transition (3 blocks)
 
 Each: `LayerNorm(64)` → `Linear(64, 512, no bias)` → SwiGLU → `Linear(256, 64)`.
-Expansion: **4×**.
+Expansion: **8×** (effective 4× after gating).
 
 #### 6.3.5 Pair Transition (4 blocks)
 
 Each: `LayerNorm(256)` → `Linear(256, 2048, no bias)` → SwiGLU → `Linear(1024, 256)`.
-Expansion: **4×**.
+Expansion: **8×** (effective 4× after gating).
 
 #### 6.3.6 Triangular Multiplication (4 blocks)
 
@@ -734,8 +743,8 @@ Same architecture as MSA module (§6.3.7). 8 heads, 32 head_dim, at pair dim 256
 | Template Pairformer | 2 | pair=64, 8 heads, 16 head_dim |
 | MSA outer product mean | 4 | MSA=64 → pair=256, 8×8 outer |
 | MSA pair-weighted avg | 3 | 8 heads, 32 value_dim |
-| MSA transition | 3 | 64→512→256→64 (SwiGLU 4×) |
-| Pair transition (MSA) | 4 | 256→2048→1024→256 (SwiGLU 4×) |
+| MSA transition | 3 | 64→512→256→64 (SwiGLU 8×) |
+| Pair transition (MSA) | 4 | 256→2048→1024→256 (SwiGLU 8×) |
 | Triangular mult (MSA) | 4 | pair=256, sigmoid gate, both dirs |
 | Triangular attn (MSA) | 4 | pair=256, 8 heads, 32 head_dim, both dirs |
 | Pairformer blocks | 48 | single=384, pair=256 |
@@ -749,7 +758,7 @@ Same architecture as MSA module (§6.3.7). 8 heads, 32 head_dim, at pair dim 256
 
 ## 7. Diffusion Module
 
-**Module**: [`diffusion_module.pt`](../chai-lab/downloads/models_v2/diffusion_module.pt)
+**Module**: `diffusion_module.pt`
 (127,928,768 params)
 
 The diffusion module predicts 3D atomic coordinates via denoising diffusion. It consists
@@ -994,7 +1003,9 @@ recomputing from `atom_pos_hat`: `atom_pos_hat + h * (d_i + d_i') / 2`. Instead,
 code **adds** the trapezoid term on top of the Euler result. Expanding:
 `x_final = x_hat + h*d_i + h*(d_i + d_i')/2 = x_hat + h*(3d_i/2 + d_i'/2)`,
 which gives `d_i` a weight of 3/2 and `d_i'` a weight of 1/2 (vs equal 1/2 weights in
-Heun). The correction is skipped at the final step (sigma_next=0).
+Heun). The correction would be skipped when `sigma_next == 0`
+([`chai1.py:877`](../chai-lab/chai_lab/chai1.py)), but with the default schedule
+`sigma_next` is never exactly 0 (the last σ ≈ 0.007), so the correction always applies.
 
 #### 7.6.5 SE(3) Augmentation
 
@@ -1013,7 +1024,7 @@ called at [`chai1.py:849–856`](../chai-lab/chai_lab/chai1.py)):
 
 ## 8. Confidence Head
 
-**Module**: [`confidence_head.pt`](../chai-lab/downloads/models_v2/confidence_head.pt)
+**Module**: `confidence_head.pt`
 (14,812,416 params)
 
 Called once per diffusion sample in a sequential loop at
@@ -1079,7 +1090,7 @@ pLDDT: 1850 = **37 atom positions × 50 bins** per token, scattered to atom-leve
 ## 9. Ranking and Scoring
 
 Ranking is computed in Python at
-[`chai1.py:988–1015`](../chai-lab/chai_lab/chai1.py), delegating to
+[`chai1.py:984–1015`](../chai-lab/chai_lab/chai1.py), delegating to
 [`ranking/rank.py`](../chai-lab/chai_lab/ranking/rank.py).
 
 ### 9.1 Aggregate Score
@@ -1219,7 +1230,9 @@ a, b = chunk(Linear_no_bias(x_norm), 2)
 x = x + Linear(SiLU(a) * b)
 ```
 
-Expansion factor is **4×** across all modules.
+Here *n*× denotes the pre-chunk linear output width divided by the input width.
+Pairformer, diffusion, and atom transformer transitions use **4×** (effective 2× after
+gating); MSA module transitions use **8×** (effective 4× after gating).
 
 ### 12.2 AdaLayerNorm
 
@@ -1475,15 +1488,20 @@ With the default settings, the diffusion module runs:
 | Configuration | Value | Forward Passes |
 |---------------|-------|----------------|
 | Timesteps | 200 | |
-| Heun correction | Yes (except last step) | |
-| Steps with 2 passes | 199 | |
-| Steps with 1 pass | 1 (final) | |
-| **Total per trajectory** | | **399** |
+| Heun correction | Yes (all steps) | |
+| Steps with 2 passes | 199 | 398 |
+| Steps with 1 pass | 0 | 0 |
+| **Total per trajectory** | | **398** |
 | Diffusion samples | 5 | |
-| **Total diffusion calls** | | **399** (batched) |
+| **Total diffusion calls** | | **398** (batched) |
 
-Each forward pass processes all 5 samples simultaneously via the `ds` dimension, so the
-total number of diffusion module invocations is 399, not 399×5.
+The loop iterates over 199 consecutive σ pairs (`zip(sigmas[:-1], sigmas[1:])`), each
+executing 2 denoising calls (Euler + Heun correction). The Heun guard `sigma_next != 0`
+([`chai1.py:877`](../chai-lab/chai_lab/chai1.py)) never triggers because the schedule's
+smallest σ is σ(t=399/400) ≈ 0.007 — strictly interior time points from
+`linspace(0, 1, 401)[1::2]` never reach t=1 where σ would vanish. Each forward pass
+processes all 5 samples simultaneously via the `ds` dimension, so the total number of
+diffusion module invocations is 398, not 398×5.
 
 ### 14.5 Overall Inference Call Counts
 
@@ -1493,9 +1511,9 @@ total number of diffusion module invocations is 399, not 399×5.
 | `bond_loss_input_proj.pt` | 1 | Once |
 | `token_embedder.pt` | 1 | Once |
 | `trunk.pt` | 3 | Once per recycle |
-| `diffusion_module.pt` | 399 | 200 steps × ~2 passes (Heun) |
+| `diffusion_module.pt` | 398 | 199 steps × 2 passes (Heun) |
 | `confidence_head.pt` | 5 | Once per diffusion sample |
-| **Total** | **410** | |
+| **Total** | **409** | |
 
-The diffusion module dominates inference time (399/410 calls, ~97%).
+The diffusion module dominates inference time (398/409 calls, ~97%).
 
