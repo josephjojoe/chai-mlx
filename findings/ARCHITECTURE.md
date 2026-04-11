@@ -258,17 +258,23 @@ ATOM_PAIR (14 total):
 - BlockedAtomPairDistogram: 12 (11 classes + mask, one-hot)
 - InverseSquaredBlockedAtomPairDistances: 2 (value + mask)
 
-MSA (42 total — verified from `feature_embedding.pt` weight `input_projs.MSA.0.weight:
-[64, 42]`; `feature_embedding.pt` constant c3=33 confirms residue vocab size):
-- MSAOneHot: 33 (residue types one-hot; vocab defined in
-  [`residue_constants.py:519–526`](../chai-lab/chai_lab/data/residue_constants.py) =
-  20 AA + X + 5 RNA + 5 DNA + gap + non-existent)
-- MSAHasDeletion: 1
-- MSADeletionValue: 1 — transformed as `(2/π) * arctan(deletion_count / 3)`
+MSA (42 total — verified from `feature_embedding.pt` TorchScript line 274:
+`torch.cat([IsPairedMSA[...,1], MSADataSource_onehot[...,6],
+MSADeletionValue[...,1], MSAHasDeletion[...,1], MSAOneHot_onehot[...,33]], -1)`):
 - IsPairedMSA: 1 — True where `msa_mask & (pairing_key != NO_PAIRING_KEY)`
-- MSADataSource: 6 (6 classes; Python `num_classes=6`, `can_mask=True` sets mask index
-  to 6, but the TorchScript one-hot encoding appears to use 6 classes, mapping mask
-  positions to a zeroed vector rather than adding a 7th class)
+- MSADataSource: 6 — `torch.one_hot(x, 6)` (TorchScript line 246). Values 0–4 at
+  inference: BFD_UNICLUST(0), MGNIFY(1), UNIREF90(2), UNIPROT(3), NONE(4). QUERY(5) is
+  always remapped to NONE(4) in
+  [`generators/msa.py:243`](../chai-lab/chai_lab/data/features/generators/msa.py), so
+  class 5 is effectively unused. The Python `can_mask=True` sets `mask_value=6`, but this
+  value would crash `one_hot(x, 6)` and is never used — masked positions are filled with
+  NONE(4) instead
+  ([`data/parsing/msas/data_source.py:68–78`](../chai-lab/chai_lab/data/parsing/msas/data_source.py))
+- MSADeletionValue: 1 — transformed as `(2/π) * arctan(deletion_count / 3)`
+- MSAHasDeletion: 1
+- MSAOneHot: 33 — `torch.one_hot(x, 33)` (TorchScript line 266). Vocab =
+  20 AA + X + 5 RNA + 5 DNA + gap + non-existent
+  ([`residue_constants.py:519–526`](../chai-lab/chai_lab/data/residue_constants.py))
 
 TEMPLATES (76 total):
 - TemplateMask: 2 (backbone + pseudo-beta)
