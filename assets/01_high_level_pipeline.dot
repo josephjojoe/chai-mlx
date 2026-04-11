@@ -1,0 +1,51 @@
+digraph HighLevelPipeline {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled",
+          fillcolor="#f7f7f7", color="#333333", penwidth=1.2, margin="0.15,0.08"];
+    edge [fontname="Helvetica", fontsize=9, color="#555555", penwidth=1.0];
+    graph [bgcolor="transparent", pad="0.3", nodesep=0.5, ranksep=0.6];
+
+    label=<<B>Chai-1 Inference Pipeline (~314M params)</B>>;
+    labelloc=t; fontsize=14;
+
+    input [label=<<B>Input</B><BR/><FONT POINT-SIZE="9">FASTA + optional MSAs / templates<BR/>constraints / ESM embeddings</FONT>>,
+           fillcolor="#e3f2fd", shape=oval];
+
+    feat_construction [label=<<B>Feature Construction</B><BR/><FONT POINT-SIZE="9">FeatureFactory + AllAtomFeatureContext<BR/>32 named features across 6 types</FONT>>,
+                       fillcolor="#fff3e0"];
+
+    feat_embed [label=<<B>Feature Embedding</B><BR/><FONT POINT-SIZE="9">feature_embedding.pt  (~1.1M params)<BR/>TOKEN→384  PAIR→256+256  ATOM→128+128<BR/>ATOM_PAIR→16+16  MSA→64  TEMPLATES→64</FONT>>,
+                fillcolor="#e8f5e9"];
+
+    bond_proj [label=<<B>Bond Projection</B><BR/><FONT POINT-SIZE="9">bond_loss_input_proj.pt  (512 params)<BR/>Linear(1→512) → 256+256 added to TOKEN_PAIR</FONT>>,
+               fillcolor="#e8f5e9"];
+
+    token_embed [label=<<B>Token Input Embedder</B><BR/><FONT POINT-SIZE="9">token_embedder.pt  (~1.5M params)<BR/>Atom Transformer (3 blocks) → aggregate to tokens<BR/>→ single_initial[384], single_structure[384], pair_initial[256]</FONT>>,
+                 fillcolor="#e8eaf6"];
+
+    trunk [label=<<B>Trunk  ×3 recycles</B><BR/><FONT POINT-SIZE="9">trunk.pt  (~170M params)<BR/>Template Embedder (2 Pairformer blocks, dim 64)<BR/>MSA Module (4 iters, asymmetric blocks)<BR/>Pairformer Stack (48 blocks)<BR/>→ single_trunk[384], pair_trunk[256]</FONT>>,
+           fillcolor="#fce4ec"];
+
+    diffusion [label=<<B>Diffusion Module  ×200 steps</B><BR/><FONT POINT-SIZE="9">diffusion_module.pt  (~128M params)<BR/>Conditioning (Fourier σ) → Atom Encoder (3 blocks)<BR/>Diffusion Transformer (16 blocks, dim 768)<BR/>Atom Decoder (3 blocks) → xyz deltas</FONT>>,
+               fillcolor="#f3e5f5"];
+
+    confidence [label=<<B>Confidence Head</B><BR/><FONT POINT-SIZE="9">confidence_head.pt  (~14.8M params)<BR/>4 Pairformer blocks<BR/>→ PAE[n×n×64]  PDE[n×n×64]  pLDDT[n_atoms×50]</FONT>>,
+                fillcolor="#e0f7fa"];
+
+    ranking [label=<<B>Ranking</B><BR/><FONT POINT-SIZE="9">0.2·pTM + 0.8·ipTM − 100·has_clashes</FONT>>,
+             fillcolor="#fff9c4", shape=oval];
+
+    output [label=<<B>Output</B><BR/><FONT POINT-SIZE="9">Ranked 3D structures (CIF)</FONT>>,
+            fillcolor="#e8f5e9", shape=oval];
+
+    input -> feat_construction;
+    feat_construction -> feat_embed;
+    feat_embed -> bond_proj;
+    bond_proj -> token_embed;
+    token_embed -> trunk;
+    trunk -> diffusion;
+    diffusion -> confidence;
+    confidence -> ranking;
+    ranking -> output;
+}

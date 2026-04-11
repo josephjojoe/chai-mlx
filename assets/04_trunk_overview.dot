@@ -1,0 +1,76 @@
+digraph TrunkOverview {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled",
+          fillcolor="#f7f7f7", color="#333333", penwidth=1.2, margin="0.12,0.06"];
+    edge [fontname="Helvetica", fontsize=9, color="#555555", penwidth=1.0];
+    graph [bgcolor="transparent", pad="0.3", nodesep=0.4, ranksep=0.55];
+
+    label=<<B>Trunk Module</B><BR/><FONT POINT-SIZE="9">trunk.pt  (~170M params, ×3 recycles)</FONT>>;
+    labelloc=t; fontsize=13;
+
+    // Inputs
+    single_init [label=<<B>token_single_initial_repr</B><BR/>[b, n, 384]>,
+                 fillcolor="#e3f2fd"];
+    pair_init [label=<<B>token_pair_initial_repr</B><BR/>[b, n, n, 256]>,
+               fillcolor="#e3f2fd"];
+    msa_feats [label=<<B>MSA features</B><BR/>[b, depth, n, 64]>,
+               fillcolor="#e3f2fd"];
+    template_feats [label=<<B>Template features</B><BR/>[b, 4, n, n, 64]>,
+                    fillcolor="#e3f2fd"];
+
+    // Recycle projections
+    subgraph cluster_recycle {
+        label=<<B>Recycle Projections (added after iteration 1+)</B>>;
+        style="dashed"; color="#aaaaaa"; fontsize=9;
+        node [fillcolor="#fff9c4"];
+
+        recycle_single [label=<<B>token_single_recycle_proj</B><BR/>LN(384) → Linear(384, 384, no bias)>];
+        recycle_pair [label=<<B>token_pair_recycle_proj</B><BR/>LN(256) → Linear(256, 256, no bias)>];
+    }
+
+    // Template embedder
+    template_embed [label=<<B>Template Embedder</B><BR/><FONT POINT-SIZE="8">2 Pairformer blocks at dim 64<BR/>→ projected to pair dim 256</FONT>>,
+                    fillcolor="#e8f5e9"];
+
+    // MSA module
+    msa_module [label=<<B>MSA Module</B><BR/><FONT POINT-SIZE="8">4 iterations (asymmetric block counts)<BR/>OPM(×4), PairWeightedAvg(×3), MSATrans(×3)<BR/>PairTrans(×4), TriMul(×4), TriAttn(×4)</FONT>>,
+                fillcolor="#fce4ec"];
+
+    // Pairformer
+    pairformer [label=<<B>Pairformer Stack (48 blocks)</B><BR/><FONT POINT-SIZE="8">Per block: PairTransition → AttentionPairBias<BR/>→ SingleTransition → TriangularMult → TriangleAttn</FONT>>,
+                fillcolor="#e8eaf6"];
+
+    // Outputs
+    single_out [label=<<B>token_single_trunk</B><BR/>[b, n, 384]>,
+                fillcolor="#c8e6c9"];
+    pair_out [label=<<B>token_pair_trunk</B><BR/>[b, n, n, 256]>,
+              fillcolor="#c8e6c9"];
+
+    // Recycle loop
+    recycle_edge [label=<<B>Recycle</B><BR/><FONT POINT-SIZE="8">×3 iterations</FONT>>,
+                  shape=oval, fillcolor="#fff9c4"];
+
+    // Edges
+    single_init -> recycle_single [style=dashed];
+    pair_init -> recycle_pair [style=dashed];
+    recycle_single -> template_embed [style=dashed];
+    recycle_pair -> template_embed [style=dashed];
+
+    single_init -> template_embed;
+    pair_init -> template_embed;
+    template_feats -> template_embed;
+
+    template_embed -> msa_module [label="pair repr"];
+    single_init -> msa_module [label="single repr"];
+    msa_feats -> msa_module;
+
+    msa_module -> pairformer [label="single + pair"];
+    pairformer -> single_out;
+    pairformer -> pair_out;
+
+    single_out -> recycle_edge [style=dashed];
+    pair_out -> recycle_edge [style=dashed];
+    recycle_edge -> recycle_single [style=dashed, label="next iteration"];
+    recycle_edge -> recycle_pair [style=dashed];
+}

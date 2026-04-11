@@ -1,0 +1,73 @@
+digraph MSAModule {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled",
+          fillcolor="#f7f7f7", color="#333333", penwidth=1.2, margin="0.12,0.06"];
+    edge [fontname="Helvetica", fontsize=9, color="#555555", penwidth=1.0];
+    graph [bgcolor="transparent", pad="0.3", nodesep=0.35, ranksep=0.45];
+
+    label=<<B>MSA Module</B><BR/><FONT POINT-SIZE="9">4 iterations with asymmetric block structure</FONT>>;
+    labelloc=t; fontsize=13;
+
+    // Inputs
+    single_in [label=<<B>single_repr</B><BR/>[b, n, 384]>,
+               fillcolor="#e3f2fd"];
+    msa_in [label=<<B>MSA features</B><BR/>[b, depth, n, 64]>,
+            fillcolor="#e3f2fd"];
+    pair_in [label=<<B>pair_repr</B><BR/>[b, n, n, 256]>,
+             fillcolor="#e3f2fd"];
+
+    // S2M projection
+    s2m [label=<<B>linear_s2m</B><BR/>Linear(384, 64, no bias)<BR/><FONT POINT-SIZE="8">single → MSA (once at start)</FONT>>,
+         fillcolor="#fff3e0"];
+
+    // Iteration block
+    subgraph cluster_iteration {
+        label=<<B>For i in 0..3</B>>;
+        style="dashed"; color="#999999"; fontsize=10;
+
+        opm [label=<<B>Outer Product Mean [i]</B><BR/><FONT POINT-SIZE="8">MSA → pair update<BR/>weight_ab: [2,8,8,64]<BR/>LN(512) → Linear(512,256)</FONT>>,
+             fillcolor="#e8eaf6"];
+
+        pair_trans [label=<<B>Pair Transition [i]</B><BR/><FONT POINT-SIZE="8">SwiGLU 4× (256→2048→1024→256)</FONT>>,
+                    fillcolor="#e8eaf6"];
+
+        subgraph cluster_msa_ops {
+            label=<<B>if i &lt; 3</B>>;
+            style="dotted"; color="#cc0000"; fontsize=9;
+
+            msa_pwa [label=<<B>MSA Pair-Weighted Avg [i]</B><BR/><FONT POINT-SIZE="8">pair → MSA (pair-biased attn)<BR/>8 heads, 32 value_dim<BR/>LN(64) → Linear(64,512)</FONT>>,
+                     fillcolor="#fce4ec"];
+
+            msa_trans [label=<<B>MSA Transition [i]</B><BR/><FONT POINT-SIZE="8">SwiGLU 4× (64→512→256→64)</FONT>>,
+                       fillcolor="#fce4ec"];
+        }
+
+        tri_mult [label=<<B>Triangular Multiplication [i]</B><BR/><FONT POINT-SIZE="8">outgoing + incoming (both directions)<BR/>sigmoid-gated, pair dim 256</FONT>>,
+                  fillcolor="#f3e5f5"];
+
+        tri_attn [label=<<B>Triangular Attention [i]</B><BR/><FONT POINT-SIZE="8">starting + ending node (both directions)<BR/>8 heads, 32 head_dim, pair dim 256</FONT>>,
+                  fillcolor="#f3e5f5"];
+    }
+
+    // Outputs
+    pair_out [label=<<B>Updated pair_repr</B><BR/>[b, n, n, 256]>,
+              fillcolor="#c8e6c9"];
+
+    discard [label=<<B>MSA discarded</B><BR/><FONT POINT-SIZE="8">consumed via OPM into pairs</FONT>>,
+             fillcolor="#ffcdd2", shape=oval];
+
+    // Edges
+    single_in -> s2m;
+    s2m -> msa_in [label="added to row 0", style=dashed];
+    msa_in -> opm;
+    pair_in -> opm [style=dashed];
+    opm -> pair_trans;
+    pair_trans -> msa_pwa [label="pair → MSA"];
+    msa_pwa -> msa_trans;
+    msa_trans -> opm [label="next iter", style=dotted, constraint=false];
+    pair_trans -> tri_mult;
+    tri_mult -> tri_attn;
+    tri_attn -> pair_out;
+    msa_trans -> discard [style=dashed, label="after i=2"];
+}

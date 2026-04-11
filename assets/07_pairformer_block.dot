@@ -1,0 +1,54 @@
+digraph PairformerBlock {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled",
+          fillcolor="#f7f7f7", color="#333333", penwidth=1.2, margin="0.12,0.06"];
+    edge [fontname="Helvetica", fontsize=9, color="#555555", penwidth=1.0];
+    graph [bgcolor="transparent", pad="0.3", nodesep=0.4, ranksep=0.5];
+
+    label=<<B>Pairformer Block (×48 in Trunk)</B><BR/><FONT POINT-SIZE="9">5 sub-layers per block, 3 SDPA calls</FONT>>;
+    labelloc=t; fontsize=13;
+
+    // Inputs
+    z_in [label=<<B>z (pair repr)</B><BR/>[b, n, n, 256]>,
+          fillcolor="#e3f2fd"];
+    s_in [label=<<B>s (single repr)</B><BR/>[b, n, 384]>,
+          fillcolor="#e3f2fd"];
+
+    // Sub-layer 1
+    pair_transition [label=<<B>1. Pair Transition</B><BR/><FONT POINT-SIZE="8">LN(256) → Linear(256,1024) → SwiGLU → Linear(512,256)<BR/>z = z + PairTransition(z)</FONT>>,
+                     fillcolor="#e8eaf6"];
+
+    // Sub-layer 2
+    attn_pair_bias [label=<<B>2. Attention with Pair Bias</B><BR/><FONT POINT-SIZE="8">16 heads, 24 head_dim<BR/>pair_linear: Linear(256,16) → per-head bias<BR/>input2qkvg: [384, 4, 16, 24] → q,k,v,g<BR/>softmax(q·kᵀ/√24 + pair_bias) · v × σ(g)<BR/>s = s + AttnPairBias(s, z)</FONT>>,
+                    fillcolor="#fff3e0"];
+
+    // Sub-layer 3
+    single_transition [label=<<B>3. Single Transition</B><BR/><FONT POINT-SIZE="8">LN(384) → Linear(384,1536) → SwiGLU → Linear(768,384)<BR/>s = s + SingleTransition(s)</FONT>>,
+                       fillcolor="#e8eaf6"];
+
+    // Sub-layer 4
+    tri_mult [label=<<B>4. Triangular Multiplication</B><BR/><FONT POINT-SIZE="8">Both outgoing + incoming directions<BR/>merged_linear_p(256,1024), merged_linear_g(256,1280)<BR/>sigmoid gate, einsum contractions<BR/>z = z + TriMul(z)</FONT>>,
+              fillcolor="#f3e5f5"];
+
+    // Sub-layer 5
+    tri_attn [label=<<B>5. Triangle Attention</B><BR/><FONT POINT-SIZE="8">Both starting + ending node, 8 heads, 32 head_dim<BR/>pair2qkvg1/2: Linear(256,1024) → q,k,v,g<BR/>pair2b: Linear(256,8) → per-head bias<BR/>2 SDPA calls, sigmoid gated<BR/>z = z + TriAttn(z)</FONT>>,
+              fillcolor="#f3e5f5"];
+
+    // Outputs
+    z_out [label=<<B>z (updated pair)</B><BR/>[b, n, n, 256]>,
+           fillcolor="#c8e6c9"];
+    s_out [label=<<B>s (updated single)</B><BR/>[b, n, 384]>,
+           fillcolor="#c8e6c9"];
+
+    // Edges
+    z_in -> pair_transition;
+    pair_transition -> attn_pair_bias [label="z"];
+    s_in -> attn_pair_bias [label="s"];
+    attn_pair_bias -> single_transition [label="s"];
+    single_transition -> s_out;
+    pair_transition -> tri_mult [label="z"];
+    tri_mult -> tri_attn;
+    tri_attn -> z_out;
+    attn_pair_bias -> tri_mult [style=dashed, label="z (pair bias\nread from z)"];
+}

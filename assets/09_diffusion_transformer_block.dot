@@ -1,0 +1,69 @@
+digraph DiffusionTransformerBlock {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled",
+          fillcolor="#f7f7f7", color="#333333", penwidth=1.2, margin="0.12,0.06"];
+    edge [fontname="Helvetica", fontsize=9, color="#555555", penwidth=1.0];
+    graph [bgcolor="transparent", pad="0.3", nodesep=0.4, ranksep=0.5];
+
+    label=<<B>Diffusion Transformer Block (×16)</B><BR/><FONT POINT-SIZE="9">16 heads, 48 head_dim, 768 working dim</FONT>>;
+    labelloc=t; fontsize=13;
+
+    // Inputs
+    x_in [label=<<B>x</B><BR/>[b, n, 768]>,
+          fillcolor="#e3f2fd"];
+    s_cond [label=<<B>s_cond</B><BR/>[b, n, 384]>,
+            fillcolor="#fff9c4", shape=oval];
+    z_cond [label=<<B>z_cond</B><BR/>[b, n, n, 256]>,
+            fillcolor="#fff9c4", shape=oval];
+
+    // Part 1: Conditioned Attention
+    subgraph cluster_attn {
+        label=<<B>1. Conditioned Pair-Bias Attention</B>>;
+        style="dashed"; color="#999999"; fontsize=10;
+
+        adaln1 [label=<<B>AdaLayerNorm</B><BR/><FONT POINT-SIZE="8">lin_s_merged(384→1536): scale + shift<BR/>LN(x) × (1 + scale) + shift</FONT>>,
+                fillcolor="#fff3e0"];
+        qkv [label=<<B>to_qkv</B><BR/><FONT POINT-SIZE="8">Linear(768, 2304)<BR/>16 heads × 48 dim × 3 (q,k,v)<BR/>+ q_bias [16, 48]</FONT>>,
+             fillcolor="#e8eaf6"];
+        pair_bias [label=<<B>pair_linear</B><BR/><FONT POINT-SIZE="8">LN(256) → Linear(256, 16)<BR/>per-head attn bias</FONT>>,
+                   fillcolor="#e8eaf6"];
+        sdpa [label=<<B>SDPA</B><BR/><FONT POINT-SIZE="8">softmax(q·kᵀ/√48 + pair_bias) · v</FONT>>,
+              fillcolor="#f3e5f5"];
+        gate1 [label=<<B>Gated Output</B><BR/><FONT POINT-SIZE="8">gate = σ(gate_proj(s_cond))<BR/>x += to_out(attn) × gate</FONT>>,
+               fillcolor="#fff3e0"];
+    }
+
+    // Part 2: Conditioned Transition
+    subgraph cluster_trans {
+        label=<<B>2. Conditioned Transition</B>>;
+        style="dashed"; color="#999999"; fontsize=10;
+
+        adaln2 [label=<<B>AdaLayerNorm</B><BR/><FONT POINT-SIZE="8">ada_ln(384→1536): scale + shift</FONT>>,
+                fillcolor="#fff3e0"];
+        swiglu [label=<<B>SwiGLU</B><BR/><FONT POINT-SIZE="8">linear_a(768, 3072) → chunk(2)<BR/>SiLU(a) × b → linear_b(1536, 768)</FONT>>,
+                fillcolor="#e8eaf6"];
+        gate2 [label=<<B>Gated Output</B><BR/><FONT POINT-SIZE="8">gate = σ(linear_s(s_cond)) [bias init −2]<BR/>x += transition × gate</FONT>>,
+               fillcolor="#fff3e0"];
+    }
+
+    // Output
+    x_out [label=<<B>x (updated)</B><BR/>[b, n, 768]>,
+           fillcolor="#c8e6c9"];
+
+    // Edges
+    x_in -> adaln1;
+    s_cond -> adaln1 [label="scale,shift"];
+    adaln1 -> qkv;
+    z_cond -> pair_bias;
+    qkv -> sdpa;
+    pair_bias -> sdpa;
+    sdpa -> gate1;
+    s_cond -> gate1 [label="gate"];
+    gate1 -> adaln2;
+    s_cond -> adaln2 [label="scale,shift"];
+    adaln2 -> swiglu;
+    swiglu -> gate2;
+    s_cond -> gate2 [label="gate"];
+    gate2 -> x_out;
+}

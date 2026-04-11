@@ -1,0 +1,69 @@
+digraph DiffusionSampling {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled",
+          fillcolor="#f7f7f7", color="#333333", penwidth=1.2, margin="0.12,0.06"];
+    edge [fontname="Helvetica", fontsize=9, color="#555555", penwidth=1.0];
+    graph [bgcolor="transparent", pad="0.3", nodesep=0.4, ranksep=0.5];
+
+    label=<<B>Diffusion Sampling Loop (EDM / Heun)</B><BR/><FONT POINT-SIZE="9">200 timesteps, σ_data=16, power-7 schedule</FONT>>;
+    labelloc=t; fontsize=13;
+
+    // Noise schedule
+    subgraph cluster_schedule {
+        label=<<B>Noise Schedule</B>>;
+        style="dashed"; color="#999999"; fontsize=10;
+        node [fillcolor="#e3f2fd"];
+
+        schedule [label=<<B>σ(t) = σ_data · (t·s_min^(1/p) + (1−t)·s_max^(1/p))^p</B><BR/><FONT POINT-SIZE="8">p=7, s_min=4e-4, s_max=80, σ_data=16<BR/>t ∈ linspace(0,1, 401)[1::2] — 200 interior points</FONT>>];
+
+        churn [label=<<B>Stochastic Churn</B><BR/><FONT POINT-SIZE="8">γ = min(S_churn/N, √2−1) if S_tmin ≤ σ ≤ S_tmax<BR/>S_churn=80, S_tmin=4e-4, S_tmax=80, S_noise=1.003</FONT>>];
+    }
+
+    // Sampling loop
+    subgraph cluster_loop {
+        label=<<B>Sampling Loop (199 steps over σ pairs)</B>>;
+        style="dashed"; color="#999999"; fontsize=10;
+
+        // Step 1
+        se3 [label=<<B>1. SE(3) Augmentation</B><BR/><FONT POINT-SIZE="8">center_random_augmentation(pos, mask)<BR/>Center → random SO(3) rotation → translate (s_trans=1.0)</FONT>>,
+             fillcolor="#e8f5e9"];
+
+        // Step 2
+        inflate [label=<<B>2. Stochastic Noise Inflation</B><BR/><FONT POINT-SIZE="8">σ̂ = σ_curr + γ·σ_curr<BR/>noise = S_noise · randn_like(pos)<BR/>pos_hat = pos + noise · √(σ̂² − σ_curr²)</FONT>>,
+                 fillcolor="#fff3e0"];
+
+        // Step 3
+        euler [label=<<B>3. Euler Step</B><BR/><FONT POINT-SIZE="8">denoised = denoise(pos_hat, σ̂)<BR/>d_i = (pos_hat − denoised) / σ̂<BR/>pos = pos_hat + (σ_next − σ̂) · d_i</FONT>>,
+               fillcolor="#e8eaf6"];
+
+        denoise1 [label=<<B>Diffusion Module</B><BR/><FONT POINT-SIZE="8">Full forward pass</FONT>>,
+                  fillcolor="#f3e5f5"];
+
+        // Step 4
+        heun [label=<<B>4. Heun Correction</B><BR/><FONT POINT-SIZE="8">if σ_next ≠ 0 (skip at final step):<BR/>denoised' = denoise(pos, σ_next)<BR/>d_i' = (pos − denoised') / σ_next<BR/>pos = pos_hat + (σ_next − σ̂) · (d_i + d_i') / 2</FONT>>,
+              fillcolor="#fce4ec"];
+
+        denoise2 [label=<<B>Diffusion Module</B><BR/><FONT POINT-SIZE="8">Second forward pass</FONT>>,
+                  fillcolor="#f3e5f5"];
+    }
+
+    // Output
+    output [label=<<B>Final denoised coordinates</B><BR/>[b, n_atoms, 3]>,
+            fillcolor="#c8e6c9", shape=oval];
+
+    next_step [label=<<B>Next σ pair</B>>,
+               shape=oval, fillcolor="#fff9c4"];
+
+    // Edges
+    schedule -> churn;
+    churn -> se3 [label="σ_curr, γ"];
+    se3 -> inflate;
+    inflate -> euler;
+    euler -> denoise1 [dir=back, label="  call"];
+    euler -> heun;
+    heun -> denoise2 [dir=back, label="  call"];
+    heun -> next_step [label="if more steps"];
+    next_step -> se3 [style=dashed, label="loop"];
+    heun -> output [label="final step"];
+}
