@@ -410,6 +410,10 @@ def reshape_einsum_weight(mlx_key: str, arr: "np.ndarray") -> "np.ndarray":
     Returns the array unchanged when no reshape is needed (ndim <= 2 or
     not a recognized einsum weight).
     """
+    # RBF radii: TorchScript stores [1, num_radii], MLX expects (num_radii,)
+    if mlx_key.endswith("_radii") and arr.ndim == 2 and arr.shape[0] == 1:
+        return arr.squeeze(0)
+
     if arr.ndim <= 2:
         return arr
 
