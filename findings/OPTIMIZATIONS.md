@@ -46,8 +46,8 @@ These depend only on **trunk outputs** and **static embeddings** from earlier st
 - **Pair grid from trunk**: `z_trunk` and merged pair inputs that feed **pair conditioning** inside the diffusion module.
 - **`z_cond`**: output of pair conditioning (`pair_ln` after `token_pair_proj` and pair SwiGLU stack) — function of trunk pair + initial pair only.
 - **Per-block diffusion transformer pair biases**: for each of the 16 blocks, `pair_bias_k = f_k(LayerNorm_k(z_cond))` (bias from conditioned pair only).
-- **`token_pair_to_atom_pair(z_cond)`**: `LayerNorm(256) → Linear(256, 16)` on `[b, n, n, 256]`, then **gather** into blocked atom-pair layout `[b·ds, num_blocks, 32, 128, 16]` using fixed `qkv_indices` (same every step for a given crop).
-- **`to_atom_cond` on structure atom input**: `Linear(128, 128)` on atom features derived from trunk/structure path (invariant across σ if trunk is fixed).
+- **`token_pair_to_atom_pair(z_cond)`**: `LayerNorm(256) → Linear(256, 16, no bias)` on `[b, n, n, 256]`, then **gather** into blocked atom-pair layout `[b·ds, num_blocks, 32, 128, 16]` using fixed `qkv_indices` (same every step for a given crop).
+- **`to_atom_cond` on structure atom input**: `Linear(128, 128, no bias)` on atom features derived from trunk/structure path (invariant across σ if trunk is fixed).
 
 The **pair update block** in the atom encoder **must still run every step**: it adds atom-dependent outer-sum terms and an MLP on blocked pairs; it **starts from** the cached base blocked pair features.
 
@@ -89,7 +89,7 @@ For each transformer block `k ∈ {0..15}`:
 **Effect**
 
 - Removes **16 × (LN + Linear)** on the full pair grid per step.
-- **Memory**: 16 × `[b, n, n, 16]` fp32. At `n = 512`, `b = 1`: **16 × 16 MiB ≈ 256 MiB** (plus `z_cond` ~268 MiB if kept resident).
+- **Memory**: 16 × `[b, n, n, 16]` fp32. At `n = 512`, `b = 1`: **16 × 16 MiB ≈ 256 MiB** (plus `z_cond` ~256 MiB if kept resident).
 
 ### 2.3 Cache blocked atom-pair base from `token_pair_to_atom_pair`
 
@@ -403,9 +403,9 @@ Triangular multiplication expands `z[b,n,n,256]` into **large intermediate proje
 
 | Object | Shape (conceptual) | `n=512` (order) |
 |--------|-------------------|-----------------|
-| `z_cond` | `[1, n, n, 256]` | ~268 MiB |
+| `z_cond` | `[1, n, n, 256]` | ~256 MiB |
 | `pair_bias_k` ×16 | `[1, n, n, 16]` each | ~256 MiB total |
-| `blocked_pair_base` | `[1, n_bl, 32, 128, 16]` | tens of MiB (depends on `n_atoms = 23·n`) |
+| `blocked_pair_base` | `[1, n_bl, 32, 128, 16]` | ~92 MiB (depends on `n_atoms = 23·n`) |
 
 Total **~0.5–0.6 GiB** extra device memory for the caches — usually acceptable vs recomputation cost.
 

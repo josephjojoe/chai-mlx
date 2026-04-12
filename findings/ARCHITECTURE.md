@@ -66,7 +66,7 @@ Feature Embedding ────────────── feature_embedding.p
   │
   ▼
 Bond Projection ──────────────── bond_loss_input_proj.pt
-  │  Linear(1 → 512) split to 256+256, added to TOKEN_PAIR
+  │  Linear(1 → 512, no bias) split to 256+256, added to TOKEN_PAIR
   │
   ▼
 Token Input Embedder ─────────── token_embedder.pt
@@ -354,11 +354,11 @@ atom_single_input_feats  [b, n_atoms, 128]    ─┐
 block_atom_pair_feat     [b, bl, q, kv, 16]   ─┤
                                                 ▼
                                     AtomAttentionBlockedEncoder
-                                    ├─ to_atom_cond: Linear(128, 128)
+                                    ├─ to_atom_cond: Linear(128, 128, no bias)
                                     ├─ Pair Update Block (outer-sum + residual MLP)
                                     │   ├─ proj_h: LN(128) → Linear(128, 16, no bias)
                                     │   ├─ proj_w: LN(128) → Linear(128, 16, no bias)
-                                    │   └─ MLP: Linear(16,16) → ReLU → Linear(16,16)
+                                    │   └─ MLP: Linear(16,16, no bias) → ReLU → Linear(16,16, no bias)
                                     ├─ LocalDiffusionTransformer (3 blocks)
                                     │   ├─ blocked_pairs2blocked_bias:
                                     │   │    LN(16) → [3, 4, 16] per-head bias
@@ -366,7 +366,7 @@ block_atom_pair_feat     [b, bl, q, kv, 16]   ─┤
                                     │   │    (4 heads, 32 head_dim, AdaLN)
                                     │   └─ 3× ConditionedTransitionBlock
                                     │        (SwiGLU, 4× expansion)
-                                    └─ to_token_single: Linear(128, 384)
+                                    └─ to_token_single: Linear(128, 384, no bias) → ReLU
                                                 │
                                                 ▼ masked mean via scatter_reduce("sum")
                            concat [token_single(384) + atom_agg(384)] = 768
@@ -378,10 +378,10 @@ block_atom_pair_feat     [b, bl, q, kv, 16]   ─┤
                            ▼                                    ▼
               token_single_initial_repr [384]     token_single_structure_input [384]
 
-              ┌─── token_pair_proj_in_trunk: Linear(256, 256, no bias) ───┐
-              │    + outer_sum from single_to_pair: Linear(384, 512)      │
-              ▼                                                           │
-         token_pair_initial_repr [256]                                    │
+              ┌─── token_pair_proj_in_trunk: Linear(256, 256, no bias) ────────────┐
+              │    + outer_sum from single_to_pair: Linear(384, 512, no bias)    │
+              ▼                                                                  │
+         token_pair_initial_repr [256]                                           │
 ```
 
 ### 5.2 Atom Transformer Details
@@ -389,7 +389,7 @@ block_atom_pair_feat     [b, bl, q, kv, 16]   ─┤
 The atom-level transformer uses **blocked local attention** (query block=32, key block=128):
 
 **Local Attention Blocks** (3 blocks, each):
-- **AdaLayerNorm**: Conditioned by atom_single. `lin_s_merged: Linear(128, 256)` produces
+- **AdaLayerNorm**: Conditioned by atom_single. `lin_s_merged: Linear(128, 256, no bias)` produces
   scale and shift (128 each) for the 128-dim atom representation.
 - **QKV projection**: `to_qkv.weight: [3, 4, 32, 128]` — 4 heads, 32 head_dim, producing
   q, k, v from 128-dim input
@@ -400,7 +400,7 @@ The atom-level transformer uses **blocked local attention** (query block=32, key
 - **Attention scale**: 1/√32
 
 **Conditioned Transition Blocks** (3 blocks, each):
-- **AdaLayerNorm**: `lin_s_merged: Linear(128, 256)` for scale+shift
+- **AdaLayerNorm**: `lin_s_merged: Linear(128, 256, no bias)` for scale+shift
 - **SwiGLU expansion**: `linear_a_nobias_double: Linear(128, 512)` — split to 256+256
   (one half through SiLU, then element-wise multiply)
 - **Down projection**: `linear_b_nobias: Linear(256, 128)`
@@ -426,7 +426,7 @@ w = proj_w(atom_single_kv)      # LN(128) → Linear(128, 16) → [b, bl, 128, 1
 pair = block_atom_pair_feat + h[:,:,:,None,:] + w[:,:,None,:,:]
 
 # residual MLP
-pair = pair + MLP(pair)          # Linear(16,16) → ReLU → Linear(16,16)
+pair = pair + MLP(pair)          # Linear(16,16, no bias) → ReLU → Linear(16,16, no bias)
 ```
 
 This runs **once** before the local attention blocks (not per-block).
@@ -438,7 +438,7 @@ via **masked mean** (`token_embedder.pt` TorchScript lines 639–643; same patte
 `diffusion_module.pt` lines 1967–1971):
 
 ```python
-# atom_single_repr: [b, n_atoms, d]  (d=128 in embedder, d=768 via to_token_single)
+# atom_single_repr: [b, n_atoms, d]  (d=384 in embedder, d=768 in diffusion — after to_token_single)
 # atom_single_mask: [b, n_atoms]
 # atom_token_indices: [b, n_atoms] — maps each atom to its parent token
 
@@ -630,8 +630,8 @@ output = linear_z_out(LayerNorm(x_out) + LayerNorm(x_in)) * g[..., 4c:]
 z += feature_dropout(output)
 ```
 
-Weight shapes: `merged_linear_p: Linear(256, 1024)`, `merged_linear_g: Linear(256, 1280)`,
-`linear_z_out: Linear(256, 256)`.
+Weight shapes: `merged_linear_p: Linear(256, 1024, no bias)`, `merged_linear_g: Linear(256, 1280, no bias)`,
+`linear_z_out: Linear(256, 256, no bias)`.
 
 #### 6.3.7 Triangular Attention (4 blocks)
 
@@ -778,22 +778,22 @@ TorchScript submodule hierarchy (from `diffusion_module.pt`):
 ```
 diffusion_module
 ├── diffusion_conditioning
-│   ├── token_pair_proj         (LN → Linear(512, 256))
-│   ├── token_in_proj           (LN → Linear(768, 384))
+│   ├── token_pair_proj         (LN(512) → Linear(512, 256, no bias))
+│   ├── token_in_proj           (LN(768) → Linear(768, 384, no bias))
 │   ├── single_trans1, single_trans2   (SwiGLU 384→1536→768→384)
 │   ├── pair_trans1, pair_trans2       (SwiGLU 256→1024→512→256)
 │   ├── fourier_embedding       (weights[256], bias[256])
-│   ├── fourier_proj            (LN(256) → Linear(256, 384))
+│   ├── fourier_proj            (LN(256) → Linear(256, 384, no bias))
 │   ├── single_ln               (LN(384))
 │   └── pair_ln                 (LN(256))
 ├── atom_attention_encoder      (same arch as token embedder's encoder)
-│   ├── to_atom_cond            (Linear(128, 128))
-│   ├── token_to_atom_single    (LN(384) → Linear(384, 128))
+│   ├── to_atom_cond            (Linear(128, 128, no bias))
+│   ├── token_to_atom_single    (LN(384) → Linear(384, 128, no bias))
 │   ├── prev_pos_embed          (Linear(3, 128, no bias))
 │   ├── pair_update_block
-│   ├── token_pair_to_atom_pair (LN(256) → Linear(256, 16))
+│   ├── token_pair_to_atom_pair (LN(256) → Linear(256, 16, no bias))
 │   ├── atom_transformer        (3 local attn blocks + 3 transitions)
-│   └── to_token_single         (Linear(128, 768, no bias))
+│   └── to_token_single         (Linear(128, 768, no bias) → ReLU)
 ├── diffusion_transformer
 │   └── blocks                  (16 blocks, 768-dim)
 ├── atom_attention_decoder
@@ -819,7 +819,7 @@ token_in_proj: LayerNorm(768) → Linear(768, 384, no bias)
 single_trans1: SwiGLU transition (384, 4×)
     │
     ▼
- + fourier_embedding(σ) → fourier_proj: LayerNorm(256) → Linear(256, 384)
+ + fourier_embedding(σ) → fourier_proj: LayerNorm(256) → Linear(256, 384, no bias)
     │
     ▼
 single_trans2: SwiGLU transition (384, 4×)
@@ -855,13 +855,13 @@ within `diffusion_module.pt`, not weight-tied to either encoder.
 
 Additions beyond the token embedder's encoder:
 
-- `to_atom_cond: Linear(128, 128)` — condition atoms from structure features
-- `token_to_atom_single: LayerNorm(384) → Linear(384, 128)` — broadcast token→atom
+- `to_atom_cond: Linear(128, 128, no bias)` — condition atoms from structure features
+- `token_to_atom_single: LayerNorm(384) → Linear(384, 128, no bias)` — broadcast token→atom
 - `prev_pos_embed: Linear(3, 128, no bias)` — embeds noised atom positions
 - `pair_update_block`: same as token embedder (proj_h/w + MLP at dim 16)
-- `token_pair_to_atom_pair: LayerNorm(256) → Linear(256, 16)` — pair→atom pair
+- `token_pair_to_atom_pair: LayerNorm(256) → Linear(256, 16, no bias)` — pair→atom pair
 - 3 local attention blocks + 3 transitions (4 heads, 32 head_dim)
-- `to_token_single: Linear(128, 768, no bias)` — aggregate to token at **768** dim
+- `to_token_single: Linear(128, 768, no bias) → ReLU` — aggregate to token at **768** dim
 
 ### 7.3 Diffusion Transformer (16 blocks)
 
@@ -1044,9 +1044,9 @@ confidence_head
 ├── single_to_pair_proj         (Linear(384, 512, no bias))
 ├── atom_distance_bins_projection (Linear(16, 256, no bias))
 ├── blocks                      (4 Pairformer blocks)
-├── plddt_projection            (Linear(384, 1850))
-├── pae_projection              (Linear(256, 64))
-└── pde_projection              (Linear(256, 64))
+├── plddt_projection            (Linear(384, 1850, no bias))
+├── pae_projection              (Linear(256, 64, no bias))
+└── pde_projection              (Linear(256, 64, no bias))
 ```
 
 ### 8.1 Input Processing
@@ -1097,9 +1097,9 @@ Verified directly from `confidence_head.pt` TorchScript:
 
 | Head | Projection | Shape | Bins |
 |------|-----------|-------|------|
-| pLDDT | `Linear(384, 1850)` | `[b, n_tok, 37, 50]` → `[b, n_atoms, 50]` | 50 bins, [0, 1] |
-| PAE | `Linear(256, 64)` | `[b, n_tok, n_tok, 64]` | 64 bins, [0, 32]Å |
-| PDE | `Linear(256, 64)` | `[b, n_tok, n_tok, 64]` | 64 bins, [0, 32]Å |
+| pLDDT | `Linear(384, 1850, no bias)` | `[b, n_tok, 37, 50]` → `[b, n_atoms, 50]` | 50 bins, [0, 1] |
+| PAE | `Linear(256, 64, no bias)` | `[b, n_tok, n_tok, 64]` | 64 bins, [0, 32]Å |
+| PDE | `Linear(256, 64, no bias)` | `[b, n_tok, n_tok, 64]` | 64 bins, [0, 32]Å |
 
 pLDDT: 1850 = **37 atom positions × 50 bins** per token, scattered to atom-level via
 `atom_within_token_index`.
@@ -1262,11 +1262,11 @@ gating); MSA module transitions use **8×** (effective 4× after gating).
 ### 12.2 AdaLayerNorm
 
 ```python
-scale, shift = chunk(Linear(conditioning), 2)
+scale, shift = chunk(Linear(conditioning, no bias), 2)
 x_norm = LayerNorm(x) * (1 + scale) + shift
 ```
 
-Used in diffusion transformer and atom transformer.
+Used in diffusion transformer and atom transformer. The conditioning projection (`lin_s_merged`) has **no bias**.
 
 ### 12.3 Gated Output (bias init -2)
 
@@ -1489,7 +1489,7 @@ computing PTM, clashes, and pLDDT for each sample independently
 
 **Covalent bonds are input features, not predicted outputs.** There is no bond prediction
 head anywhere in the architecture. The `bond_loss_input_proj.pt` module is a simple
-`Linear(1, 512)` that projects a binary bond adjacency matrix (from input constraints)
+`Linear(1, 512, no bias)` that projects a binary bond adjacency matrix (from input constraints)
 into the pair representation. The name "bond_loss" refers to a training-time bond
 reconstruction loss, not an inference prediction.
 
