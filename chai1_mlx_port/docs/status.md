@@ -19,6 +19,7 @@ against the TorchScript `.pt` modules and the graph dumps in `findings/graphs/`.
 - Diffusion conditioning uses structure path (`pair_structure`, `single_structure`) for the initial half of the conditioning concatenation, matching the reference (`token_pair_structure_input_feats`, `token_single_structure_input`).
 - Confidence head uses `single_initial` for pair outer-sum, `single_trunk` for blocks.
 - Diffusion atom encoder includes `LayerNorm` before `token_to_atom_single`.
+- **Memory / diffusion**: `to_atom_cond` is computed in `prepare_cache` (not every denoise step). Triangle multiplication uses internal **feature-chunk size 32** to lower peak `n×n` activations. With `use_custom_kernel=True`, AdaLN uses a **full LN + affine** Metal kernel (`fused_adaln_full`).
 
 ## Bugs fixed
 

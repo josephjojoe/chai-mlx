@@ -1,5 +1,7 @@
 # Weight mapping notes
 
+See also [`status.md`](./status.md) and [`kernel_plan.md`](./kernel_plan.md).
+
 This port tries to keep submodule names close to the upstream Chai-1 TorchScript hierarchy:
 
 - `feature_embedding.*`
