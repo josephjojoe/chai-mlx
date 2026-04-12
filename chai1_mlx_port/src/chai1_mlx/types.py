@@ -32,6 +32,8 @@ class StructureInputs:
     atom_kv_indices: Array | None = None
     block_atom_pair_mask: Array | None = None
     reference_coords: Array | None = None
+    msa_mask: Array | None = None
+    template_input_masks: Array | None = None
 
 
 RawFeatures = dict[str, Array]

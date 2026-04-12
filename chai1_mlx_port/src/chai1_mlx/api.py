@@ -90,8 +90,8 @@ class Chai1MLX(nn.Module):
     def embed_inputs(self, ctx: FeatureContext, *, use_kernel: bool = False) -> EmbeddingOutputs:
         return self.input_embedder(ctx, use_kernel=use_kernel)
 
-    def trunk(self, emb: EmbeddingOutputs, *, recycles: int = 3, msa_mask: mx.array | None = None) -> TrunkOutputs:
-        return self.trunk_module(emb, recycles=recycles, msa_mask=msa_mask)
+    def trunk(self, emb: EmbeddingOutputs, *, recycles: int = 3) -> TrunkOutputs:
+        return self.trunk_module(emb, recycles=recycles)
 
     def prepare_diffusion_cache(
         self,

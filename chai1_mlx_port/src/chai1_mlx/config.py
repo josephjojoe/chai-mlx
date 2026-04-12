@@ -43,8 +43,11 @@ class PairformerConfig:
     single_head_dim: int = 24
     triangle_heads: int = 4
     triangle_head_dim: int = 64
-    single_transition_mult: int = 4
-    pair_transition_mult: int = 4
+    # NOTE: Transition expansion is hard-coded to 2 in PairformerBlock,
+    # matching the TorchScript weight shapes.  These fields are retained
+    # for documentation but are not consumed by any module.
+    single_transition_mult: int = 2
+    pair_transition_mult: int = 2
 
 
 @dataclass(frozen=True)

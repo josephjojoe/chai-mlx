@@ -22,11 +22,23 @@ class RecycleProjection(nn.Module):
 
 
 class TemplateEmbedder(nn.Module):
+    """Process each template independently through shared pairformer blocks,
+    then average valid template outputs before projecting back to pair space.
+
+    TorchScript reference (trunk_forward256.py):
+      1. z = proj_in(pair) + template_feats[:, t]   for each template t
+      2. Run shared pairformer blocks on z with per-template mask
+      3. Stack → layernorm → mask → average over valid templates
+      4. pair += proj_out(averaged)
+    """
+
     def __init__(self, cfg: Chai1Config) -> None:
         super().__init__()
         tdim = cfg.hidden.template_pair
-        self.proj_in_norm = nn.LayerNorm(cfg.templates.max_templates * tdim, eps=cfg.layer_norm_eps)
-        self.proj_in = nn.Linear(cfg.templates.max_templates * tdim, tdim, bias=False)
+        # proj_in takes the pair representation (pair_dim == max_templates * tdim
+        # by coincidence, both 256) and projects to template_pair dim.
+        self.proj_in_norm = nn.LayerNorm(cfg.hidden.token_pair, eps=cfg.layer_norm_eps)
+        self.proj_in = nn.Linear(cfg.hidden.token_pair, tdim, bias=False)
         self.blocks = [
             PairformerBlock(
                 pair_dim=tdim,
@@ -40,13 +52,46 @@ class TemplateEmbedder(nn.Module):
         self.template_layernorm = nn.LayerNorm(tdim, eps=cfg.layer_norm_eps)
         self.proj_out = nn.Linear(tdim, cfg.hidden.token_pair, bias=False)
 
-    def __call__(self, pair: mx.array, templates: mx.array, *, pair_mask: mx.array | None = None) -> mx.array:
+    def __call__(
+        self,
+        pair: mx.array,
+        templates: mx.array,
+        *,
+        template_input_masks: mx.array | None = None,
+        token_pair_mask: mx.array | None = None,
+    ) -> mx.array:
         b, t, n, _, c = templates.shape
-        x = templates.transpose(0, 2, 3, 1, 4).reshape(b, n, n, t * c)
-        x = self.proj_in(self.proj_in_norm(x))
-        for block in self.blocks:
-            x, _ = block(x, None, pair_mask=pair_mask)
-        return pair + self.proj_out(nn.relu(self.template_layernorm(x)))
+        z_base = self.proj_in(self.proj_in_norm(pair))
+
+        if template_input_masks is not None and token_pair_mask is not None:
+            combined_mask = template_input_masks * token_pair_mask[:, None, :, :]
+        elif template_input_masks is not None:
+            combined_mask = template_input_masks
+        else:
+            combined_mask = None
+
+        if combined_mask is not None:
+            has_any = mx.any(combined_mask, axis=(-2, -1))  # (B, T)
+            n_valid = mx.maximum(has_any.astype(mx.float32).sum(axis=1), 1.0)  # (B,)
+        else:
+            n_valid = mx.array(float(t))
+
+        per_template_outputs = []
+        for ti in range(t):
+            z = z_base + templates[:, ti]
+            tmask = combined_mask[:, ti] if combined_mask is not None else None
+            for block in self.blocks:
+                z, _ = block(z, None, pair_mask=tmask)
+            per_template_outputs.append(z)
+
+        stacked = mx.stack(per_template_outputs, axis=1)  # (B, T, N, N, tdim)
+        normed = self.template_layernorm(stacked)
+
+        if combined_mask is not None:
+            normed = normed * combined_mask[..., None]
+
+        averaged = normed.sum(axis=1) / n_valid[:, None, None, None]
+        return pair + self.proj_out(nn.relu(averaged))
 
 
 class OuterProductMean(nn.Module):
@@ -205,13 +250,15 @@ class Trunk(nn.Module):
         emb: EmbeddingOutputs,
         *,
         recycles: int = 3,
-        msa_mask: mx.array | None = None,
     ) -> TrunkOutputs:
         single_init = emb.single_initial
         pair_init = emb.pair_initial
         single = single_init
         pair = pair_init
-        token_pair_mask = emb.structure_inputs.token_pair_mask
+        si = emb.structure_inputs
+        token_pair_mask = si.token_pair_mask
+        msa_mask = si.msa_mask
+        template_input_masks = si.template_input_masks
 
         prev_single = None
         prev_pair = None
@@ -219,7 +266,12 @@ class Trunk(nn.Module):
             if prev_single is not None:
                 single = single_init + self.token_single_recycle_proj(prev_single)
                 pair = pair_init + self.token_pair_recycle_proj(prev_pair)
-            pair = self.template_embedder(pair, emb.template_input, pair_mask=token_pair_mask)
+            pair = self.template_embedder(
+                pair,
+                emb.template_input,
+                template_input_masks=template_input_masks,
+                token_pair_mask=token_pair_mask,
+            )
             pair = self.msa_module(
                 single,
                 pair,

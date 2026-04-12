@@ -207,6 +207,14 @@ def _batch_to_feature_context(
         atom_q_indices=_mx(inputs["block_atom_pair_q_idces"]),
         atom_kv_indices=_mx(inputs["block_atom_pair_kv_idces"]),
         block_atom_pair_mask=_mx(inputs["block_atom_pair_mask"].float()),
+        msa_mask=_mx(inputs["msa_mask"]),
+        template_input_masks=_mx(
+            torch.einsum(
+                "btn,btm->btnm",
+                inputs["template_mask"].float(),
+                inputs["template_mask"].float(),
+            )
+        ),
     )
 
     B = token_exists.shape[0]

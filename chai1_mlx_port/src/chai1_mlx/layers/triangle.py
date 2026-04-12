@@ -47,16 +47,14 @@ class TriangleMultiplication(nn.Module):
         """Memory-efficient triangle multiplication by chunking over the feature dimension.
 
         Instead of materializing full [b, n, n, 4*d] projections, we process
-        ``chunk_size`` channels at a time and accumulate the einsum contractions
-        incrementally.  This reduces peak intermediate memory from ~11× to ~3-4×
-        the pair tensor footprint.
+        ``chunk_size`` channels at a time.  The einsum ``bikd,bjkd->bijd``
+        treats d as a free index (not contracted), so each chunk produces an
+        independent slice of the output that must be *concatenated*, not summed.
+        Peak intermediate memory drops from ~11× to ~3-4× the pair tensor.
         """
         d = z.shape[-1]
         z_normed = self.layernorm_z_in(z)
 
-        # Weight matrices: merged_linear_p [4d, d], merged_linear_g [5d, d].
-        # Rows [0:d]=a1, [d:2d]=b1, [2d:3d]=a2, [3d:4d]=b2 for p.
-        # Rows [0:d]=ga1, [d:2d]=gb1, [2d:3d]=ga2, [3d:4d]=gb2, [4d:5d]=g_out for g.
         w_p = self.merged_linear_p.weight  # [4d, d]
         w_g = self.merged_linear_g.weight  # [5d, d]
 
@@ -66,8 +64,8 @@ class TriangleMultiplication(nn.Module):
         else:
             row_mask = col_mask = None
 
-        x_out = mx.zeros(z.shape, dtype=z.dtype)
-        x_in = mx.zeros(z.shape, dtype=z.dtype)
+        out_chunks: list[mx.array] = []
+        in_chunks: list[mx.array] = []
 
         for c in range(0, d, chunk_size):
             c_end = min(c + chunk_size, d)
@@ -83,10 +81,12 @@ class TriangleMultiplication(nn.Module):
                 a2 = a2 * col_mask
                 b2 = b2 * col_mask
 
-            x_out = x_out + mx.einsum("bikd,bjkd->bijd", a1, b1)
-            x_in = x_in + mx.einsum("bkid,bkjd->bijd", a2, b2)
+            out_chunks.append(mx.einsum("bikd,bjkd->bijd", a1, b1))
+            in_chunks.append(mx.einsum("bkid,bkjd->bijd", a2, b2))
+            mx.eval(out_chunks[-1], in_chunks[-1])
 
-            mx.eval(x_out, x_in)
+        x_out = mx.concatenate(out_chunks, axis=-1)
+        x_in = mx.concatenate(in_chunks, axis=-1)
 
         g_out = sigmoid(z_normed @ w_g[4 * d:].T)
         out = self.linear_z_out(self.layernorm_out(x_out) + self.layernorm_in(x_in))
