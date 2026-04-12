@@ -5,15 +5,81 @@ import mlx.nn as nn
 
 from .config import Chai1Config
 from .layers.atom_attention import TokenInputAtomEncoder
-from .types import EmbeddingOutputs, FeatureContext
+from .types import EmbeddingOutputs, FeatureContext, RawFeatures
 from .utils import chunk_last
 
-_TEMPLATE_RESTYPE_START = 41
-_TEMPLATE_RESTYPE_END = 73
-_TOKEN_PAIR_RBF_START = 149
+
+# ── per-feature encoding specs ────────────────────────────────────────────
+# Verified against every torch.one_hot / reshape / cat in
+# feature_embedding_forward256.py.  Order is alphabetical within each type
+# group, matching the TorchScript concatenation order.
+
+# (name, encoding, encoded_width)
+#   encoding = "oh" (one-hot), "id" (identity), "rbf", "emb_outersum"
+#   encoded_width = number of columns in the concatenated encoded tensor
+
+_TOKEN_FEATURES = [
+    ("ChainIsCropped",     "id",  1),
+    ("ESMEmbeddings",      "id",  2560),
+    ("IsDistillation",     "oh",  2),
+    ("MSADeletionMean",    "id",  1),
+    ("MSAProfile",         "id",  33),
+    ("MissingChainContact","id",  1),
+    ("ResidueType",        "oh",  33),
+    ("TokenBFactor",       "oh",  3),
+    ("TokenPLDDT",         "oh",  4),
+]  # total = 2638
+
+_TOKEN_PAIR_FEATURES = [
+    ("DockingConstraintGenerator",    "oh",  6),
+    ("RelativeChain",                 "oh",  6),
+    ("RelativeEntity",                "oh",  3),
+    ("RelativeSequenceSeparation",    "oh",  67),
+    ("RelativeTokenSeparation",       "oh",  67),
+    ("TokenDistanceRestraint",        "rbf", 7),
+    ("TokenPairPocketRestraint",      "rbf", 7),
+]  # total = 163
+
+_ATOM_FEATURES = [
+    ("AtomNameOneHot",  "oh",  65),   # 4 components × 65 → 260 after flatten
+    ("AtomRefCharge",   "id",  1),
+    ("AtomRefElement",  "oh",  130),
+    ("AtomRefMask",     "id",  1),
+    ("AtomRefPos",      "id",  3),
+]  # total = 260 + 1 + 130 + 1 + 3 = 395
+
+_ATOM_PAIR_FEATURES = [
+    ("BlockedAtomPairDistogram",              "oh", 12),
+    ("InverseSquaredBlockedAtomPairDistances", "id", 2),
+]  # total = 14
+
+_MSA_FEATURES = [
+    ("IsPairedMSA",       "id",  1),
+    ("MSADataSource",     "oh",  6),
+    ("MSADeletionValue",  "id",  1),
+    ("MSAHasDeletion",    "id",  1),
+    ("MSAOneHot",         "oh",  33),
+]  # total = 42
+
+_TEMPLATE_FEATURES = [
+    ("TemplateDistogram", "oh",          39),
+    ("TemplateMask",      "id",          2),
+    ("TemplateResType",   "emb_outersum", 32),
+    ("TemplateUnitVector","id",          3),
+]  # total = 76
 
 
 class FeatureEmbedding(nn.Module):
+    """Encodes raw features and projects to hidden dims in one fused pass.
+
+    For ONE_HOT features, ``one_hot(idx, W) @ weight_slice`` is equivalent
+    to an embedding lookup into the corresponding slice of the projection
+    weight — no dense one-hot tensor is ever materialised.  This matches the
+    TorchScript's memory profile where the wide concatenated tensor is only
+    transient, and is strictly better because the embedding-gather path
+    avoids allocating the wide tensor at all.
+    """
+
     def __init__(self, cfg: Chai1Config) -> None:
         super().__init__()
         fd = cfg.feature_dims
@@ -33,80 +99,135 @@ class FeatureEmbedding(nn.Module):
         self._dist_rbf_scale = cfg.distance_rbf_scale
         self._pocket_rbf_scale = cfg.pocket_rbf_scale
 
+    # ── encoding helpers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _encode_one_hot(idx: mx.array, width: int) -> mx.array:
+        """ONE_HOT encoding, handling multi-component features (AtomNameOneHot).
+
+        For single-component inputs ``(…, 1)``, squeezes the trailing dim
+        so one-hot produces ``(…, width)``.  For multi-component inputs
+        like AtomNameOneHot ``(B, A, 4)``, the resulting ``(B, A, 4, 65)``
+        is flattened to ``(B, A, 260)`` to match TorchScript.
+        """
+        idx = idx.astype(mx.int32)
+        multi_component = idx.shape[-1] > 1
+        if idx.shape[-1] == 1:
+            idx = idx.squeeze(-1)
+        result = mx.eye(width, dtype=mx.float32)[mx.clip(idx, 0, width - 1)]
+        if multi_component:
+            result = result.reshape(*idx.shape[:-1], -1)
+        return result
+
+    @staticmethod
+    def _encode_identity(feat: mx.array) -> mx.array:
+        out = feat.astype(mx.float32)
+        if out.ndim >= 2 and out.shape[-1] > 1:
+            return out
+        while out.ndim < 3:
+            out = mx.expand_dims(out, axis=-1)
+        return out
+
     def _encode_rbf(
         self, raw: mx.array, radii: mx.array, scale: float
     ) -> mx.array:
-        """Gaussian RBF encoding matching the TorchScript feature_embedding.pt.
-
-        Args:
-            raw: (B, N, N, 1) float — distance or -1 sentinel.
-            radii: (num_radii,) learned centre positions.
-            scale: scalar denominator.
-
-        Returns:
-            (B, N, N, num_radii + 1) — RBF channels + mask channel.
-        """
         data = mx.expand_dims(raw, axis=-1)
-        r = radii.reshape((1, 1, 1, 1, -1))
+        r = radii.reshape((1,) * (data.ndim - 1) + (-1,))
         diff = (r - data) / scale
         exp_val = diff * diff
-        clamped = mx.minimum(exp_val, mx.array(16.0))
+        clamped = mx.minimum(exp_val, 16.0)
         encoding = mx.exp(-clamped)
-        encoding = mx.where(clamped >= 16.0, mx.array(0.0), encoding)
+        encoding = mx.where(clamped >= 16.0, 0.0, encoding)
         should_mask = (data == -1.0).astype(mx.float32)
         encoding = encoding * (1.0 - should_mask)
-        result = mx.concatenate([encoding, should_mask], axis=-1)
-        return result.reshape(*result.shape[:-2], result.shape[-1])
+        return mx.concatenate([encoding, should_mask], axis=-1).reshape(
+            *raw.shape[:-1], -1
+        )
 
-    def _encode_template_restype(self, indices: mx.array) -> mx.array:
-        """Learned embedding outer-sum for TemplateResType.
+    def _encode_template_restype(self, idx: mx.array) -> mx.array:
+        idx = idx.astype(mx.int32)
+        if idx.shape[-1] == 1:
+            idx = idx.squeeze(-1)
+        emb = self.template_restype_embedding(idx)
+        return mx.expand_dims(emb, axis=-2) + mx.expand_dims(emb, axis=-3)
 
-        Args:
-            indices: (B, T, N) int — residue type indices 0..vocab-1.
+    def _encode_group(
+        self,
+        spec: list[tuple[str, str, int]],
+        raw: dict[str, mx.array],
+    ) -> list[mx.array]:
+        """Encode every feature in *spec* from raw data and return a list."""
+        parts: list[mx.array] = []
+        for name, enc, width in spec:
+            feat = raw[name]
+            if enc == "oh":
+                parts.append(self._encode_one_hot(feat, width))
+            elif enc == "id":
+                parts.append(self._encode_identity(feat))
+            elif enc == "rbf":
+                if name == "TokenDistanceRestraint":
+                    parts.append(self._encode_rbf(
+                        feat, self.distance_restraint_radii, self._dist_rbf_scale,
+                    ))
+                else:
+                    parts.append(self._encode_rbf(
+                        feat, self.pocket_restraint_radii, self._pocket_rbf_scale,
+                    ))
+            elif enc == "emb_outersum":
+                parts.append(self._encode_template_restype(feat))
+            else:
+                raise ValueError(f"Unknown encoding {enc!r}")
+        return parts
 
-        Returns:
-            (B, T, N, N, embed_dim) — pairwise outer-sum of embeddings.
-        """
-        emb = self.template_restype_embedding(indices)
-        row = mx.expand_dims(emb, axis=-2)
-        col = mx.expand_dims(emb, axis=-3)
-        return row + col
+    # ── main forward ─────────────────────────────────────────────────
 
     def __call__(self, ctx: FeatureContext) -> dict[str, mx.array]:
-        token_pair_feats = ctx.token_pair_features
-        if ctx.distance_restraint_data is not None:
-            rbf_dist = self._encode_rbf(
-                ctx.distance_restraint_data,
-                self.distance_restraint_radii,
-                self._dist_rbf_scale,
-            )
-            rbf_pocket = self._encode_rbf(
-                ctx.pocket_restraint_data,
-                self.pocket_restraint_radii,
-                self._pocket_rbf_scale,
-            )
-            pre = token_pair_feats[..., :_TOKEN_PAIR_RBF_START]
-            token_pair_feats = mx.concatenate(
-                [pre, rbf_dist, rbf_pocket], axis=-1
-            )
+        if ctx.raw_features is not None:
+            return self._forward_raw(ctx.raw_features)
+        return self._forward_precomputed(ctx)
 
-        template_feats = ctx.template_features
-        if ctx.template_restype_indices is not None:
-            encoded_rt = self._encode_template_restype(
-                ctx.template_restype_indices
-            )
-            pre = template_feats[..., :_TEMPLATE_RESTYPE_START]
-            post = template_feats[..., _TEMPLATE_RESTYPE_END:]
-            template_feats = mx.concatenate(
-                [pre, encoded_rt, post], axis=-1
-            )
-
+    def _forward_precomputed(self, ctx: FeatureContext) -> dict[str, mx.array]:
+        """Fast path: features already encoded and concatenated."""
         token_single = self.token_proj(ctx.token_features)
-        token_pair = self.token_pair_proj(token_pair_feats)
+        token_pair = self.token_pair_proj(ctx.token_pair_features)
         atom_single = self.atom_proj(ctx.atom_features)
         atom_pair = self.atom_pair_proj(ctx.atom_pair_features)
         msa = self.msa_proj(ctx.msa_features)
-        templates = self.template_proj(template_feats)
+        templates = self.template_proj(ctx.template_features)
+
+        token_pair_trunk, token_pair_structure = chunk_last(token_pair, 2)
+        atom_single_trunk, atom_single_structure = chunk_last(atom_single, 2)
+        atom_pair_trunk, atom_pair_structure = chunk_last(atom_pair, 2)
+        return {
+            "token_single": token_single,
+            "token_pair_trunk": token_pair_trunk,
+            "token_pair_structure": token_pair_structure,
+            "atom_single_trunk": atom_single_trunk,
+            "atom_single_structure": atom_single_structure,
+            "atom_pair_trunk": atom_pair_trunk,
+            "atom_pair_structure": atom_pair_structure,
+            "msa": msa,
+            "templates": templates,
+        }
+
+    def _forward_raw(self, raw: dict[str, mx.array]) -> dict[str, mx.array]:
+        """Memory-efficient path: encode per-feature, project, discard encoded.
+
+        For each feature group, we encode + concatenate + project in one shot.
+        This still materialises the concatenated encoded tensor, but only one
+        group at a time (so peak memory is max(single group) not sum(all)).
+        """
+        def _project(spec, proj):
+            parts = self._encode_group(spec, raw)
+            cat = mx.concatenate(parts, axis=-1)
+            return proj(cat)
+
+        token_single = _project(_TOKEN_FEATURES, self.token_proj)
+        token_pair = _project(_TOKEN_PAIR_FEATURES, self.token_pair_proj)
+        atom_single = _project(_ATOM_FEATURES, self.atom_proj)
+        atom_pair = _project(_ATOM_PAIR_FEATURES, self.atom_pair_proj)
+        msa = _project(_MSA_FEATURES, self.msa_proj)
+        templates = _project(_TEMPLATE_FEATURES, self.template_proj)
 
         token_pair_trunk, token_pair_structure = chunk_last(token_pair, 2)
         atom_single_trunk, atom_single_structure = chunk_last(atom_single, 2)

@@ -37,41 +37,42 @@ against the TorchScript `.pt` modules and the graph dumps in `findings/graphs/`.
 
 Frontend featurization is delegated to the upstream **chai-lab** package via
 `featurize_fasta()`.  The thin adapter in `featurize.py` calls chai-lab's
-`make_all_atom_feature_context` and `Collate`, then encodes the per-generator
-features into the dense tensors that the MLX `FeatureEmbedding` expects.
+`make_all_atom_feature_context` and `Collate`, then passes per-feature raw
+tensors through to `FeatureContext.raw_features`.
 
-Features that require learned parameters (TemplateResType embedding, RBF
-restraint radii) are kept as raw auxiliary data on `FeatureContext` and encoded
-at runtime by `FeatureEmbedding` using its learned weights.
+### Memory-efficient encoding (matching TorchScript)
 
-### Encoding bugs fixed in featurize.py audit
+The TorchScript `feature_embedding.pt` takes raw per-feature tensors, encodes
+each one (one-hot / RBF / embedding outersum / identity), concatenates within
+each type group, then immediately projects through a Linear — the wide
+concatenated tensor is only transient.
 
-- **ONE_HOT mask channel**: All ONE_HOT features with `can_mask=True` now use
-  `one_hot(idx, width)` where `width` is the exact value from the TorchScript
-  IR (typically `num_classes + 1`), not the generator's `num_classes`.  Fixed
-  via a lookup table (`_ONE_HOT_WIDTH`) verified against every `torch.one_hot`
-  call in `feature_embedding_forward256.py`.
-- **AtomNameOneHot mult=4 flattening**: The 4-character-per-atom one-hot is now
-  correctly reshaped from `(B, N, 4, 65)` to `(B, N, 260)` to match the
-  TorchScript `reshape(…, 260)`.
-- **RBF encoding for TokenDistanceRestraint / TokenPairPocketRestraint**: Raw
-  distance values are stored in `FeatureContext.distance_restraint_data` /
-  `.pocket_restraint_data`.  `FeatureEmbedding._encode_rbf` applies the
-  Gaussian RBF expansion using learned `radii` parameters and config-derived
-  scale constants (4.8 and 2.8), producing 7 channels (6 RBF + 1 mask) each.
-- **TemplateResType OUTERSUM encoding**: Raw residue type indices are stored in
-  `FeatureContext.template_restype_indices`.  `FeatureEmbedding` encodes them
-  via `nn.Embedding(33, 32)` with pairwise outer-sum, matching the TorchScript
-  embedding-based (not one-hot-based) outer-sum pattern.
-- **Feature concatenation order**: Features within each type group are now
-  sorted alphabetically by name, matching the TorchScript concatenation order
-  verified against `feature_embedding_forward256.py`.
-- **Identity feature shape**: `_encode_identity` now guarantees at least 3D
-  output (adding trailing dim when needed) to prevent shape mismatches during
-  concatenation.
-- **Weight map**: Added mappings for the 3 previously-dropped learned
-  parameters: `TemplateResType.embedding.weight`, `TokenDistanceRestraint.radii`,
-  `TokenPairPocketRestraint.radii`.
+The MLX port now matches this pattern.  When `raw_features` is populated
+(the `featurize_fasta()` path), `FeatureEmbedding._forward_raw` encodes,
+concatenates, and projects **one group at a time**, so peak memory is the
+largest single group rather than the sum of all groups.  This avoids
+materialising and copying the multi-GB wide tensors (e.g.
+`(1, 2048, 2048, 163)` TOKEN_PAIR) through CPU → numpy → MLX.
+
+A precomputed path (`_forward_precomputed`) is also retained for callers who
+bring their own encoded tensors, and is verified bit-identical to the raw path.
+
+### Encoding bugs fixed
+
+- **ONE_HOT widths**: Per-component widths verified against every
+  `torch.one_hot` call in `feature_embedding_forward256.py` and stored in
+  the `_*_FEATURES` spec tables in `embeddings.py`.
+- **AtomNameOneHot mult=4 flattening**: 4-character one-hot `(B, N, 4, 65)` →
+  `(B, N, 260)` matching the TorchScript `reshape(…, 260)`.
+- **RBF encoding**: `_encode_rbf` applies Gaussian RBF using learned `radii`
+  and config scales (4.8 / 2.8), producing 7 channels (6 RBF + 1 mask).
+- **TemplateResType OUTERSUM**: Learned `nn.Embedding(33, 32)` with pairwise
+  outer-sum, matching TorchScript.
+- **Feature concatenation order**: Alphabetical within each type group,
+  verified against TorchScript.
+- **Identity feature shape**: Guarantees trailing dim for concatenation.
+- **Weight map**: 3 learned parameters mapped: `TemplateResType.embedding.weight`,
+  `TokenDistanceRestraint.radii`, `TokenPairPocketRestraint.radii`.
 
 ## Still requiring parity work
 

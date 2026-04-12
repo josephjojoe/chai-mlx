@@ -34,6 +34,16 @@ class StructureInputs:
     reference_coords: Array | None = None
 
 
+RawFeatures = dict[str, Array]
+"""Per-feature-name raw tensors (indices/floats) before encoding.
+
+When present on a ``FeatureContext``, ``FeatureEmbedding`` uses the
+memory-efficient path that encodes, concatenates, and projects each
+feature group without materialising the full wide encoded tensor
+across all groups simultaneously.
+"""
+
+
 @dataclass
 class FeatureContext:
     token_features: Array
@@ -44,9 +54,7 @@ class FeatureContext:
     template_features: Array
     structure_inputs: StructureInputs
     bond_adjacency: Array | None = None
-    template_restype_indices: Array | None = None
-    distance_restraint_data: Array | None = None
-    pocket_restraint_data: Array | None = None
+    raw_features: RawFeatures | None = None
 
 
 @dataclass

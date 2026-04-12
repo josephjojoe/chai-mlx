@@ -7,6 +7,12 @@ already have encoded features).
 correctness, then converts the batch dict into a ``FeatureContext`` that the
 MLX model consumes.  This avoids reimplementing the 30+ feature generators
 and their encoding quirks.
+
+When ``featurize_fasta()`` is used, raw per-feature tensors are stored as
+``FeatureContext.raw_features`` so that ``FeatureEmbedding`` can encode,
+concatenate, and project each feature group independently — avoiding the
+multi-GB materialisation of a single wide encoded tensor that the
+pre-computed path requires.
 """
 
 from __future__ import annotations
@@ -88,16 +94,11 @@ def featurize_fasta(
 ) -> FeatureContext:
     """Full FASTA-to-FeatureContext entry point using chai-lab's pipeline.
 
-    This calls the upstream chai-lab featurization (parsing, tokenization,
-    MSA/template/ESM loading, feature generation, and collation) and then
-    converts the resulting batch dict into the ``FeatureContext`` that the
-    MLX model consumes.
-
-    Requires ``chai-lab`` and ``torch`` to be installed.
+    Requires ``chai-lab`` and ``torch`` to be installed.  Returns a
+    ``FeatureContext`` with ``raw_features`` populated — the heavy-duty
+    encoding + projection is deferred to ``FeatureEmbedding.__call__``.
     """
     import tempfile
-
-    import torch
 
     fasta_file = Path(fasta_file)
     if output_dir is None:
@@ -138,34 +139,6 @@ def featurize_fasta(
 
 
 # ---------------------------------------------------------------------------
-# One-hot widths from the TorchScript feature_embedding.pt IR.
-# These are the exact second argument to torch.one_hot() in forward_256.
-# For can_mask=True features this is num_classes + 1 (except MSADataSource
-# whose num_classes already includes the mask class).
-# ---------------------------------------------------------------------------
-_ONE_HOT_WIDTH: dict[str, int] = {
-    "AtomNameOneHot": 65,
-    "AtomRefElement": 130,
-    "BlockedAtomPairDistogram": 12,
-    "DockingConstraintGenerator": 6,
-    "IsDistillation": 2,
-    "MSADataSource": 6,
-    "MSAOneHot": 33,
-    "RelativeChain": 6,
-    "RelativeEntity": 3,
-    "RelativeSequenceSeparation": 67,
-    "RelativeTokenSeparation": 67,
-    "ResidueType": 33,
-    "TemplateDistogram": 39,
-    "TokenBFactor": 3,
-    "TokenPLDDT": 4,
-}
-
-_RBF_FEATURES = frozenset({"TokenDistanceRestraint", "TokenPairPocketRestraint"})
-_OUTERSUM_FEATURES = frozenset({"TemplateResType"})
-
-
-# ---------------------------------------------------------------------------
 # Batch-dict → FeatureContext conversion
 # ---------------------------------------------------------------------------
 
@@ -175,126 +148,30 @@ def _batch_to_feature_context(
 ) -> FeatureContext:
     """Convert a chai-lab batch dict into a ``FeatureContext``.
 
-    The encoding applied here matches the TorchScript ``feature_embedding.pt``
-    internal encoding for all features that do NOT require learned parameters.
-    Features with learned parameters (TemplateResType embedding, RBF restraint
-    radii) are left as raw data in auxiliary fields and encoded at runtime
-    by ``FeatureEmbedding``.
+    Rather than encoding and concatenating into wide dense tensors on the
+    CPU, we simply convert each raw feature tensor to MLX and store them
+    in ``raw_features``.  The ``FeatureEmbedding`` will encode + project
+    one group at a time, limiting peak memory to the largest single group
+    rather than the sum of all groups.
+
+    The wide ``*_features`` fields are set to zero-sized placeholders since
+    they are unused when ``raw_features`` is present.
     """
     import torch
-    import torch.nn.functional as F
 
     import mlx.core as mx
 
-    from chai_lab.data.features.feature_type import FeatureType
-    from chai_lab.data.features.generators.base import EncodingType
     from chai_lab.chai1 import feature_generators
 
     features = batch["features"]
     inputs = batch["inputs"]
 
-    # -- helpers --------------------------------------------------------
-
-    def _encode_one_hot(
-        name: str, feat: torch.Tensor, gen: Any,
-    ) -> torch.Tensor:
-        width = _ONE_HOT_WIDTH[name]
-        idx = feat.long()
-        if idx.shape[-1] == 1:
-            idx = idx.squeeze(-1)
-        result = F.one_hot(idx.clamp(0, width - 1), width).float()
-        if result.ndim > feat.ndim:
-            result = result.reshape(*result.shape[: feat.ndim - 1], -1)
-        return result
-
-    def _encode_identity(feat: torch.Tensor) -> torch.Tensor:
-        out = feat.float()
-        if out.ndim >= 2 and out.shape[-1] != 1:
-            return out
-        if out.ndim < 3:
-            while out.ndim < 3:
-                out = out.unsqueeze(-1)
-        return out
-
-    def _encode_feature(
-        name: str, gen: Any, feat: torch.Tensor,
-    ) -> torch.Tensor:
-        if gen.encoding_ty == EncodingType.ONE_HOT:
-            return _encode_one_hot(name, feat, gen)
-        if gen.encoding_ty in (EncodingType.IDENTITY, EncodingType.ESM):
-            return _encode_identity(feat)
-        if gen.encoding_ty == EncodingType.RBF:
-            return _encode_identity(feat)
-        return _encode_identity(feat)
-
-    # -- group generators by FeatureType, sorted alphabetically ---------
-    # The TorchScript concatenates features in alphabetical order within
-    # each type group (verified against feature_embedding_forward256.py).
-
-    groups: dict[FeatureType, list[tuple[str, Any]]] = {}
-    for name, gen in feature_generators.items():
-        groups.setdefault(gen.ty, []).append((name, gen))
-    for ft in groups:
-        groups[ft].sort(key=lambda x: x[0])
-
-    # -- stash raw data for features encoded by FeatureEmbedding --------
-
-    template_restype_raw = None
-    distance_restraint_raw = None
-    pocket_restraint_raw = None
-
-    def _concat_for_type(
-        ft: FeatureType, target_dim: int,
-    ) -> torch.Tensor:
-        nonlocal template_restype_raw, distance_restraint_raw, pocket_restraint_raw
-
-        parts: list[torch.Tensor] = []
-        for name, gen in groups.get(ft, []):
-            if name in _OUTERSUM_FEATURES:
-                template_restype_raw = features[name].squeeze(-1).long()
-                placeholder = torch.zeros(
-                    *features[name].shape[:-1],
-                    features[name].shape[-2],
-                    32,
-                    dtype=torch.float32,
-                )
-                parts.append(placeholder)
-                continue
-            if name in _RBF_FEATURES:
-                raw = features[name].float()
-                if raw.shape[-1] == 1:
-                    pass
-                if name == "TokenDistanceRestraint":
-                    distance_restraint_raw = raw
-                else:
-                    pocket_restraint_raw = raw
-                placeholder = torch.zeros(
-                    *raw.shape[:-1], 7, dtype=torch.float32,
-                )
-                parts.append(placeholder)
-                continue
-            encoded = _encode_feature(name, gen, features[name])
-            parts.append(encoded)
-        if not parts:
-            raise RuntimeError(f"No features found for {ft}")
-        cat = torch.cat(parts, dim=-1)
-        if cat.shape[-1] != target_dim:
-            raise RuntimeError(
-                f"{ft.value} feature dim {cat.shape[-1]} != target {target_dim}"
-            )
-        return cat
-
-    token_feat = _concat_for_type(FeatureType.TOKEN, 2638)
-    pair_feat = _concat_for_type(FeatureType.TOKEN_PAIR, 163)
-    atom_feat = _concat_for_type(FeatureType.ATOM, 395)
-    atom_pair_feat = _concat_for_type(FeatureType.ATOM_PAIR, 14)
-    msa_feat = _concat_for_type(FeatureType.MSA, 42)
-    tmpl_feat = _concat_for_type(FeatureType.TEMPLATES, 76)
-
-    # -- convert to MLX -------------------------------------------------
-
     def _mx(t: torch.Tensor) -> mx.array:
         return mx.array(t.detach().cpu().numpy())
+
+    raw: dict[str, mx.array] = {}
+    for name in feature_generators:
+        raw[name] = _mx(features[name])
 
     # -- build StructureInputs ------------------------------------------
 
@@ -332,22 +209,18 @@ def _batch_to_feature_context(
         block_atom_pair_mask=_mx(inputs["block_atom_pair_mask"].float()),
     )
 
+    B = token_exists.shape[0]
+    N = token_exists.shape[1]
+    empty = mx.zeros((B, 0))
+
     return FeatureContext(
-        token_features=_mx(token_feat),
-        token_pair_features=_mx(pair_feat),
-        atom_features=_mx(atom_feat),
-        atom_pair_features=_mx(atom_pair_feat),
-        msa_features=_mx(msa_feat),
-        template_features=_mx(tmpl_feat),
+        token_features=empty,
+        token_pair_features=empty,
+        atom_features=empty,
+        atom_pair_features=empty,
+        msa_features=empty,
+        template_features=empty,
         structure_inputs=structure,
         bond_adjacency=_mx(bond_features),
-        template_restype_indices=(
-            _mx(template_restype_raw) if template_restype_raw is not None else None
-        ),
-        distance_restraint_data=(
-            _mx(distance_restraint_raw) if distance_restraint_raw is not None else None
-        ),
-        pocket_restraint_data=(
-            _mx(pocket_restraint_raw) if pocket_restraint_raw is not None else None
-        ),
+        raw_features=raw,
     )
