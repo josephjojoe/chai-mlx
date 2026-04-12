@@ -23,6 +23,12 @@ against the TorchScript `.pt` modules and the graph dumps in `findings/graphs/`.
 
 ## Bugs fixed
 
+- **Weight reshape for einsum-based layers**: TorchScript stores several attention weights as multi-dimensional tensors consumed via `torch.einsum`, while the MLX port uses standard `nn.Linear` (2D). The conversion scripts now reshape these correctly:
+  - `input2qkvg.weight`: [in, 4, H, D] → [4\*H\*D, in] (96 trunk + 8 confidence = 104 weights)
+  - `output_proj.weight` (AttentionPairBias): [H, D, out] → [out, H\*D] (104 weights, same blocks)
+  - `to_qkv.weight` (atom attention): [3, H, D, in] → [3\*H\*D, in] (9 weights across token embedder, diffusion encoder, diffusion decoder)
+  - Total: 113 weight tensors. Without this fix the model could not load or would produce incorrect outputs.
+- **Template embedder missing ReLU**: TorchScript `proj_out` is `Sequential(ReLU[0], Linear[1])`, but the MLX code omitted the ReLU before the final linear projection. Added `nn.relu()` in `TemplateEmbedder.__call__`.
 - **Diffusion conditioning initial representations**: Was using trunk-path initial (`pair_initial`, `single_initial`) instead of structure-path (`pair_structure`, `single_structure`). This would have corrupted `z_cond` and `s_cond` throughout the entire diffusion loop.
 - **OPM einsum**: Was contracting both depth and inner dims (`"bmiae,bmjbe->bijab"` → 64-dim), instead of only depth (`"bmige,bmjgf->bijgef"` → 512-dim). Would crash at the reshape to 512. Mask normalization broadcast also corrected (3 trailing dims instead of 2).
 - **Second-order correction guard**: Added `sigma_next != 0` check before the Heun correction, matching the reference to avoid division by zero.
@@ -43,7 +49,7 @@ during parity testing.
 
 ## Still requiring parity work
 
-- Exact TorchScript-to-MLX weight-name alignment and verified loading.
+- Verified loading with real weights (name mapping + einsum reshape logic is in place but untested end-to-end).
 - Exhaustive per-layer tensor parity checks against the reference runtime.
 - Verify that the feature encoding in `featurize.py:_batch_to_feature_context`
   matches the TorchScript `feature_embedding.pt` internal encoding.

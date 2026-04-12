@@ -49,7 +49,7 @@ def convert_one_component(
     """
     from safetensors.numpy import save_file
 
-    from chai1_mlx.weights.name_map import build_rename_map
+    from chai1_mlx.weights.name_map import build_rename_map, reshape_einsum_weight
 
     print(f"\n{'='*60}")
     print(f"  Processing: {component}")
@@ -74,13 +74,19 @@ def convert_one_component(
     total_bytes = sum(v.nbytes for v in raw.values())
     print(f"  Total size: {total_bytes / 1024**2:.1f} MB")
 
-    # Step 2: Apply name mapping
+    # Step 2: Apply name mapping and reshape einsum weights
     rmap = build_rename_map(component)
     renamed: dict[str, np.ndarray] = {}
     unmapped: list[str] = []
+    reshaped_count = 0
     for old_key, arr in raw.items():
         new_key = rmap.get(old_key)
         if new_key is not None:
+            orig_shape = arr.shape
+            arr = reshape_einsum_weight(new_key, arr)
+            if arr.shape != orig_shape:
+                reshaped_count += 1
+                print(f"    Reshaped {new_key}: {orig_shape} -> {arr.shape}")
             renamed[new_key] = arr
         else:
             unmapped.append(old_key)
@@ -98,6 +104,8 @@ def convert_one_component(
 
     mapped_keys = sorted(renamed.keys())
     print(f"  Mapped {len(mapped_keys)} parameters to MLX names")
+    if reshaped_count:
+        print(f"  Reshaped {reshaped_count} einsum weights to nn.Linear format")
 
     # Step 3: Write safetensors
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -46,7 +46,7 @@ class TemplateEmbedder(nn.Module):
         x = self.proj_in(self.proj_in_norm(x))
         for block in self.blocks:
             x, _ = block(x, None, pair_mask=pair_mask)
-        return pair + self.proj_out(self.template_layernorm(x))
+        return pair + self.proj_out(nn.relu(self.template_layernorm(x)))
 
 
 class OuterProductMean(nn.Module):

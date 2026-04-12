@@ -21,7 +21,7 @@ from typing import Iterable
 import numpy as np
 
 from ..config import Chai1Config
-from .name_map import build_rename_map, rename_state_dict
+from .name_map import build_rename_map, rename_state_dict, reshape_einsum_weight
 
 _COMPONENT_ORDER = [
     "feature_embedding",
@@ -82,7 +82,7 @@ def convert_npz_dir_to_safetensors(
 
         for k, v in renamed.items():
             if not k.startswith("__unmapped__."):
-                merged[k] = v
+                merged[k] = reshape_einsum_weight(k, v)
 
     total_bytes = sum(v.nbytes for v in merged.values())
 

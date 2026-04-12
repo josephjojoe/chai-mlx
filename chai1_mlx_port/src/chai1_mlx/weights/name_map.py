@@ -390,6 +390,48 @@ def build_full_rename_map() -> dict[str, str]:
     return full
 
 
+def reshape_einsum_weight(mlx_key: str, arr: "np.ndarray") -> "np.ndarray":
+    """Reshape multi-dimensional einsum weights to 2D nn.Linear format.
+
+    TorchScript stores several attention weights as multi-dimensional tensors
+    consumed via ``torch.einsum``, while the MLX port uses standard
+    ``nn.Linear`` (2D weight matrices).  This function converts the former
+    to the latter, preserving numerical equivalence.
+
+    Returns the array unchanged when no reshape is needed (ndim <= 2 or
+    not a recognized einsum weight).
+    """
+    if arr.ndim <= 2:
+        return arr
+
+    # AttentionPairBias.input2qkvg: [in_dim, 4, H, D] → [4*H*D, in_dim]
+    # Trunk einsum:      "dfa,aebc->edbfc"  (a = contracted / in_dim, first)
+    # Confidence einsum: "fae,ebcd->bfcad"  (e = contracted / in_dim, first)
+    if "input2qkvg.weight" in mlx_key:
+        in_dim = arr.shape[0]
+        return arr.reshape(in_dim, -1).T
+
+    # AttentionPairBias.output_proj: [H, D, out_dim] → [out_dim, H*D]
+    # Trunk einsum:      "ecbd,cda->eba"  (c,d contracted; a = out_dim, last)
+    # Confidence einsum: "cdae,deb->cab"  (d,e contracted; b = out_dim, last)
+    if "attention_pair_bias.output_proj.weight" in mlx_key:
+        out_dim = arr.shape[-1]
+        return arr.reshape(-1, out_dim).T
+
+    # LocalAttentionPairBiasBlock.to_qkv: [3, H, D, in_dim] → [3*H*D, in_dim]
+    # Einsum: "eda,fbca->febdc"  (a = contracted / in_dim, last)
+    if ".attn_blocks." in mlx_key and ".to_qkv.weight" in mlx_key:
+        in_dim = arr.shape[-1]
+        return arr.reshape(-1, in_dim)
+
+    import warnings
+    warnings.warn(
+        f"Unexpected >2D weight at {mlx_key} with shape {arr.shape}; "
+        f"leaving as-is (may cause shape mismatch at load time)"
+    )
+    return arr
+
+
 def rename_state_dict(
     state: dict[str, object], rename_map: dict[str, str],
 ) -> dict[str, object]:
