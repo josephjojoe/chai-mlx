@@ -3,7 +3,7 @@ from __future__ import annotations
 import mlx.core as mx
 import mlx.nn as nn
 
-from ..utils import chunk_last, make_additive_mask, merge_heads, sigmoid, split_heads
+from ..utils import chunk_last, make_additive_mask, merge_heads, sigmoid
 
 
 class TriangleMultiplication(nn.Module):
@@ -99,7 +99,13 @@ class TriangleAttention(nn.Module):
 
     pair2b outputs 2*num_heads values: first num_heads for starting-node,
     last num_heads for ending-node direction (ARCHITECTURE §6.3.7).
+
+    The row-batch dimension (N rows, each attending over N columns) is
+    chunked to avoid materializing an [N, H, N, N] bias tensor.  Peak
+    memory drops from O(N³) to O(chunk_size × N²).
     """
+
+    _ROW_CHUNK: int = 64
 
     def __init__(self, pair_dim: int, num_heads: int, head_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
@@ -112,58 +118,89 @@ class TriangleAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = head_dim
 
+    def _sdpa_chunked(
+        self,
+        qkvg: mx.array,
+        bias_raw: mx.array,
+        row_mask_bool: mx.array | None,
+    ) -> mx.array:
+        """Run SDPA over the row-batch dimension in chunks.
+
+        Args:
+            qkvg: [b, n, n, 4, H, D] — projected q/k/v/g stacked on axis 3.
+                   Axis 1 is the "batch-over" dimension (rows for starting-node,
+                   columns for ending-node after transposition).
+            bias_raw: [b, H, n, n] — learned bias, shared across all rows.
+            row_mask_bool: [b, n, n] boolean mask where axis 1 is the
+                   batch-over dimension and axis 2 are the attended positions.
+                   For each batch-over row i, valid (j,k) attention pairs are
+                   mask[:,i,j] & mask[:,i,k].  None if no masking.
+        Returns:
+            [b, n, n, H, D] gated attention output.
+        """
+        b, n, _, _4, H, D = qkvg.shape
+        q = qkvg[:, :, :, 0]  # [b, n, n, H, D]
+        k = qkvg[:, :, :, 1]
+        v = qkvg[:, :, :, 2]
+        g = qkvg[:, :, :, 3]
+        q = q.transpose(0, 1, 3, 2, 4)  # [b, n, H, n, D]
+        k = k.transpose(0, 1, 3, 2, 4)
+        v = v.transpose(0, 1, 3, 2, 4)
+
+        chunk = self._ROW_CHUNK
+        out_chunks: list[mx.array] = []
+        for start in range(0, n, chunk):
+            end = min(start + chunk, n)
+            c = end - start
+            q_c = q[:, start:end].reshape(b * c, H, n, D)
+            k_c = k[:, start:end].reshape(b * c, H, n, D)
+            v_c = v[:, start:end].reshape(b * c, H, n, D)
+            # Broadcast learned bias: [b, H, n, n] → [b*c, H, n, n]
+            mask_c = mx.broadcast_to(
+                bias_raw[:, None, :, :, :], (b, c, H, n, n)
+            ).reshape(b * c, H, n, n)
+            if row_mask_bool is not None:
+                pm_c = row_mask_bool[:, start:end]  # [b, c, n]
+                attn_mask = (pm_c[:, :, :, None] & pm_c[:, :, None, :])  # [b, c, n, n]
+                mask_c = mask_c + make_additive_mask(attn_mask.reshape(b * c, 1, n, n))
+            attn_c = mx.fast.scaled_dot_product_attention(
+                q_c, k_c, v_c, scale=D ** -0.5, mask=mask_c,
+            )
+            out_chunks.append(attn_c.reshape(b, c, H, n, D))
+            mx.eval(out_chunks[-1])
+
+        out = mx.concatenate(out_chunks, axis=1).transpose(0, 1, 3, 2, 4)
+        return out * sigmoid(g)
+
     def __call__(self, z: mx.array, pair_mask: mx.array | None = None) -> mx.array:
         b, n, _, _ = z.shape
         H, D = self.num_heads, self.head_dim
         z_ln = self.pair_norm(z)
 
         bias_all = self.pair2b(z_ln)  # [b, n, n, 2*H]
-        bias_start_raw = bias_all[..., :H].transpose(0, 3, 1, 2)  # [b, H, n, n]
-        bias_end_raw = bias_all[..., H:].transpose(0, 3, 1, 2)    # [b, H, n, n]
+        bias_start = bias_all[..., :H].transpose(0, 3, 1, 2)  # [b, H, n, n]
+        bias_end = bias_all[..., H:].transpose(0, 3, 1, 2)    # [b, H, n, n]
 
-        q1, k1, v1, g1 = chunk_last(self.pair2qkvg1(z_ln), 4)
-        q2, k2, v2, g2 = chunk_last(self.pair2qkvg2(z_ln), 4)
+        proj1 = self.pair2qkvg1(z_ln).reshape(b, n, n, 4, H, D)
+        proj2 = self.pair2qkvg2(z_ln).reshape(b, n, n, 4, H, D)
 
-        q1 = split_heads(q1, H, D)
-        k1 = split_heads(k1, H, D)
-        v1 = split_heads(v1, H, D)
-        g1 = split_heads(g1, H, D)
-
-        q2 = split_heads(q2, H, D)
-        k2 = split_heads(k2, H, D)
-        v2 = split_heads(v2, H, D)
-        g2 = split_heads(g2, H, D)
-
-        # Starting-node: fix row i, attend over columns j→k.
-        # q1/k1/v1: [b, i, j, H, D] → batch over i → [b*n, H, n, D]
-        q_s = q1.transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
-        k_s = k1.transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
-        v_s = v1.transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
-        bias_s = mx.broadcast_to(bias_start_raw[:, None, :, :, :], (b, n, H, n, n)).reshape(b * n, H, n, n)
         if pair_mask is not None:
             pm_bool = pair_mask.astype(mx.bool_)
-            row_mask = (pm_bool[:, :, :, None] & pm_bool[:, :, None, :]).reshape(b * n, 1, n, n)
-            bias_s = bias_s + make_additive_mask(row_mask)
-        out_s = mx.fast.scaled_dot_product_attention(q_s, k_s, v_s, scale=D ** -0.5, mask=bias_s)
-        out_s = out_s.reshape(b, n, H, n, D).transpose(0, 1, 3, 2, 4)  # [b, i, j, H, D]
-        out_s = out_s * sigmoid(g1)
+            col_mask_bool = pm_bool.transpose(0, 2, 1)
+        else:
+            pm_bool = col_mask_bool = None
 
-        # Ending-node: fix column j, attend over rows i→k.
-        # q2/k2/v2: [b, i, j, H, D] → transpose pair dims → [b, j, i, H, D] → batch over j
-        q_e = q2.transpose(0, 2, 1, 3, 4).transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
-        k_e = k2.transpose(0, 2, 1, 3, 4).transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
-        v_e = v2.transpose(0, 2, 1, 3, 4).transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
-        bias_e = mx.broadcast_to(bias_end_raw[:, None, :, :, :], (b, n, H, n, n)).reshape(b * n, H, n, n)
-        if pair_mask is not None:
-            col_mask_base = pm_bool.transpose(0, 2, 1)
-            col_mask = (col_mask_base[:, :, :, None] & col_mask_base[:, :, None, :]).reshape(b * n, 1, n, n)
-            bias_e = bias_e + make_additive_mask(col_mask)
-        out_e = mx.fast.scaled_dot_product_attention(q_e, k_e, v_e, scale=D ** -0.5, mask=bias_e)
-        # [b*n, H, n, D] → [b, j, H, i, D] → [b, i, j, H, D]
-        out_e = out_e.reshape(b, n, H, n, D).transpose(0, 3, 1, 2, 4)
-        out_e = out_e * sigmoid(g2)
+        # Starting-node: batch over rows (axis 1), mask from pair_mask directly
+        out_s = self._sdpa_chunked(proj1, bias_start, pm_bool)
 
-        combined = mx.concatenate([merge_heads(out_s), merge_heads(out_e)], axis=-1)
+        # Ending-node: batch over columns — transpose pair dims + mask
+        proj2_t = proj2.transpose(0, 2, 1, 3, 4, 5)
+        out_e_transposed = self._sdpa_chunked(proj2_t, bias_end, col_mask_bool)
+        out_e = out_e_transposed.transpose(0, 2, 1, 3, 4)
+
+        combined = mx.concatenate([
+            merge_heads(out_s), merge_heads(out_e),
+        ], axis=-1)
         out = self.linear_out(combined) * self.out_scalers
         return z + out
 
@@ -183,7 +220,11 @@ class ConfidenceTriangleAttention(nn.Module):
     ``linear_out: Linear(512, 512, no bias)``  — NOT (512→256).
     Output 512 is split into two 256-dim halves (both added to residual).
     No ``out_scalers``.
+
+    Row-batch dimension is chunked identically to :class:`TriangleAttention`.
     """
+
+    _ROW_CHUNK: int = 64
 
     def __init__(self, pair_dim: int, num_heads: int, head_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
@@ -196,6 +237,53 @@ class ConfidenceTriangleAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = head_dim
         self._qkvg_dim = qkvg_dim
+
+    def _sdpa_chunked(
+        self,
+        q: mx.array,
+        k: mx.array,
+        v: mx.array,
+        g: mx.array,
+        bias: mx.array,
+    ) -> mx.array:
+        """Chunked SDPA over the row-batch dimension.
+
+        Args:
+            q, k, v, g: [b, n_batch, n_seq, H, D]
+            bias: [b, H, n, n]
+        Returns:
+            [b, n_batch, n_seq, H, D] gated attention output.
+        """
+        b = q.shape[0]
+        n_batch = q.shape[1]
+        n_seq = q.shape[2]
+        H = q.shape[3]
+        D = q.shape[4]
+
+        q = q.transpose(0, 1, 3, 2, 4)
+        k = k.transpose(0, 1, 3, 2, 4)
+        v = v.transpose(0, 1, 3, 2, 4)
+
+        chunk = self._ROW_CHUNK
+        out_chunks: list[mx.array] = []
+        for start in range(0, n_batch, chunk):
+            end = min(start + chunk, n_batch)
+            c = end - start
+            q_c = q[:, start:end].reshape(b * c, H, n_seq, D)
+            k_c = k[:, start:end].reshape(b * c, H, n_seq, D)
+            v_c = v[:, start:end].reshape(b * c, H, n_seq, D)
+            mask_c = mx.broadcast_to(
+                bias[:, None, :, :, :], (b, c, H, n_seq, n_seq)
+            ).reshape(b * c, H, n_seq, n_seq)
+            attn_c = mx.fast.scaled_dot_product_attention(
+                q_c, k_c, v_c, scale=D ** -0.5, mask=mask_c,
+            )
+            out_chunks.append(attn_c.reshape(b, c, H, n_seq, D))
+            mx.eval(out_chunks[-1])
+
+        # [b, n_batch, H, n_seq, D] → [b, n_batch, n_seq, H, D]
+        out = mx.concatenate(out_chunks, axis=1).transpose(0, 1, 3, 2, 4)
+        return out * sigmoid(g)
 
     def __call__(self, z: mx.array, pair_mask: mx.array | None = None) -> mx.array:
         b, n, _, _ = z.shape
@@ -212,7 +300,6 @@ class ConfidenceTriangleAttention(nn.Module):
         qkvg_end_raw = qkvg_all[..., half:]      # [B, N, N, 1024]
         qkvg_end = qkvg_end_raw.transpose(0, 2, 1, 3)  # swap pair dims
 
-        # [B, N, N, 4*H*D] -> [B, N, N, 4, H, D]
         qkvg_start = qkvg_start.reshape(b, n, n, 4, H, D)
         qkvg_end = qkvg_end.reshape(b, n, n, 4, H, D)
 
@@ -224,36 +311,19 @@ class ConfidenceTriangleAttention(nn.Module):
         bias_s = bias[:, 0]  # [B, H, N, N]
         bias_e = bias[:, 1]  # [B, H, N, N]
 
-        def _run_direction(qkvg_dir: mx.array, bias_dir: mx.array) -> mx.array:
-            """Run SDPA for one direction (starting or ending)."""
-            q = qkvg_dir[..., 0, :, :]  # [B, N, N, H, D]
-            k = qkvg_dir[..., 1, :, :]
-            v = qkvg_dir[..., 2, :, :]
-            g = qkvg_dir[..., 3, :, :]
-            # Reshape for SDPA: [B, N(batch), N(seq), H, D] -> [B*N, H, N, D]
-            q = q.transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
-            k = k.transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
-            v = v.transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
-            # Bias: [B, H, N, N] broadcast over batched rows -> [B*N, H, N, N]
-            mask = mx.broadcast_to(
-                bias_dir[:, None, :, :, :], (b, n, H, n, n)
-            ).reshape(b * n, H, n, n)
-            attn = mx.fast.scaled_dot_product_attention(
-                q, k, v, scale=D ** -0.5, mask=mask,
-            )
-            # [B*N, H, N, D] -> [B, N, N, H, D]
-            attn = attn.reshape(b, n, H, n, D).transpose(0, 1, 3, 2, 4)
-            return attn * sigmoid(g)
+        def _unpack(qkvg_dir: mx.array):
+            return (qkvg_dir[..., i, :, :] for i in range(4))
 
-        out_s = _run_direction(qkvg_start, bias_s)  # [B, N, N, H, D]
-        out_e = _run_direction(qkvg_end, bias_e)    # [B, N, N, H, D]
+        q1, k1, v1, g1 = _unpack(qkvg_start)
+        out_s = self._sdpa_chunked(q1, k1, v1, g1, bias_s)
 
-        # Merge heads and concatenate directions: [B, N, N, 2*H*D=512]
+        q2, k2, v2, g2 = _unpack(qkvg_end)
+        out_e = self._sdpa_chunked(q2, k2, v2, g2, bias_e)
+
         out_s_flat = out_s.reshape(b, n, n, H * D)
         out_e_flat = out_e.reshape(b, n, n, H * D)
         combined = mx.concatenate([out_s_flat, out_e_flat], axis=-1)
 
-        # linear_out: 512 -> 512, then sum both 256-dim halves
         projected = self.linear_out(combined)
         pair_dim = z.shape[-1]
         return z + projected[..., :pair_dim] + projected[..., pair_dim:]
