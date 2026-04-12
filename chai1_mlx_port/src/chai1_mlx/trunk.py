@@ -222,9 +222,13 @@ class MSAModule(nn.Module):
             if i < len(self.msa_transition):
                 msa = msa + self.msa_transition[i](msa)
                 msa = msa + self.msa_pair_weighted_averaging[i](msa, pair, token_pair_mask=token_pair_mask)
+                mx.eval(msa)
             pair_transition_out = self.pair_transition[i](pair)
+            mx.eval(pair_transition_out)
             pair = self.triangular_multiplication[i](pair, pair_mask=token_pair_mask) + pair_transition_out
+            mx.eval(pair)
             pair = self.triangular_attention[i](pair, pair_mask=token_pair_mask)
+            mx.eval(pair)
         return pair
 
 
@@ -271,12 +275,14 @@ class Trunk(nn.Module):
         for _ in range(recycles):
             single = single_init + self.token_single_recycle_proj(prev_single)
             pair = pair_init + self.token_pair_recycle_proj(prev_pair)
+            mx.eval(single, pair)
             pair = self.template_embedder(
                 pair,
                 emb.template_input,
                 template_input_masks=template_input_masks,
                 token_pair_mask=token_pair_mask,
             )
+            mx.eval(pair)
             pair = self.msa_module(
                 single,
                 pair,
@@ -284,11 +290,13 @@ class Trunk(nn.Module):
                 token_pair_mask=token_pair_mask,
                 msa_mask=msa_mask,
             )
+            mx.eval(pair)
             single, pair = self.pairformer_stack(
                 single, pair,
                 pair_mask=token_pair_mask,
                 single_mask=token_single_mask,
             )
+            mx.eval(single, pair)
             prev_single, prev_pair = single, pair
 
         return TrunkOutputs(

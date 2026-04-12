@@ -25,17 +25,19 @@ class Ranker:
         return mx.max(mx.sum(tm, axis=-1), axis=-1) / pae.shape[-1]
 
     def _iptm(self, pae: mx.array, chain_id: mx.array) -> mx.array:
-        tm = self._tm_from_pae(pae)
+        tm = self._tm_from_pae(pae)  # [S, N, N]
         scores = []
         unique_chains = _unique_int_values(chain_id)
         for chain in unique_chains:
-            row_mask = chain_id == chain
-            col_mask = chain_id != chain
-            if not bool(mx.any(row_mask).item()) or not bool(mx.any(col_mask).item()):
+            row_mask = (chain_id == chain).astype(mx.float32)  # [N]
+            col_mask = (chain_id != chain).astype(mx.float32)  # [N]
+            n_col = int(col_mask.sum().item())
+            if int(row_mask.sum().item()) == 0 or n_col == 0:
                 continue
-            sub = tm[:, row_mask][:, :, col_mask]
-            denom = max(int(mx.sum(col_mask).item()), 1)
-            scores.append(mx.max(mx.sum(sub, axis=-1), axis=-1) / denom)
+            # Mask via multiplication: zero out non-relevant rows/cols
+            masked = tm * row_mask[None, :, None] * col_mask[None, None, :]
+            row_sum = mx.sum(masked, axis=-1)  # [S, N]
+            scores.append(mx.max(row_sum, axis=-1) / max(n_col, 1))
         if not scores:
             return mx.zeros((pae.shape[0],), dtype=mx.float32)
         return mx.max(mx.stack(scores, axis=0), axis=0)

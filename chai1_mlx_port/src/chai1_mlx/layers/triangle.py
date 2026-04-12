@@ -118,59 +118,60 @@ class TriangleAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = head_dim
 
-    def _sdpa_chunked(
+    def _sdpa_lazy(
         self,
-        qkvg: mx.array,
+        z_ln: mx.array,
+        proj_linear: nn.Linear,
         bias_raw: mx.array,
         row_mask_bool: mx.array | None,
+        *,
+        transpose_pair: bool = False,
     ) -> mx.array:
-        """Run SDPA over the row-batch dimension in chunks.
+        """SDPA with fused row-chunked projection to avoid materializing
+        the full [b, n, n, 4*H*D] projection tensor.
 
-        Args:
-            qkvg: [b, n, n, 4, H, D] — projected q/k/v/g stacked on axis 3.
-                   Axis 1 is the "batch-over" dimension (rows for starting-node,
-                   columns for ending-node after transposition).
-            bias_raw: [b, H, n, n] — learned bias, shared across all rows.
-            row_mask_bool: [b, n, n] boolean mask where axis 1 is the
-                   batch-over dimension and axis 2 are the attended positions.
-                   For each batch-over row i, valid (j,k) attention pairs are
-                   mask[:,i,j] & mask[:,i,k].  None if no masking.
-        Returns:
-            [b, n, n, H, D] gated attention output.
+        For each chunk of rows, the linear projection is computed only for
+        those rows, keeping peak memory at O(chunk × N × H × D) instead of
+        O(N² × H × D).
         """
-        b, n, _, _4, H, D = qkvg.shape
-        q = qkvg[:, :, :, 0]  # [b, n, n, H, D]
-        k = qkvg[:, :, :, 1]
-        v = qkvg[:, :, :, 2]
-        g = qkvg[:, :, :, 3]
-        q = q.transpose(0, 1, 3, 2, 4)  # [b, n, H, n, D]
-        k = k.transpose(0, 1, 3, 2, 4)
-        v = v.transpose(0, 1, 3, 2, 4)
-
+        b, n, _, _ = z_ln.shape
+        H, D = self.num_heads, self.head_dim
         chunk = self._ROW_CHUNK
+
+        gate_chunks: list[mx.array] = []
         out_chunks: list[mx.array] = []
         for start in range(0, n, chunk):
             end = min(start + chunk, n)
             c = end - start
-            q_c = q[:, start:end].reshape(b * c, H, n, D)
-            k_c = k[:, start:end].reshape(b * c, H, n, D)
-            v_c = v[:, start:end].reshape(b * c, H, n, D)
-            # Broadcast learned bias: [b, H, n, n] → [b*c, H, n, n]
+            if transpose_pair:
+                z_rows = z_ln[:, :, start:end].transpose(0, 2, 1, 3)
+            else:
+                z_rows = z_ln[:, start:end]  # [b, c, n, pair_dim]
+            proj_c = proj_linear(z_rows).reshape(b, c, n, 4, H, D)
+            q_c = proj_c[:, :, :, 0].transpose(0, 1, 3, 2, 4).reshape(b * c, H, n, D)
+            k_c = proj_c[:, :, :, 1].transpose(0, 1, 3, 2, 4).reshape(b * c, H, n, D)
+            v_c = proj_c[:, :, :, 2].transpose(0, 1, 3, 2, 4).reshape(b * c, H, n, D)
+            gate_chunks.append(proj_c[:, :, :, 3])  # [b, c, n, H, D]
             mask_c = mx.broadcast_to(
                 bias_raw[:, None, :, :, :], (b, c, H, n, n)
             ).reshape(b * c, H, n, n)
             if row_mask_bool is not None:
-                pm_c = row_mask_bool[:, start:end]  # [b, c, n]
-                attn_mask = (pm_c[:, :, :, None] & pm_c[:, :, None, :])  # [b, c, n, n]
+                pm_c = row_mask_bool[:, start:end]
+                attn_mask = (pm_c[:, :, :, None] & pm_c[:, :, None, :])
                 mask_c = mask_c + make_additive_mask(attn_mask.reshape(b * c, 1, n, n))
             attn_c = mx.fast.scaled_dot_product_attention(
                 q_c, k_c, v_c, scale=D ** -0.5, mask=mask_c,
             )
             out_chunks.append(attn_c.reshape(b, c, H, n, D))
-            mx.eval(out_chunks[-1])
+            mx.eval(out_chunks[-1], gate_chunks[-1])
 
+        # [b, n, H, n, D] → [b, n, n, H, D]
         out = mx.concatenate(out_chunks, axis=1).transpose(0, 1, 3, 2, 4)
-        return out * sigmoid(g)
+        g = mx.concatenate(gate_chunks, axis=1)
+        result = out * sigmoid(g)
+        if transpose_pair:
+            result = result.transpose(0, 2, 1, 3, 4)
+        return result
 
     def __call__(self, z: mx.array, pair_mask: mx.array | None = None) -> mx.array:
         b, n, _, _ = z.shape
@@ -178,11 +179,9 @@ class TriangleAttention(nn.Module):
         z_ln = self.pair_norm(z)
 
         bias_all = self.pair2b(z_ln)  # [b, n, n, 2*H]
-        bias_start = bias_all[..., :H].transpose(0, 3, 1, 2)  # [b, H, n, n]
-        bias_end = bias_all[..., H:].transpose(0, 3, 1, 2)    # [b, H, n, n]
-
-        proj1 = self.pair2qkvg1(z_ln).reshape(b, n, n, 4, H, D)
-        proj2 = self.pair2qkvg2(z_ln).reshape(b, n, n, 4, H, D)
+        bias_start = bias_all[..., :H].transpose(0, 3, 1, 2)
+        bias_end = bias_all[..., H:].transpose(0, 3, 1, 2)
+        mx.eval(bias_start, bias_end)
 
         if pair_mask is not None:
             pm_bool = pair_mask.astype(mx.bool_)
@@ -190,13 +189,8 @@ class TriangleAttention(nn.Module):
         else:
             pm_bool = col_mask_bool = None
 
-        # Starting-node: batch over rows (axis 1), mask from pair_mask directly
-        out_s = self._sdpa_chunked(proj1, bias_start, pm_bool)
-
-        # Ending-node: batch over columns — transpose pair dims + mask
-        proj2_t = proj2.transpose(0, 2, 1, 3, 4, 5)
-        out_e_transposed = self._sdpa_chunked(proj2_t, bias_end, col_mask_bool)
-        out_e = out_e_transposed.transpose(0, 2, 1, 3, 4)
+        out_s = self._sdpa_lazy(z_ln, self.pair2qkvg1, bias_start, pm_bool)
+        out_e = self._sdpa_lazy(z_ln, self.pair2qkvg2, bias_end, col_mask_bool, transpose_pair=True)
 
         combined = mx.concatenate([
             merge_heads(out_s), merge_heads(out_e),
@@ -238,92 +232,63 @@ class ConfidenceTriangleAttention(nn.Module):
         self.head_dim = head_dim
         self._qkvg_dim = qkvg_dim
 
-    def _sdpa_chunked(
-        self,
-        q: mx.array,
-        k: mx.array,
-        v: mx.array,
-        g: mx.array,
-        bias: mx.array,
-    ) -> mx.array:
-        """Chunked SDPA over the row-batch dimension.
-
-        Args:
-            q, k, v, g: [b, n_batch, n_seq, H, D]
-            bias: [b, H, n, n]
-        Returns:
-            [b, n_batch, n_seq, H, D] gated attention output.
-        """
-        b = q.shape[0]
-        n_batch = q.shape[1]
-        n_seq = q.shape[2]
-        H = q.shape[3]
-        D = q.shape[4]
-
-        q = q.transpose(0, 1, 3, 2, 4)
-        k = k.transpose(0, 1, 3, 2, 4)
-        v = v.transpose(0, 1, 3, 2, 4)
-
-        chunk = self._ROW_CHUNK
-        out_chunks: list[mx.array] = []
-        for start in range(0, n_batch, chunk):
-            end = min(start + chunk, n_batch)
-            c = end - start
-            q_c = q[:, start:end].reshape(b * c, H, n_seq, D)
-            k_c = k[:, start:end].reshape(b * c, H, n_seq, D)
-            v_c = v[:, start:end].reshape(b * c, H, n_seq, D)
-            mask_c = mx.broadcast_to(
-                bias[:, None, :, :, :], (b, c, H, n_seq, n_seq)
-            ).reshape(b * c, H, n_seq, n_seq)
-            attn_c = mx.fast.scaled_dot_product_attention(
-                q_c, k_c, v_c, scale=D ** -0.5, mask=mask_c,
-            )
-            out_chunks.append(attn_c.reshape(b, c, H, n_seq, D))
-            mx.eval(out_chunks[-1])
-
-        # [b, n_batch, H, n_seq, D] → [b, n_batch, n_seq, H, D]
-        out = mx.concatenate(out_chunks, axis=1).transpose(0, 1, 3, 2, 4)
-        return out * sigmoid(g)
-
     def __call__(self, z: mx.array, pair_mask: mx.array | None = None) -> mx.array:
         b, n, _, _ = z.shape
         H, D = self.num_heads, self.head_dim
+        half = self._qkvg_dim // 2
+        chunk = self._ROW_CHUNK
 
         z_ln = self.pair_norm(z)
-        proj = self.pair2qkvgb(z_ln)  # [B, N, N, 2056]
 
-        qkvg_all = proj[..., : self._qkvg_dim]  # [B, N, N, 2048]
-        bias_all = proj[..., self._qkvg_dim :]   # [B, N, N, 8]
-
-        half = self._qkvg_dim // 2  # 1024
-        qkvg_start = qkvg_all[..., :half]        # [B, N, N, 1024]
-        qkvg_end_raw = qkvg_all[..., half:]      # [B, N, N, 1024]
-        qkvg_end = qkvg_end_raw.transpose(0, 2, 1, 3)  # swap pair dims
-
-        qkvg_start = qkvg_start.reshape(b, n, n, 4, H, D)
-        qkvg_end = qkvg_end.reshape(b, n, n, 4, H, D)
-
-        # Bias: [B, N, N, 2*H] -> [B, 2, H, N, N]
-        bias = bias_all.reshape(b, n, n, 2, H).transpose(0, 3, 4, 1, 2)
+        # Only project the bias portion upfront (small: 2*H per element)
+        bias_proj = z_ln @ self.pair2qkvgb.weight[self._qkvg_dim:].T  # [b,n,n,2H]
+        bias = bias_proj.reshape(b, n, n, 2, H).transpose(0, 3, 4, 1, 2)
         if pair_mask is not None:
             pm = pair_mask.reshape(b, 1, 1, n, n)
             bias = mx.where(pm, bias, -10000.0)
-        bias_s = bias[:, 0]  # [B, H, N, N]
-        bias_e = bias[:, 1]  # [B, H, N, N]
+        bias_s = bias[:, 0]
+        bias_e = bias[:, 1]
+        mx.eval(bias_s, bias_e)
 
-        def _unpack(qkvg_dir: mx.array):
-            return (qkvg_dir[..., i, :, :] for i in range(4))
+        w_qkvg = self.pair2qkvgb.weight[:self._qkvg_dim]  # [qkvg_dim, pair_dim]
+        w_start = w_qkvg[:half]  # [half, pair_dim]
+        w_end = w_qkvg[half:]    # [half, pair_dim]
 
-        q1, k1, v1, g1 = _unpack(qkvg_start)
-        out_s = self._sdpa_chunked(q1, k1, v1, g1, bias_s)
+        def _run_direction(w: mx.array, bias_dir: mx.array, *, transpose: bool) -> mx.array:
+            gate_chunks: list[mx.array] = []
+            out_chunks: list[mx.array] = []
+            for start in range(0, n, chunk):
+                end = min(start + chunk, n)
+                c = end - start
+                if transpose:
+                    z_rows = z_ln[:, :, start:end].transpose(0, 2, 1, 3)
+                else:
+                    z_rows = z_ln[:, start:end]
+                proj_c = (z_rows @ w.T).reshape(b, c, n, 4, H, D)
+                q_c = proj_c[:, :, :, 0].transpose(0, 1, 3, 2, 4).reshape(b * c, H, n, D)
+                k_c = proj_c[:, :, :, 1].transpose(0, 1, 3, 2, 4).reshape(b * c, H, n, D)
+                v_c = proj_c[:, :, :, 2].transpose(0, 1, 3, 2, 4).reshape(b * c, H, n, D)
+                gate_chunks.append(proj_c[:, :, :, 3])
+                mask_c = mx.broadcast_to(
+                    bias_dir[:, None, :, :, :], (b, c, H, n, n)
+                ).reshape(b * c, H, n, n)
+                attn_c = mx.fast.scaled_dot_product_attention(
+                    q_c, k_c, v_c, scale=D ** -0.5, mask=mask_c,
+                )
+                out_chunks.append(attn_c.reshape(b, c, H, n, D))
+                mx.eval(out_chunks[-1], gate_chunks[-1])
 
-        q2, k2, v2, g2 = _unpack(qkvg_end)
-        out_e = self._sdpa_chunked(q2, k2, v2, g2, bias_e)
+            out = mx.concatenate(out_chunks, axis=1).transpose(0, 1, 3, 2, 4)
+            g = mx.concatenate(gate_chunks, axis=1)
+            result = out * sigmoid(g)
+            if transpose:
+                result = result.transpose(0, 2, 1, 3, 4)
+            return result.reshape(b, n, n, H * D)
 
-        out_s_flat = out_s.reshape(b, n, n, H * D)
-        out_e_flat = out_e.reshape(b, n, n, H * D)
-        combined = mx.concatenate([out_s_flat, out_e_flat], axis=-1)
+        out_s = _run_direction(w_start, bias_s, transpose=False)
+        out_e = _run_direction(w_end, bias_e, transpose=True)
 
+        combined = mx.concatenate([out_s, out_e], axis=-1)
         projected = self.linear_out(combined)
         pair_dim = z.shape[-1]
         return z + projected[..., :pair_dim] + projected[..., pair_dim:]

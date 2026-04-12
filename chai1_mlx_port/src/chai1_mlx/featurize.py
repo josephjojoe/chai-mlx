@@ -204,8 +204,12 @@ def _batch_to_feature_context(
         token_is_polymer=_mx(is_polymer),
         atom_ref_positions=_mx(inputs["atom_ref_pos"].float()),
         atom_ref_space_uid=_mx(inputs["atom_ref_space_uid"].long()),
-        atom_q_indices=_mx(inputs["block_atom_pair_q_idces"]),
-        atom_kv_indices=_mx(inputs["block_atom_pair_kv_idces"]),
+        atom_q_indices=_mx(inputs["block_atom_pair_q_idces"].unsqueeze(0).expand(B, -1, -1)
+                           if inputs["block_atom_pair_q_idces"].dim() == 2
+                           else inputs["block_atom_pair_q_idces"]),
+        atom_kv_indices=_mx(inputs["block_atom_pair_kv_idces"].unsqueeze(0).expand(B, -1, -1)
+                            if inputs["block_atom_pair_kv_idces"].dim() == 2
+                            else inputs["block_atom_pair_kv_idces"]),
         block_atom_pair_mask=_mx(inputs["block_atom_pair_mask"].float()),
         msa_mask=_mx(inputs["msa_mask"]),
         template_input_masks=_mx(

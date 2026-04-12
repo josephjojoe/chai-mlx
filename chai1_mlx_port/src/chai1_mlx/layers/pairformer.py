@@ -95,5 +95,6 @@ class PairformerStack(nn.Module):
         for i, block in enumerate(self.blocks):
             bias = None if precomputed_single_pair_biases is None else precomputed_single_pair_biases[i]
             z, s = block(z, s, pair_mask=pair_mask, single_mask=single_mask, precomputed_single_pair_bias=bias)
+            mx.eval(s, z)
         assert s is not None
         return s, z
