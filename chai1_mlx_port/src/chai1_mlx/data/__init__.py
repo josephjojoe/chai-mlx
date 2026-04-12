@@ -1,5 +1,5 @@
-"""Featurization pipeline for Chai-1 MLX.
+"""Featurization data package — now a thin namespace.
 
-Converts raw FASTA inputs (with optional precomputed MSA, templates, and ESM
-embeddings) into the ``FeatureContext`` consumed by ``Chai1MLX``.
+The actual featurization is handled by the upstream ``chai-lab`` package.
+See ``chai1_mlx.featurize.featurize_fasta`` for the entry point.
 """

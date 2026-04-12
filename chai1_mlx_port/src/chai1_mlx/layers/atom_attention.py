@@ -17,15 +17,13 @@ from .common import AdaLayerNorm, ConditionedTransition, ResidualMLP
 class PairUpdateBlock(nn.Module):
     def __init__(self, atom_dim: int, pair_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
-        self.norm_q = nn.LayerNorm(atom_dim, eps=eps)
-        self.norm_kv = nn.LayerNorm(atom_dim, eps=eps)
         self.proj_h = nn.Linear(atom_dim, pair_dim, bias=False)
         self.proj_w = nn.Linear(atom_dim, pair_dim, bias=False)
         self.mlp = ResidualMLP(pair_dim)
 
     def __call__(self, q_atoms: mx.array, kv_atoms: mx.array, pair: mx.array) -> mx.array:
-        h = self.proj_h(self.norm_q(q_atoms))
-        w = self.proj_w(self.norm_kv(kv_atoms))
+        h = self.proj_h(nn.relu(q_atoms))
+        w = self.proj_w(nn.relu(kv_atoms))
         pair = pair + h[:, :, :, None, :] + w[:, :, None, :, :]
         return self.mlp(pair)
 
@@ -86,7 +84,7 @@ class LocalAtomTransformer(nn.Module):
     def __init__(self, dim: int, pair_dim: int, cond_dim: int, num_blocks: int, num_heads: int, head_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
         self.pair_norm = nn.LayerNorm(pair_dim, eps=eps)
-        self.blocked_pairs2blocked_bias = nn.Linear(pair_dim, num_blocks * num_heads, bias=True)
+        self.blocked_pairs2blocked_bias = nn.Linear(pair_dim, num_blocks * num_heads, bias=False)
         self.attn_blocks = [
             LocalAttentionPairBiasBlock(dim, cond_dim, num_heads, head_dim, eps=eps)
             for _ in range(num_blocks)

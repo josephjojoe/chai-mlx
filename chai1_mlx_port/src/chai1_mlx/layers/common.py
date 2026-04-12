@@ -11,17 +11,19 @@ from ..utils import chunk_last, sigmoid, silu
 
 
 class AdaLayerNorm(nn.Module):
+    _ADALN_EPS: float = 0.1
+
     def __init__(self, dim: int, cond_dim: int, eps: float = 1e-5) -> None:
         super().__init__()
-        self.norm = nn.LayerNorm(dim, eps=eps)
+        self.norm = nn.LayerNorm(dim, eps=self._ADALN_EPS, affine=False)
         self.to_scale_shift = nn.Linear(cond_dim, 2 * dim, bias=False)
 
     def __call__(self, x: mx.array, cond: mx.array, *, use_kernel: bool = False) -> mx.array:
         scale, shift = chunk_last(self.to_scale_shift(cond), 2)
         if use_kernel:
             return fused_adaln_full(
-                x, self.norm.weight, self.norm.bias, scale, shift,
-                eps=self.norm.eps,
+                x, None, None, scale, shift,
+                eps=self._ADALN_EPS,
             )
         return self.norm(x) * (1.0 + scale) + shift
 
@@ -40,7 +42,7 @@ class Transition(nn.Module):
         dim: int,
         expansion: int,
         *,
-        bias_out: bool = True,
+        bias_out: bool = False,
         eps: float = 1e-5,
     ) -> None:
         super().__init__()

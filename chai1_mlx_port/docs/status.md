@@ -27,11 +27,26 @@ against the TorchScript `.pt` modules and the graph dumps in `findings/graphs/`.
 - **OPM einsum**: Was contracting both depth and inner dims (`"bmiae,bmjbe->bijab"` → 64-dim), instead of only depth (`"bmige,bmjgf->bijgef"` → 512-dim). Would crash at the reshape to 512. Mask normalization broadcast also corrected (3 trailing dims instead of 2).
 - **Second-order correction guard**: Added `sigma_next != 0` check before the Heun correction, matching the reference to avoid division by zero.
 
+## Featurization
+
+Frontend featurization is now delegated to the upstream **chai-lab** package
+via `featurize_fasta()`.  The ported NumPy feature generators (`data/`) have
+been removed — they had multiple critical faithfulness bugs (wrong bin edges,
+missing masks, incorrect relative-chain encoding, broken template outer-sum)
+and provided no performance benefit over the CPU-only reference pipeline.
+
+The thin adapter in `featurize.py` calls chai-lab's `make_all_atom_feature_context`
+and `Collate`, then encodes the per-generator features into the dense tensors
+that the MLX `FeatureEmbedding` expects.  The encoding (one-hot expansion order
+and dim allocation) must be verified against the TorchScript `feature_embedding.pt`
+during parity testing.
+
 ## Still requiring parity work
 
 - Exact TorchScript-to-MLX weight-name alignment and verified loading.
 - Exhaustive per-layer tensor parity checks against the reference runtime.
-- Full raw frontend featurization from FASTA/MSA/template/restraint inputs.
+- Verify that the feature encoding in `featurize.py:_batch_to_feature_context`
+  matches the TorchScript `feature_embedding.pt` internal encoding.
 
 ## Recommended path to productionize
 

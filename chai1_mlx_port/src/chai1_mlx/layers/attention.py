@@ -75,7 +75,7 @@ class DiffusionSelfAttention(nn.Module):
         self.pair_norm = nn.LayerNorm(pair_dim, eps=eps)
         self.pair_linear = nn.Linear(pair_dim, num_heads, bias=False)
         self.to_qkv = nn.Linear(dim, 3 * num_heads * head_dim, bias=False)
-        self.to_out = nn.Linear(num_heads * head_dim, dim, bias=True)
+        self.to_out = nn.Linear(num_heads * head_dim, dim, bias=False)
         self.gate_proj = nn.Linear(cond_dim, dim, bias=True)
         self.query_bias = mx.zeros((num_heads, head_dim), dtype=mx.float32)
         self.num_heads = num_heads

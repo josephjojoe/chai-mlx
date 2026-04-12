@@ -14,13 +14,12 @@ from typing import Sequence
 # ===================================================================
 
 def _transition_map(src: str, dst: str) -> dict[str, str]:
-    """SwiGLU transition: layer_norm + linear_no_bias_ab + linear_out."""
+    """SwiGLU transition: layer_norm + linear_no_bias_ab + linear_out (no bias)."""
     return {
         f"{src}.layer_norm.weight": f"{dst}.norm.weight",
         f"{src}.layer_norm.bias": f"{dst}.norm.bias",
         f"{src}.linear_no_bias_ab.weight": f"{dst}.up.weight",
         f"{src}.linear_out.weight": f"{dst}.down.weight",
-        f"{src}.linear_out.bias": f"{dst}.down.bias",
     }
 
 
@@ -70,7 +69,7 @@ def _pair_update_block_map(src: str, dst: str) -> dict[str, str]:
 
 
 def _triangle_mult_map(src: str, dst: str) -> dict[str, str]:
-    """TriangleMultiplication (TorchScript has no layernorm_out/layernorm_in)."""
+    """TriangleMultiplication. layernorm_out/layernorm_in are affine=False (no params)."""
     return {
         f"{src}.layernorm_z_in.weight": f"{dst}.layernorm_z_in.weight",
         f"{src}.layernorm_z_in.bias": f"{dst}.layernorm_z_in.bias",
@@ -81,7 +80,7 @@ def _triangle_mult_map(src: str, dst: str) -> dict[str, str]:
 
 
 def _triangle_attn_map(src: str, dst: str) -> dict[str, str]:
-    """TriangleAttention v2a (TorchScript has no pair_layer_norm params)."""
+    """TriangleAttention v2a. pair_norm is affine=False (no learnable params)."""
     return {
         f"{src}.pair2b.weight": f"{dst}.pair2b.weight",
         f"{src}.pair2qkvg1.weight": f"{dst}.pair2qkvg1.weight",
@@ -167,19 +166,10 @@ def _token_embedder_map() -> dict[str, str]:
     m[f"{enc_s}.to_atom_cond.weight"] = f"{enc_d}.to_atom_cond.weight"
     m.update(_pair_update_block_map(f"{enc_s}.pair_update_block", f"{enc_d}.pair_update_block"))
     m.update(_local_atom_transformer_map(f"{enc_s}.atom_transformer", f"{enc_d}.atom_transformer"))
-    # to_token_single: Sequential(LayerNorm[0], Linear) — but TorchScript only has .0.weight
-    # Actually .0 = LayerNorm (weight only, no bias in TorchScript? Let's check...)
-    # The dump shows only `to_token_single.0.weight`. This is a no-bias Linear, not a LayerNorm.
-    # In fact looking at the graph: to_token_single.0 = ReLU, to_token_single.1 = Linear
-    # But .0 has a weight? That doesn't match ReLU. Checking the code graph dump again:
-    # `=== token_embedder.token_single_input_emb.atom_encoder.to_token_single.0 ===`
-    # shows it's a linear with bias. And .1 is a relu. So .0=Linear, .1=ReLU.
-    # Wait no - let me re-read:
-    # .0 = "input -> layer_norm ... -> return" ... it IS a LayerNorm!
-    # Actually the graph shows it as layer_norm. So .0.weight is LN weight.
-    # But there's only .0.weight, no .0.bias - this could be a LayerNorm with affine but
-    # the bias is zero and wasn't saved, or it's weight-only.
-    m[f"{enc_s}.to_token_single.0.weight"] = f"{enc_d}.to_token_single_norm.weight"
+    # to_token_single: Sequential(Linear[0](no bias), ReLU[1])
+    # .0 = Linear(128, 384, no bias), .1 = ReLU (no params)
+    # Verified from token_embedder_code.txt: .0 is torch.linear(input, weight), .1 is relu_.
+    m[f"{enc_s}.to_token_single.0.weight"] = f"{enc_d}.to_token_single.weight"
 
     # Top-level projections
     m["token_single_proj_in_trunk.weight"] = f"{dst}.token_single_proj_in_trunk.weight"
@@ -308,7 +298,8 @@ def _diffusion_module_map() -> dict[str, str]:
     m[f"{enc_s}.prev_pos_embed.weight"] = f"{enc_d}.prev_pos_embed.weight"
     m.update(_pair_update_block_map(f"{enc_s}.pair_update_block", f"{enc_d}.pair_update_block"))
     m.update(_local_atom_transformer_map(f"{enc_s}.atom_transformer", f"{enc_d}.atom_transformer"))
-    m[f"{enc_s}.to_token_single.0.weight"] = f"{enc_d}.to_token_single_norm.weight"
+    # to_token_single: Sequential(Linear[0](no bias), ReLU[1])
+    m[f"{enc_s}.to_token_single.0.weight"] = f"{enc_d}.to_token_single.weight"
     # token_pair_to_atom_pair: Sequential(LayerNorm[0], Linear[1])
     m[f"{enc_s}.token_pair_to_atom_pair.0.weight"] = f"{dst}.token_pair_to_atom_pair_norm.weight"
     m[f"{enc_s}.token_pair_to_atom_pair.0.bias"] = f"{dst}.token_pair_to_atom_pair_norm.bias"

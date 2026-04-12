@@ -356,8 +356,8 @@ block_atom_pair_feat     [b, bl, q, kv, 16]   ─┤
                                     AtomAttentionBlockedEncoder
                                     ├─ to_atom_cond: Linear(128, 128, no bias)
                                     ├─ Pair Update Block (outer-sum + residual MLP)
-                                    │   ├─ proj_h: LN(128) → Linear(128, 16, no bias)
-                                    │   ├─ proj_w: LN(128) → Linear(128, 16, no bias)
+                                    │   ├─ proj_h: ReLU → Linear(128, 16, no bias)
+                                    │   ├─ proj_w: ReLU → Linear(128, 16, no bias)
                                     │   └─ MLP: Linear(16,16, no bias) → ReLU → Linear(16,16, no bias)
                                     ├─ LocalDiffusionTransformer (3 blocks)
                                     │   ├─ blocked_pairs2blocked_bias:
@@ -599,13 +599,13 @@ Each block:
 
 #### 6.3.4 MSA Transition (3 blocks)
 
-Each: `LayerNorm(64)` → `Linear(64, 512, no bias)` → SwiGLU → `Linear(256, 64)`.
-Expansion: **8×** (effective 4× after gating).
+Each: `LayerNorm(64)` → `Linear(64, 512, no bias)` → SwiGLU → `Linear(256, 64, no bias)`.
+Expansion: **8×** (effective 4× after gating). `linear_out` has **no bias**.
 
 #### 6.3.5 Pair Transition (4 blocks)
 
-Each: `LayerNorm(256)` → `Linear(256, 2048, no bias)` → SwiGLU → `Linear(1024, 256)`.
-Expansion: **8×** (effective 4× after gating).
+Each: `LayerNorm(256)` → `Linear(256, 2048, no bias)` → SwiGLU → `Linear(1024, 256, no bias)`.
+Expansion: **8×** (effective 4× after gating). `linear_out` has **no bias**.
 
 #### 6.3.6 Triangular Multiplication (4 blocks)
 
@@ -626,9 +626,14 @@ a2, b2 = chunk(masked(ab_right), 2)
 x_out = einsum("... i k d, ... j k d -> ... i j d", a1, b1)  # outgoing
 x_in  = einsum("... k i d, ... k j d -> ... i j d", a2, b2)  # incoming
 
-output = linear_z_out(LayerNorm(x_out) + LayerNorm(x_in)) * g[..., 4c:]
+output = linear_z_out(LayerNorm(x_out, affine=False) + LayerNorm(x_in, affine=False)) * g[..., 4c:]
 z += feature_dropout(output)
 ```
+
+The two inner LayerNorms (`x_out`, `x_in`) use **`elementwise_affine=False`** — they
+normalize without learnable scale/shift. Verified from TorchScript: the `torch.layer_norm`
+calls pass only `[size]` with no weight/bias arguments. Only `layernorm_z_in` has learnable
+affine parameters.
 
 Weight shapes: `merged_linear_p: Linear(256, 1024, no bias)`, `merged_linear_g: Linear(256, 1280, no bias)`,
 `linear_z_out: Linear(256, 256, no bias)`.
@@ -636,7 +641,11 @@ Weight shapes: `merged_linear_p: Linear(256, 1024, no bias)`, `merged_linear_g: 
 #### 6.3.7 Triangular Attention (4 blocks)
 
 Both **starting-node and ending-node** attention are computed in every block via two
-`scaled_dot_product_attention` calls per block:
+`scaled_dot_product_attention` calls per block.
+
+**Pre-norm**: `LayerNorm(z, affine=False)` — the pair representation is normalized
+before all projections, but with **no learnable affine parameters** (just centering and
+scaling). Verified from TorchScript: `torch.layer_norm(z, [size])` with no weight/bias.
 
 - `pair2qkvg1: Linear(256, 1024, no bias)` — starting node projection: **4 heads × (q64 + k64 + v64 + g64)**
 - `pair2qkvg2: Linear(256, 1024, no bias)` — ending node projection: same decomposition
@@ -726,8 +735,9 @@ Same architecture as MSA module (§6.3.7). 4 heads, 64 head_dim, at pair dim 256
 
 #### 6.4.3 Pair Transition
 
-`LayerNorm(256)` → `Linear(256, 1024, no bias)` → SwiGLU → `Linear(512, 256)`.
-Expansion: **4×**.
+`LayerNorm(256)` → `Linear(256, 1024, no bias)` → SwiGLU → `Linear(512, 256, no bias)`.
+Expansion: **4×**. `linear_out` has **no bias** (verified from TorchScript: two-argument
+`torch.linear` call).
 
 #### 6.4.4 Attention with Pair Bias
 
@@ -741,8 +751,8 @@ Attention: softmax(q·k^T / √24 + pair_bias) · v, gated by sigmoid(g).
 
 #### 6.4.5 Single Transition
 
-`LayerNorm(384)` → `Linear(384, 1536, no bias)` → SwiGLU → `Linear(768, 384)`.
-Expansion: **4×**.
+`LayerNorm(384)` → `Linear(384, 1536, no bias)` → SwiGLU → `Linear(768, 384, no bias)`.
+Expansion: **4×**. `linear_out` has **no bias**.
 
 ### 6.5 Summary Table
 
@@ -858,7 +868,7 @@ Additions beyond the token embedder's encoder:
 - `to_atom_cond: Linear(128, 128, no bias)` — condition atoms from structure features
 - `token_to_atom_single: LayerNorm(384) → Linear(384, 128, no bias)` — broadcast token→atom
 - `prev_pos_embed: Linear(3, 128, no bias)` — embeds noised atom positions
-- `pair_update_block`: same as token embedder (proj_h/w + MLP at dim 16)
+- `pair_update_block`: same as token embedder (ReLU → proj_h/w + MLP at dim 16)
 - `token_pair_to_atom_pair: LayerNorm(256) → Linear(256, 16, no bias)` — pair→atom pair
 - 3 local attention blocks + 3 transitions (4 heads, 32 head_dim)
 - `to_token_single: Linear(128, 768, no bias) → ReLU` — aggregate to token at **768** dim
@@ -880,7 +890,7 @@ pair_bias = pair_linear(LayerNorm(z_cond))       # per-head bias [b, n, n, 16]
 
 attn_out = SDPA(q, k, v, bias=pair_bias)
 gate = sigmoid(gate_proj(s_cond))                # [b, n, 768]
-x += to_out(attn_out) * gate
+x += to_out(attn_out) * gate          # to_out: Linear(768, 768, no bias)
 
 # 2. Conditioned transition
 scale, shift = chunk(ada_ln(s_cond), 2)
@@ -1074,6 +1084,9 @@ Same execution order as trunk Pairformer blocks (§6.4):
 - `attention_pair_bias`: 16 heads, 24 head_dim (identical to trunk)
 
 **Different triangle attention variant** (`TriangleAttentionUpdate_v1`):
+- `pair_layer_norm: LayerNorm(256)` — pair pre-norm with **learnable affine** (unlike the
+  trunk's `affine=False` pre-norm). Verified from TorchScript: `pair_layer_norm.weight`
+  and `pair_layer_norm.bias` are named parameters.
 - `pair2qkvgb: Linear(256, 2056, no bias)` — fused single-projection:
   **2056 = 2048 (qkvg) + 8 (bias)**, where:
   - 2048 = 2 directions × 4 components(q,k,v,g) × **4 heads** × 64 dim

@@ -22,7 +22,7 @@ class PairformerBlock(nn.Module):
         eps: float = 1e-5,
     ) -> None:
         super().__init__()
-        self.transition_pair = Transition(pair_dim, expansion=2, bias_out=True, eps=eps)
+        self.transition_pair = Transition(pair_dim, expansion=2, eps=eps)
         self.triangle_multiplication = TriangleMultiplication(pair_dim, eps=eps)
         if use_fused_triangle_attention:
             self.triangle_attention = ConfidenceTriangleAttention(
@@ -47,7 +47,7 @@ class PairformerBlock(nn.Module):
                 head_dim=single_head_dim,
                 eps=eps,
             )
-            self.transition_single = Transition(single_dim, expansion=2, bias_out=True, eps=eps)
+            self.transition_single = Transition(single_dim, expansion=2, eps=eps)
 
     def __call__(
         self,

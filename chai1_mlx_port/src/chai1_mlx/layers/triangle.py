@@ -12,8 +12,8 @@ class TriangleMultiplication(nn.Module):
         self.layernorm_z_in = nn.LayerNorm(pair_dim, eps=eps)
         self.merged_linear_p = nn.Linear(pair_dim, 4 * pair_dim, bias=False)
         self.merged_linear_g = nn.Linear(pair_dim, 5 * pair_dim, bias=False)
-        self.layernorm_out = nn.LayerNorm(pair_dim, eps=eps)
-        self.layernorm_in = nn.LayerNorm(pair_dim, eps=eps)
+        self.layernorm_out = nn.LayerNorm(pair_dim, eps=eps, affine=False)
+        self.layernorm_in = nn.LayerNorm(pair_dim, eps=eps, affine=False)
         self.linear_z_out = nn.Linear(pair_dim, pair_dim, bias=False)
 
     _CHUNK_SIZE: int = 32
@@ -103,7 +103,7 @@ class TriangleAttention(nn.Module):
 
     def __init__(self, pair_dim: int, num_heads: int, head_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
-        self.pair_norm = nn.LayerNorm(pair_dim, eps=eps)
+        self.pair_norm = nn.LayerNorm(pair_dim, eps=eps, affine=False)
         self.pair2b = nn.Linear(pair_dim, 2 * num_heads, bias=False)
         self.pair2qkvg1 = nn.Linear(pair_dim, 4 * num_heads * head_dim, bias=False)
         self.pair2qkvg2 = nn.Linear(pair_dim, 4 * num_heads * head_dim, bias=False)

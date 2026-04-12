@@ -13,13 +13,19 @@ A logically structured MLX inference port for Chai-1 with:
 This port intentionally separates **frontend featurization** from the **MLX neural core**:
 
 - `featurize(...)` accepts either a precomputed `FeatureContext` or a dict of already-encoded tensors.
+- `featurize_fasta(...)` delegates to **chai-lab's** featurization pipeline (parsing, tokenization, MSA/template/ESM loading, feature generation, collation) and converts the result into a `FeatureContext`.  This avoids reimplementing the 30+ feature generators and guarantees correctness.  Requires `torch` and `chai_lab` at runtime (`pip install .[featurize]`).
 - The neural core starts from the **final encoded feature tensors** (TOKEN/TOKEN_PAIR/ATOM/ATOM_PAIR/MSA/TEMPLATES + bond adjacency).
 - This keeps the MLX implementation focused on the model itself rather than the bioinformatics pipeline.
 
 That means the API stays close to:
 
 ```python
+# From FASTA (uses chai-lab under the hood):
+ctx = featurize_fasta("input.fasta", output_dir="./out")
+
+# Or from precomputed tensors:
 ctx = featurize(inputs)
+
 emb = model.embed_inputs(ctx)
 trunk_out = model.trunk(emb, recycles=3)
 
@@ -46,7 +52,7 @@ src/chai1_mlx/
   api.py                # high-level pipeline wrapper
   config.py             # dimensions and architecture constants
   types.py              # typed dataclasses for contexts and outputs
-  featurize.py          # frontend adapters for precomputed features
+  featurize.py          # frontend adapters: precomputed tensors + chai-lab FASTA path
   embeddings.py         # feature embedding + bond projection + token embedder
   trunk.py              # template embedder, MSA module, pairformer stack
   diffusion.py          # diffusion conditioning, cache split, sampler step

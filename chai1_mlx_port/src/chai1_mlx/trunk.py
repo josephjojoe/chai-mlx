@@ -70,7 +70,7 @@ class OuterProductMean(nn.Module):
 
     def __init__(self, msa_dim: int, pair_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
-        self.norm = nn.LayerNorm(msa_dim, eps=eps)
+        self.norm = nn.LayerNorm(msa_dim, eps=eps, affine=False)
         self.weight_ab = mx.zeros((2, 8, 8, msa_dim), dtype=mx.float32)
         self.ln_out = nn.LayerNorm(512, eps=eps)
         self.linear_out = nn.Linear(512, pair_dim, bias=True)
@@ -124,11 +124,11 @@ class MSAModule(nn.Module):
             for _ in range(cfg.msa.num_pair_weighted_avg)
         ]
         self.msa_transition = [
-            Transition(cfg.hidden.msa, expansion=4, bias_out=True, eps=cfg.layer_norm_eps)
+            Transition(cfg.hidden.msa, expansion=4, eps=cfg.layer_norm_eps)
             for _ in range(cfg.msa.num_msa_transition)
         ]
         self.pair_transition = [
-            Transition(cfg.hidden.token_pair, expansion=4, bias_out=True, eps=cfg.layer_norm_eps)
+            Transition(cfg.hidden.token_pair, expansion=4, eps=cfg.layer_norm_eps)
             for _ in range(cfg.msa.num_pair_transition)
         ]
         self.triangular_multiplication = [

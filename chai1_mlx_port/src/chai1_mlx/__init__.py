@@ -1,6 +1,6 @@
 from .api import Chai1MLX
 from .config import Chai1Config
-from .featurize import featurize
+from .featurize import featurize, featurize_fasta
 from .types import (
     ConfidenceOutputs,
     DiffusionCache,
@@ -16,6 +16,7 @@ __all__ = [
     "Chai1MLX",
     "Chai1Config",
     "featurize",
+    "featurize_fasta",
     "ConfidenceOutputs",
     "DiffusionCache",
     "EmbeddingOutputs",
