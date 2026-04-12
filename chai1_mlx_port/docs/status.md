@@ -35,24 +35,49 @@ against the TorchScript `.pt` modules and the graph dumps in `findings/graphs/`.
 
 ## Featurization
 
-Frontend featurization is now delegated to the upstream **chai-lab** package
-via `featurize_fasta()`.  The ported NumPy feature generators (`data/`) have
-been removed — they had multiple critical faithfulness bugs (wrong bin edges,
-missing masks, incorrect relative-chain encoding, broken template outer-sum)
-and provided no performance benefit over the CPU-only reference pipeline.
+Frontend featurization is delegated to the upstream **chai-lab** package via
+`featurize_fasta()`.  The thin adapter in `featurize.py` calls chai-lab's
+`make_all_atom_feature_context` and `Collate`, then encodes the per-generator
+features into the dense tensors that the MLX `FeatureEmbedding` expects.
 
-The thin adapter in `featurize.py` calls chai-lab's `make_all_atom_feature_context`
-and `Collate`, then encodes the per-generator features into the dense tensors
-that the MLX `FeatureEmbedding` expects.  The encoding (one-hot expansion order
-and dim allocation) must be verified against the TorchScript `feature_embedding.pt`
-during parity testing.
+Features that require learned parameters (TemplateResType embedding, RBF
+restraint radii) are kept as raw auxiliary data on `FeatureContext` and encoded
+at runtime by `FeatureEmbedding` using its learned weights.
+
+### Encoding bugs fixed in featurize.py audit
+
+- **ONE_HOT mask channel**: All ONE_HOT features with `can_mask=True` now use
+  `one_hot(idx, width)` where `width` is the exact value from the TorchScript
+  IR (typically `num_classes + 1`), not the generator's `num_classes`.  Fixed
+  via a lookup table (`_ONE_HOT_WIDTH`) verified against every `torch.one_hot`
+  call in `feature_embedding_forward256.py`.
+- **AtomNameOneHot mult=4 flattening**: The 4-character-per-atom one-hot is now
+  correctly reshaped from `(B, N, 4, 65)` to `(B, N, 260)` to match the
+  TorchScript `reshape(…, 260)`.
+- **RBF encoding for TokenDistanceRestraint / TokenPairPocketRestraint**: Raw
+  distance values are stored in `FeatureContext.distance_restraint_data` /
+  `.pocket_restraint_data`.  `FeatureEmbedding._encode_rbf` applies the
+  Gaussian RBF expansion using learned `radii` parameters and config-derived
+  scale constants (4.8 and 2.8), producing 7 channels (6 RBF + 1 mask) each.
+- **TemplateResType OUTERSUM encoding**: Raw residue type indices are stored in
+  `FeatureContext.template_restype_indices`.  `FeatureEmbedding` encodes them
+  via `nn.Embedding(33, 32)` with pairwise outer-sum, matching the TorchScript
+  embedding-based (not one-hot-based) outer-sum pattern.
+- **Feature concatenation order**: Features within each type group are now
+  sorted alphabetically by name, matching the TorchScript concatenation order
+  verified against `feature_embedding_forward256.py`.
+- **Identity feature shape**: `_encode_identity` now guarantees at least 3D
+  output (adding trailing dim when needed) to prevent shape mismatches during
+  concatenation.
+- **Weight map**: Added mappings for the 3 previously-dropped learned
+  parameters: `TemplateResType.embedding.weight`, `TokenDistanceRestraint.radii`,
+  `TokenPairPocketRestraint.radii`.
 
 ## Still requiring parity work
 
 - Verified loading with real weights (name mapping + einsum reshape logic is in place but untested end-to-end).
 - Exhaustive per-layer tensor parity checks against the reference runtime.
-- Verify that the feature encoding in `featurize.py:_batch_to_feature_context`
-  matches the TorchScript `feature_embedding.pt` internal encoding.
+- Parity test that exercises `_batch_to_feature_context` end-to-end against the reference `feature_embedding.pt` output (existing `validate_parity.py` only tests the Linear projections, not the encoding path).
 
 ## Recommended path to productionize
 

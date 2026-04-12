@@ -44,6 +44,9 @@ class FeatureContext:
     template_features: Array
     structure_inputs: StructureInputs
     bond_adjacency: Array | None = None
+    template_restype_indices: Array | None = None
+    distance_restraint_data: Array | None = None
+    pocket_restraint_data: Array | None = None
 
 
 @dataclass

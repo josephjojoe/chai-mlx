@@ -124,6 +124,11 @@ class Chai1Config:
     msa: MSAConfig = field(default_factory=MSAConfig)
     confidence: ConfidenceConfig = field(default_factory=ConfidenceConfig)
     supported_token_sizes: Sequence[int] = (256, 384, 512, 768, 1024, 1536, 2048)
+    template_restype_vocab: int = 33
+    template_restype_embed_dim: int = 32
+    num_rbf_radii: int = 6
+    distance_rbf_scale: float = 4.8
+    pocket_rbf_scale: float = 2.8
     attention_mask_value: float = -10000.0
     layer_norm_eps: float = 1e-5
     centroid_eps: float = 1e-4

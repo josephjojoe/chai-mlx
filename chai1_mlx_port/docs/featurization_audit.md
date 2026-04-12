@@ -397,15 +397,15 @@ to the trunk.
 
 ## Summary of Required Fixes
 
-| # | Severity | Issue | Impact |
-|---|----------|-------|--------|
-| 1 | CRITICAL | ONE_HOT mask channel missing for `can_mask=True` features | All feature groups misaligned; model produces garbage |
-| 2 | CRITICAL | AtomNameOneHot `mult=4` not flattened after one-hot | Runtime shape error or silent misalignment |
-| 3 | CRITICAL | RBF encoding not implemented; 2 learned params dropped | TOKEN_PAIR 13 channels short; restraint features ignored |
-| 4 | CRITICAL | TemplateResType OUTERSUM uses one-hot instead of learned Embedding | TEMPLATES dimension wrong (77 vs 76); runtime error |
-| 5 | MODERATE | Weight map drops 3 learned feature_embedding parameters | Model loads without error but encoding is numerically wrong |
-| 6 | MODERATE | Parity validation never tests the encoding path | Bugs 1–4 would not be caught by existing tests |
-| 7 | MODERATE | No integration test for featurize_fasta | Full pipeline never exercised |
-| 8 | MINOR | Feature concatenation order may not match TorchScript | Potential silent misalignment if order differs |
-| 9 | MINOR | bond_adjacency dual-sourcing | Fragile, could cause silent data loss |
-| 10 | MINOR | Missing msa_mask/template_mask in StructureInputs | Trunk may not receive required masks via featurize_fasta |
+| # | Severity | Issue | Impact | Status |
+|---|----------|-------|--------|--------|
+| 1 | CRITICAL | ONE_HOT mask channel missing for `can_mask=True` features | All feature groups misaligned; model produces garbage | **FIXED** — `_ONE_HOT_WIDTH` lookup table from TorchScript IR |
+| 2 | CRITICAL | AtomNameOneHot `mult=4` not flattened after one-hot | Runtime shape error or silent misalignment | **FIXED** — reshape to `(B, N, 260)` when `result.ndim > feat.ndim` |
+| 3 | CRITICAL | RBF encoding not implemented; 2 learned params dropped | TOKEN_PAIR 13 channels short; restraint features ignored | **FIXED** — `FeatureEmbedding._encode_rbf` with learned radii |
+| 4 | CRITICAL | TemplateResType OUTERSUM uses one-hot instead of learned Embedding | TEMPLATES dimension wrong (77 vs 76); runtime error | **FIXED** — `FeatureEmbedding._encode_template_restype` with `nn.Embedding(33,32)` |
+| 5 | MODERATE | Weight map drops 3 learned feature_embedding parameters | Model loads without error but encoding is numerically wrong | **FIXED** — 3 entries added to `_feature_embedding_map` |
+| 6 | MODERATE | Parity validation never tests the encoding path | Bugs 1–4 would not be caught by existing tests | OPEN |
+| 7 | MODERATE | No integration test for featurize_fasta | Full pipeline never exercised | OPEN |
+| 8 | MINOR | Feature concatenation order may not match TorchScript | Potential silent misalignment if order differs | **FIXED** — alphabetical sort in `_concat_for_type` |
+| 9 | MINOR | bond_adjacency dual-sourcing | Fragile, could cause silent data loss | OPEN (documented) |
+| 10 | MINOR | Missing msa_mask/template_mask in StructureInputs | Trunk may not receive required masks via featurize_fasta | OPEN |

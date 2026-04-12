@@ -148,6 +148,15 @@ def _feature_embedding_map() -> dict[str, str]:
     ]:
         m[f"{ts_key}.weight"] = f"{prefix}{mlx_key}.weight"
         m[f"{ts_key}.bias"] = f"{prefix}{mlx_key}.bias"
+    m["feature_embeddings.TEMPLATES.TemplateResType.embedding.weight"] = (
+        f"{prefix}template_restype_embedding.weight"
+    )
+    m["feature_embeddings.TOKEN_PAIR.TokenDistanceRestraint.radii"] = (
+        f"{prefix}distance_restraint_radii"
+    )
+    m["feature_embeddings.TOKEN_PAIR.TokenPairPocketRestraint.radii"] = (
+        f"{prefix}pocket_restraint_radii"
+    )
     return m
 
 

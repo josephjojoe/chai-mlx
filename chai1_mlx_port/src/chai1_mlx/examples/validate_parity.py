@@ -79,12 +79,12 @@ def validate_feature_embedding(
     B, N = 1, 64
 
     features_np = {
-        "TOKEN": rng.standard_normal((B, N, cfg.features.token)).astype(np.float32),
-        "TOKEN_PAIR": rng.standard_normal((B, N, N, cfg.features.token_pair)).astype(np.float32),
-        "ATOM": rng.standard_normal((B, N * 14, cfg.features.atom)).astype(np.float32),
-        "ATOM_PAIR": rng.standard_normal((B, N, 14, 14, cfg.features.atom_pair)).astype(np.float32),
-        "MSA": rng.standard_normal((B, 16, N, cfg.features.msa)).astype(np.float32),
-        "TEMPLATES": rng.standard_normal((B, 4, N, N, cfg.features.templates)).astype(np.float32),
+        "TOKEN": rng.standard_normal((B, N, cfg.feature_dims.token)).astype(np.float32),
+        "TOKEN_PAIR": rng.standard_normal((B, N, N, cfg.feature_dims.token_pair)).astype(np.float32),
+        "ATOM": rng.standard_normal((B, N * 14, cfg.feature_dims.atom)).astype(np.float32),
+        "ATOM_PAIR": rng.standard_normal((B, N, 14, 14, cfg.feature_dims.atom_pair)).astype(np.float32),
+        "MSA": rng.standard_normal((B, 16, N, cfg.feature_dims.msa)).astype(np.float32),
+        "TEMPLATES": rng.standard_normal((B, 4, N, N, cfg.feature_dims.templates)).astype(np.float32),
     }
 
     ts_path = ts_dir / "feature_embedding.pt"

@@ -138,6 +138,34 @@ def featurize_fasta(
 
 
 # ---------------------------------------------------------------------------
+# One-hot widths from the TorchScript feature_embedding.pt IR.
+# These are the exact second argument to torch.one_hot() in forward_256.
+# For can_mask=True features this is num_classes + 1 (except MSADataSource
+# whose num_classes already includes the mask class).
+# ---------------------------------------------------------------------------
+_ONE_HOT_WIDTH: dict[str, int] = {
+    "AtomNameOneHot": 65,
+    "AtomRefElement": 130,
+    "BlockedAtomPairDistogram": 12,
+    "DockingConstraintGenerator": 6,
+    "IsDistillation": 2,
+    "MSADataSource": 6,
+    "MSAOneHot": 33,
+    "RelativeChain": 6,
+    "RelativeEntity": 3,
+    "RelativeSequenceSeparation": 67,
+    "RelativeTokenSeparation": 67,
+    "ResidueType": 33,
+    "TemplateDistogram": 39,
+    "TokenBFactor": 3,
+    "TokenPLDDT": 4,
+}
+
+_RBF_FEATURES = frozenset({"TokenDistanceRestraint", "TokenPairPocketRestraint"})
+_OUTERSUM_FEATURES = frozenset({"TemplateResType"})
+
+
+# ---------------------------------------------------------------------------
 # Batch-dict → FeatureContext conversion
 # ---------------------------------------------------------------------------
 
@@ -147,19 +175,11 @@ def _batch_to_feature_context(
 ) -> FeatureContext:
     """Convert a chai-lab batch dict into a ``FeatureContext``.
 
-    The batch is produced by ``Collate(feature_factory, ...)(contexts)`` and
-    contains:
-
-    - ``batch["inputs"]``: padded raw tensors (masks, indices, coords, …)
-    - ``batch["features"]``: per-generator feature tensors (raw, pre-encoding)
-
-    The TorchScript ``feature_embedding.pt`` module encodes and concatenates
-    these internally.  We replicate that encoding here so the MLX model's
-    ``nn.Linear``-based ``FeatureEmbedding`` receives the same input.
-
-    **Important**: the per-feature encoding below must match the TorchScript
-    model's internal encoding.  Verify via parity tests against the reference
-    ``feature_embedding.pt`` output.
+    The encoding applied here matches the TorchScript ``feature_embedding.pt``
+    internal encoding for all features that do NOT require learned parameters.
+    Features with learned parameters (TemplateResType embedding, RBF restraint
+    radii) are left as raw data in auxiliary fields and encoded at runtime
+    by ``FeatureEmbedding``.
     """
     import torch
     import torch.nn.functional as F
@@ -175,50 +195,92 @@ def _batch_to_feature_context(
 
     # -- helpers --------------------------------------------------------
 
-    def _encode_one_hot(feat: torch.Tensor, num_classes: int) -> torch.Tensor:
-        idx = feat.squeeze(-1).long().clamp(0, num_classes - 1)
-        return F.one_hot(idx, num_classes).float()
-
-    def _encode_outersum(feat: torch.Tensor, num_classes: int) -> torch.Tensor:
-        idx = feat.squeeze(-1).long().clamp(0, num_classes - 1)
-        oh = F.one_hot(idx, num_classes).float()
-        return oh[..., :, None, :] + oh[..., None, :, :]
+    def _encode_one_hot(
+        name: str, feat: torch.Tensor, gen: Any,
+    ) -> torch.Tensor:
+        width = _ONE_HOT_WIDTH[name]
+        idx = feat.long()
+        if idx.shape[-1] == 1:
+            idx = idx.squeeze(-1)
+        result = F.one_hot(idx.clamp(0, width - 1), width).float()
+        if result.ndim > feat.ndim:
+            result = result.reshape(*result.shape[: feat.ndim - 1], -1)
+        return result
 
     def _encode_identity(feat: torch.Tensor) -> torch.Tensor:
-        return feat.float()
+        out = feat.float()
+        if out.ndim >= 2 and out.shape[-1] != 1:
+            return out
+        if out.ndim < 3:
+            while out.ndim < 3:
+                out = out.unsqueeze(-1)
+        return out
 
     def _encode_feature(
-        gen: Any, feat: torch.Tensor,
+        name: str, gen: Any, feat: torch.Tensor,
     ) -> torch.Tensor:
         if gen.encoding_ty == EncodingType.ONE_HOT:
-            return _encode_one_hot(feat, gen.num_classes)
-        if gen.encoding_ty == EncodingType.OUTERSUM:
-            return _encode_outersum(feat, gen.num_classes)
+            return _encode_one_hot(name, feat, gen)
+        if gen.encoding_ty in (EncodingType.IDENTITY, EncodingType.ESM):
+            return _encode_identity(feat)
+        if gen.encoding_ty == EncodingType.RBF:
+            return _encode_identity(feat)
         return _encode_identity(feat)
 
-    # -- group generators by FeatureType --------------------------------
+    # -- group generators by FeatureType, sorted alphabetically ---------
+    # The TorchScript concatenates features in alphabetical order within
+    # each type group (verified against feature_embedding_forward256.py).
 
     groups: dict[FeatureType, list[tuple[str, Any]]] = {}
     for name, gen in feature_generators.items():
         groups.setdefault(gen.ty, []).append((name, gen))
+    for ft in groups:
+        groups[ft].sort(key=lambda x: x[0])
+
+    # -- stash raw data for features encoded by FeatureEmbedding --------
+
+    template_restype_raw = None
+    distance_restraint_raw = None
+    pocket_restraint_raw = None
 
     def _concat_for_type(
         ft: FeatureType, target_dim: int,
     ) -> torch.Tensor:
+        nonlocal template_restype_raw, distance_restraint_raw, pocket_restraint_raw
+
         parts: list[torch.Tensor] = []
         for name, gen in groups.get(ft, []):
-            encoded = _encode_feature(gen, features[name])
+            if name in _OUTERSUM_FEATURES:
+                template_restype_raw = features[name].squeeze(-1).long()
+                placeholder = torch.zeros(
+                    *features[name].shape[:-1],
+                    features[name].shape[-2],
+                    32,
+                    dtype=torch.float32,
+                )
+                parts.append(placeholder)
+                continue
+            if name in _RBF_FEATURES:
+                raw = features[name].float()
+                if raw.shape[-1] == 1:
+                    pass
+                if name == "TokenDistanceRestraint":
+                    distance_restraint_raw = raw
+                else:
+                    pocket_restraint_raw = raw
+                placeholder = torch.zeros(
+                    *raw.shape[:-1], 7, dtype=torch.float32,
+                )
+                parts.append(placeholder)
+                continue
+            encoded = _encode_feature(name, gen, features[name])
             parts.append(encoded)
         if not parts:
             raise RuntimeError(f"No features found for {ft}")
         cat = torch.cat(parts, dim=-1)
-        deficit = target_dim - cat.shape[-1]
-        if deficit > 0:
-            pad_shape = cat.shape[:-1] + (deficit,)
-            cat = torch.cat([cat, torch.zeros(pad_shape, dtype=cat.dtype)], dim=-1)
-        elif deficit < 0:
+        if cat.shape[-1] != target_dim:
             raise RuntimeError(
-                f"{ft.value} feature dim {cat.shape[-1]} exceeds target {target_dim}"
+                f"{ft.value} feature dim {cat.shape[-1]} != target {target_dim}"
             )
         return cat
 
@@ -232,7 +294,7 @@ def _batch_to_feature_context(
     # -- convert to MLX -------------------------------------------------
 
     def _mx(t: torch.Tensor) -> mx.array:
-        return mx.array(t.cpu().numpy())
+        return mx.array(t.detach().cpu().numpy())
 
     # -- build StructureInputs ------------------------------------------
 
@@ -279,4 +341,13 @@ def _batch_to_feature_context(
         template_features=_mx(tmpl_feat),
         structure_inputs=structure,
         bond_adjacency=_mx(bond_features),
+        template_restype_indices=(
+            _mx(template_restype_raw) if template_restype_raw is not None else None
+        ),
+        distance_restraint_data=(
+            _mx(distance_restraint_raw) if distance_restraint_raw is not None else None
+        ),
+        pocket_restraint_data=(
+            _mx(pocket_restraint_raw) if pocket_restraint_raw is not None else None
+        ),
     )
