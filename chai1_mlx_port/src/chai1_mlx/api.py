@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterator
 
 import mlx.core as mx
@@ -22,6 +24,7 @@ from .types import (
     RankingOutputs,
     TrunkOutputs,
 )
+from .weights.load import load_safetensors
 
 
 @dataclass
@@ -43,6 +46,43 @@ class Chai1MLX(nn.Module):
         self.diffusion_module = DiffusionModule(self.cfg)
         self.confidence_head = ConfidenceHead(self.cfg)
         self.ranker = Ranker(self.cfg)
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        path_or_repo: str | Path,
+        *,
+        strict: bool = True,
+    ) -> "Chai1MLX":
+        """Load a pretrained model from a local directory or HuggingFace repo.
+
+        The directory should contain ``config.json`` and either
+        ``model.safetensors`` or sharded safetensors with an index file.
+
+        For HuggingFace repos, use ``mlx.utils`` or ``huggingface_hub`` to
+        download first, then pass the local path.
+        """
+        path = Path(path_or_repo)
+        if not path.is_dir():
+            try:
+                from huggingface_hub import snapshot_download
+                path = Path(snapshot_download(str(path_or_repo)))
+            except ImportError:
+                raise ValueError(
+                    f"{path_or_repo} is not a local directory and "
+                    "huggingface_hub is not installed for remote download"
+                )
+
+        config_path = path / "config.json"
+        if config_path.exists():
+            with open(config_path) as f:
+                cfg = Chai1Config(**json.load(f))
+        else:
+            cfg = Chai1Config()
+
+        model = cls(cfg)
+        load_safetensors(model, path, strict=strict)
+        return model
 
     def featurize(self, inputs: FeatureContext | InputBundle | dict) -> FeatureContext:
         return _featurize(inputs)
