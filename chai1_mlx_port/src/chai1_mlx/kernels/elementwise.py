@@ -4,7 +4,7 @@ from functools import lru_cache
 
 import mlx.core as mx
 
-from .sources import ADALN_APPLY_SOURCE, GATED_RESIDUAL_SOURCE, SWIGLU_SOURCE
+from .sources import ADALN_APPLY_SOURCE, FUSED_ADALN_SOURCE, GATED_RESIDUAL_SOURCE, SWIGLU_SOURCE
 
 
 @lru_cache(maxsize=1)
@@ -68,4 +68,37 @@ def fused_adaln(x_norm: mx.array, scale: mx.array, shift: mx.array) -> mx.array:
         threadgroup=(256, 1, 1),
         output_shapes=[x_norm.shape],
         output_dtypes=[x_norm.dtype],
+    )[0]
+
+
+@lru_cache(maxsize=1)
+def _fused_adaln_kernel():
+    return mx.fast.metal_kernel(
+        name="chai1_fused_adaln",
+        input_names=["x", "ln_w", "ln_b", "scale", "shift", "eps"],
+        output_names=["y"],
+        source=FUSED_ADALN_SOURCE,
+    )
+
+
+def fused_adaln_full(
+    x: mx.array,
+    ln_weight: mx.array,
+    ln_bias: mx.array,
+    scale: mx.array,
+    shift: mx.array,
+    eps: float = 1e-5,
+) -> mx.array:
+    D = x.shape[-1]
+    num_rows = x.size // D
+    tg_size = min(D, 1024)
+    # Round up to multiple of 32 (SIMD width) for correct warp reductions.
+    tg_size = ((tg_size + 31) // 32) * 32
+    return _fused_adaln_kernel()(
+        inputs=[x, ln_weight, ln_bias, scale, shift, mx.array(eps, dtype=mx.float32)],
+        template=[("T", x.dtype)],
+        grid=(1, num_rows, 1),
+        threadgroup=(tg_size, 1, 1),
+        output_shapes=[x.shape],
+        output_dtypes=[x.dtype],
     )[0]

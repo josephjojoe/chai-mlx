@@ -92,9 +92,9 @@ class DiffusionTransformerBlock(nn.Module):
             eps=cfg.layer_norm_eps,
         )
 
-    def __call__(self, x: mx.array, s_cond: mx.array, pair_bias: mx.array) -> mx.array:
-        x = self.attn(x, s_cond, pair_bias=pair_bias)
-        x = self.transition(x, s_cond)
+    def __call__(self, x: mx.array, s_cond: mx.array, pair_bias: mx.array, *, use_kernel: bool = False) -> mx.array:
+        x = self.attn(x, s_cond, pair_bias=pair_bias, use_kernel=use_kernel)
+        x = self.transition(x, s_cond, use_kernel=use_kernel)
         return x
 
 
@@ -106,7 +106,7 @@ class DiffusionTransformer(nn.Module):
     def precompute_pair_biases(self, z_cond: mx.array, pair_mask: mx.array | None = None) -> tuple[mx.array, ...]:
         return tuple(block.attn.pair_bias(z_cond, pair_mask=pair_mask) for block in self.blocks)
 
-    def __call__(self, x: mx.array, s_cond: mx.array, pair_biases: tuple[mx.array, ...]) -> mx.array:
+    def __call__(self, x: mx.array, s_cond: mx.array, pair_biases: tuple[mx.array, ...], *, use_kernel: bool = False) -> mx.array:
         b, ds, n, d = x.shape
         out = x
         for block, pair_bias in zip(self.blocks, pair_biases):
@@ -115,6 +115,7 @@ class DiffusionTransformer(nn.Module):
                 out.reshape(b * ds, n, d),
                 s_cond.reshape(b * ds, n, s_cond.shape[-1]),
                 bias.reshape(b * ds, *pair_bias.shape[1:]),
+                use_kernel=use_kernel,
             ).reshape(b, ds, n, d)
         return out
 
@@ -160,12 +161,16 @@ class DiffusionModule(nn.Module):
         )
         blocked_pair_base = blocked_pair_base + trunk.atom_pair_structure_input
 
+        atom_cond = self.atom_attention_encoder.to_atom_cond(
+            trunk.atom_single_structure_input
+        )
+
         return DiffusionCache(
             s_static=s_static,
             z_cond=z_cond,
             pair_biases=pair_biases,
             blocked_pair_base=blocked_pair_base,
-            atom_cond=trunk.atom_single_structure_input,
+            atom_cond=atom_cond,
             trunk_outputs=trunk,
             structure_inputs=structure,
         )
@@ -205,7 +210,7 @@ class DiffusionModule(nn.Module):
             use_custom_kernel=use_custom_kernel,
         )
         x = x + enc_tokens
-        x = self.diffusion_transformer(x, s_cond, cache.pair_biases)
+        x = self.diffusion_transformer(x, s_cond, cache.pair_biases, use_kernel=use_custom_kernel)
         x = self.post_attn_layernorm(x)
         atom_cond = self.post_atom_cond_layernorm(atom_cond)
         pos_updates = self.atom_attention_decoder(

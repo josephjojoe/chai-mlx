@@ -16,7 +16,12 @@ class TriangleMultiplication(nn.Module):
         self.layernorm_in = nn.LayerNorm(pair_dim, eps=eps)
         self.linear_z_out = nn.Linear(pair_dim, pair_dim, bias=False)
 
-    def __call__(self, z: mx.array, pair_mask: mx.array | None = None) -> mx.array:
+    def __call__(self, z: mx.array, pair_mask: mx.array | None = None, *, chunk_size: int | None = None) -> mx.array:
+        if chunk_size is not None:
+            return self._forward_chunked(z, pair_mask, chunk_size)
+        return self._forward_unchunked(z, pair_mask)
+
+    def _forward_unchunked(self, z: mx.array, pair_mask: mx.array | None) -> mx.array:
         z_normed = self.layernorm_z_in(z)
         p = self.merged_linear_p(z_normed)
         g = sigmoid(self.merged_linear_g(z_normed))
@@ -36,6 +41,56 @@ class TriangleMultiplication(nn.Module):
         x_in = mx.einsum("bkid,bkjd->bijd", a2, b2)
         out = self.linear_z_out(self.layernorm_out(x_out) + self.layernorm_in(x_in))
         out = out * g[..., 4 * z.shape[-1] :]
+        return z + out
+
+    def _forward_chunked(self, z: mx.array, pair_mask: mx.array | None, chunk_size: int) -> mx.array:
+        """Memory-efficient triangle multiplication by chunking over the feature dimension.
+
+        Instead of materializing full [b, n, n, 4*d] projections, we process
+        ``chunk_size`` channels at a time and accumulate the einsum contractions
+        incrementally.  This reduces peak intermediate memory from ~11× to ~3-4×
+        the pair tensor footprint.
+        """
+        d = z.shape[-1]
+        z_normed = self.layernorm_z_in(z)
+
+        # Weight matrices: merged_linear_p [4d, d], merged_linear_g [5d, d].
+        # Rows [0:d]=a1, [d:2d]=b1, [2d:3d]=a2, [3d:4d]=b2 for p.
+        # Rows [0:d]=ga1, [d:2d]=gb1, [2d:3d]=ga2, [3d:4d]=gb2, [4d:5d]=g_out for g.
+        w_p = self.merged_linear_p.weight  # [4d, d]
+        w_g = self.merged_linear_g.weight  # [5d, d]
+
+        if pair_mask is not None:
+            row_mask = pair_mask[..., None].astype(z.dtype)
+            col_mask = pair_mask.transpose(0, 2, 1)[..., None].astype(z.dtype)
+        else:
+            row_mask = col_mask = None
+
+        x_out = mx.zeros(z.shape, dtype=z.dtype)
+        x_in = mx.zeros(z.shape, dtype=z.dtype)
+
+        for c in range(0, d, chunk_size):
+            c_end = min(c + chunk_size, d)
+
+            a1 = (z_normed @ w_p[c:c_end].T) * sigmoid(z_normed @ w_g[c:c_end].T)
+            b1 = (z_normed @ w_p[d + c:d + c_end].T) * sigmoid(z_normed @ w_g[d + c:d + c_end].T)
+            a2 = (z_normed @ w_p[2 * d + c:2 * d + c_end].T) * sigmoid(z_normed @ w_g[2 * d + c:2 * d + c_end].T)
+            b2 = (z_normed @ w_p[3 * d + c:3 * d + c_end].T) * sigmoid(z_normed @ w_g[3 * d + c:3 * d + c_end].T)
+
+            if row_mask is not None:
+                a1 = a1 * row_mask
+                b1 = b1 * row_mask
+                a2 = a2 * col_mask
+                b2 = b2 * col_mask
+
+            x_out = x_out + mx.einsum("bikd,bjkd->bijd", a1, b1)
+            x_in = x_in + mx.einsum("bkid,bkjd->bijd", a2, b2)
+
+            mx.eval(x_out, x_in)
+
+        g_out = sigmoid(z_normed @ w_g[4 * d:].T)
+        out = self.linear_z_out(self.layernorm_out(x_out) + self.layernorm_in(x_in))
+        out = out * g_out
         return z + out
 
 

@@ -40,12 +40,12 @@ class TemplateEmbedder(nn.Module):
         self.template_layernorm = nn.LayerNorm(tdim, eps=cfg.layer_norm_eps)
         self.proj_out = nn.Linear(tdim, cfg.hidden.token_pair, bias=False)
 
-    def __call__(self, pair: mx.array, templates: mx.array, *, pair_mask: mx.array | None = None) -> mx.array:
+    def __call__(self, pair: mx.array, templates: mx.array, *, pair_mask: mx.array | None = None, triangle_chunk_size: int | None = None) -> mx.array:
         b, t, n, _, c = templates.shape
         x = templates.transpose(0, 2, 3, 1, 4).reshape(b, n, n, t * c)
         x = self.proj_in(self.proj_in_norm(x))
         for block in self.blocks:
-            x, _ = block(x, None, pair_mask=pair_mask)
+            x, _ = block(x, None, pair_mask=pair_mask, triangle_chunk_size=triangle_chunk_size)
         return pair + self.proj_out(self.template_layernorm(x))
 
 
@@ -160,6 +160,7 @@ class MSAModule(nn.Module):
         *,
         token_pair_mask: mx.array | None = None,
         msa_mask: mx.array | None = None,
+        triangle_chunk_size: int | None = None,
     ) -> mx.array:
         msa = msa_input
         if msa.shape[1] > 0:
@@ -172,7 +173,7 @@ class MSAModule(nn.Module):
             if i < len(self.msa_pair_weighted_averaging):
                 msa = msa + self.msa_pair_weighted_averaging[i](msa, pair, token_pair_mask=token_pair_mask)
                 msa = msa + self.msa_transition[i](msa)
-            pair = self.triangular_multiplication[i](pair, pair_mask=token_pair_mask)
+            pair = self.triangular_multiplication[i](pair, pair_mask=token_pair_mask, chunk_size=triangle_chunk_size)
             pair = self.triangular_attention[i](pair, pair_mask=token_pair_mask)
         return pair
 
@@ -206,6 +207,7 @@ class Trunk(nn.Module):
         *,
         recycles: int = 3,
         msa_mask: mx.array | None = None,
+        triangle_chunk_size: int | None = None,
     ) -> TrunkOutputs:
         single_init = emb.single_initial
         pair_init = emb.pair_initial
@@ -219,15 +221,16 @@ class Trunk(nn.Module):
             if prev_single is not None:
                 single = single_init + self.token_single_recycle_proj(prev_single)
                 pair = pair_init + self.token_pair_recycle_proj(prev_pair)
-            pair = self.template_embedder(pair, emb.template_input, pair_mask=token_pair_mask)
+            pair = self.template_embedder(pair, emb.template_input, pair_mask=token_pair_mask, triangle_chunk_size=triangle_chunk_size)
             pair = self.msa_module(
                 single,
                 pair,
                 emb.msa_input,
                 token_pair_mask=token_pair_mask,
                 msa_mask=msa_mask,
+                triangle_chunk_size=triangle_chunk_size,
             )
-            single, pair = self.pairformer_stack(single, pair, pair_mask=token_pair_mask)
+            single, pair = self.pairformer_stack(single, pair, pair_mask=token_pair_mask, triangle_chunk_size=triangle_chunk_size)
             prev_single, prev_pair = single, pair
 
         return TrunkOutputs(

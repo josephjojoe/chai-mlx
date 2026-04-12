@@ -53,7 +53,7 @@ class LocalAttentionPairBiasBlock(nn.Module):
     ) -> mx.array:
         b, a, d = x.shape
         num_blocks = a // 32
-        x_norm = self.adaln(x, cond)
+        x_norm = self.adaln(x, cond, use_kernel=use_custom_kernel)
         q_all, k_all, v_all = [
             split_heads(t, self.num_heads, self.head_dim) for t in mx.split(self.to_qkv(x_norm), 3, axis=-1)
         ]
@@ -128,7 +128,7 @@ class LocalAtomTransformer(nn.Module):
                 block_mask,
                 use_custom_kernel=use_custom_kernel,
             )
-            x = ff(x, cond)
+            x = ff(x, cond, use_kernel=use_custom_kernel)
         return x
 
 
@@ -200,7 +200,7 @@ class DiffusionAtomAttentionEncoder(nn.Module):
     def __call__(
         self,
         s_cond: mx.array,
-        atom_single_structure: mx.array,
+        atom_cond_projected: mx.array,
         blocked_pair_base: mx.array,
         atom_token_index: mx.array,
         atom_mask: mx.array,
@@ -211,9 +211,8 @@ class DiffusionAtomAttentionEncoder(nn.Module):
         num_tokens: int,
         use_custom_kernel: bool = False,
     ) -> tuple[mx.array, mx.array, mx.array]:
-        # Flatten batch and sample dims before entering atom-local ops.
         b, ds, n, _ = s_cond.shape
-        atom_cond = self.to_atom_cond(atom_single_structure)
+        atom_cond = atom_cond_projected
         token_to_atom = gather_tokens_to_atoms(
             self.token_to_atom_single(self.token_to_atom_single_norm(s_cond.reshape(b * ds, n, -1))),
             mx.broadcast_to(atom_token_index[:, None, :], (b, ds, atom_token_index.shape[-1])).reshape(b * ds, -1),

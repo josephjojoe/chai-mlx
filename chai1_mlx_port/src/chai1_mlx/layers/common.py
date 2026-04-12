@@ -6,7 +6,7 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from ..config import Chai1Config
-from ..kernels.elementwise import fused_adaln, fused_gated_residual, fused_swiglu_activation
+from ..kernels.elementwise import fused_adaln_full, fused_gated_residual, fused_swiglu_activation
 from ..utils import chunk_last, sigmoid, silu
 
 
@@ -19,7 +19,10 @@ class AdaLayerNorm(nn.Module):
     def __call__(self, x: mx.array, cond: mx.array, *, use_kernel: bool = False) -> mx.array:
         scale, shift = chunk_last(self.to_scale_shift(cond), 2)
         if use_kernel:
-            return fused_adaln(self.norm(x), scale, shift)
+            return fused_adaln_full(
+                x, self.norm.weight, self.norm.bias, scale, shift,
+                eps=self.norm.eps,
+            )
         return self.norm(x) * (1.0 + scale) + shift
 
 

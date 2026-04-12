@@ -93,8 +93,9 @@ class DiffusionSelfAttention(nn.Module):
         s_cond: mx.array,
         *,
         pair_bias: mx.array,
+        use_kernel: bool = False,
     ) -> mx.array:
-        x_norm = self.adaln(x, s_cond)
+        x_norm = self.adaln(x, s_cond, use_kernel=use_kernel)
         q, k, v = chunk_last(self.to_qkv(x_norm), 3)
         q = split_heads(q, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
         k = split_heads(k, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
