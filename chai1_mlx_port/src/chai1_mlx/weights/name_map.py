@@ -404,6 +404,10 @@ def reshape_einsum_weight(mlx_key: str, arr: "np.ndarray") -> "np.ndarray":
     if arr.ndim <= 2:
         return arr
 
+    # OPM weight_ab [2, 8, 8, msa_dim] is intentionally 4D (consumed via mx.einsum).
+    if "weight_ab" in mlx_key:
+        return arr
+
     # AttentionPairBias.input2qkvg: [in_dim, 4, H, D] → [4*H*D, in_dim]
     # Trunk einsum:      "dfa,aebc->edbfc"  (a = contracted / in_dim, first)
     # Confidence einsum: "fae,ebcd->bfcad"  (e = contracted / in_dim, first)
@@ -423,6 +427,11 @@ def reshape_einsum_weight(mlx_key: str, arr: "np.ndarray") -> "np.ndarray":
     if ".attn_blocks." in mlx_key and ".to_qkv.weight" in mlx_key:
         in_dim = arr.shape[-1]
         return arr.reshape(-1, in_dim)
+
+    # LocalAtomTransformer.blocked_pairs2blocked_bias (EinMix):
+    # [num_blocks, num_heads, pair_dim] → [num_blocks*num_heads, pair_dim]
+    if "blocked_pairs2blocked_bias.weight" in mlx_key and arr.ndim == 3:
+        return arr.reshape(-1, arr.shape[-1])
 
     import warnings
     warnings.warn(
