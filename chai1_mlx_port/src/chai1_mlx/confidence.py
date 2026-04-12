@@ -28,6 +28,8 @@ class ConfidenceHead(nn.Module):
             )
             for _ in range(cfg.confidence.num_blocks)
         ]
+        self.single_output_norm = nn.LayerNorm(cfg.hidden.token_single, eps=cfg.layer_norm_eps, affine=False)
+        self.pair_output_norm = nn.LayerNorm(cfg.hidden.token_pair, eps=cfg.layer_norm_eps, affine=False)
         self.plddt_projection = nn.Linear(
             cfg.hidden.token_single,
             cfg.confidence.plddt_atom_positions * cfg.confidence.plddt_bins,
@@ -50,20 +52,28 @@ class ConfidenceHead(nn.Module):
         dist_bins = one_hot_binned(dists, self.cfg.confidence.distance_bin_edges)
         pair = pair + self.atom_distance_bins_projection(dist_bins)
 
+        token_mask = structure.token_exists_mask.astype(mx.float32)
+
         s, z = single_trunk, pair
         for block in self.blocks:
             z, s = block(z, s, pair_mask=structure.token_pair_mask)
         assert s is not None
 
-        plddt_token = self.plddt_projection(s)
+        s = s * token_mask[..., None]
+
+        s_normed = self.single_output_norm(s)
+        z_normed = self.pair_output_norm(z)
+
+        plddt_token = self.plddt_projection(s_normed)
         plddt_logits = expand_plddt_to_atoms(
             plddt_token,
             structure.atom_token_index,
             structure.atom_within_token_index,
             self.cfg.confidence.plddt_bins,
         )
-        pae_logits = self.pae_projection(z)
-        pde_logits = self.pde_projection(z)
+        pae_logits = self.pae_projection(z_normed)
+        z_sym = z_normed + z_normed.transpose(0, 2, 1, 3)
+        pde_logits = self.pde_projection(z_sym)
         return ConfidenceOutputs(
             pae_logits=pae_logits,
             pde_logits=pde_logits,

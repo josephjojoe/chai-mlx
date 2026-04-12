@@ -17,7 +17,6 @@ from .utils import (
     edm_gammas,
     edm_sigmas,
     gather_blocked_pair_values,
-    make_additive_mask,
 )
 
 

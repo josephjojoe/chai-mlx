@@ -253,19 +253,16 @@ class Trunk(nn.Module):
     ) -> TrunkOutputs:
         single_init = emb.single_initial
         pair_init = emb.pair_initial
-        single = single_init
-        pair = pair_init
         si = emb.structure_inputs
         token_pair_mask = si.token_pair_mask
         msa_mask = si.msa_mask
         template_input_masks = si.template_input_masks
 
-        prev_single = None
-        prev_pair = None
+        prev_single = single_init
+        prev_pair = pair_init
         for _ in range(recycles):
-            if prev_single is not None:
-                single = single_init + self.token_single_recycle_proj(prev_single)
-                pair = pair_init + self.token_pair_recycle_proj(prev_pair)
+            single = single_init + self.token_single_recycle_proj(prev_single)
+            pair = pair_init + self.token_pair_recycle_proj(prev_pair)
             pair = self.template_embedder(
                 pair,
                 emb.template_input,

@@ -318,9 +318,9 @@ class InputEmbedder(nn.Module):
     def __call__(self, ctx: FeatureContext, *, use_kernel: bool = False) -> EmbeddingOutputs:
         feats = self.feature_embedding(ctx)
 
-        bond_adjacency = ctx.bond_adjacency
-        if bond_adjacency is None:
-            bond_adjacency = ctx.structure_inputs.bond_adjacency
+        # Canonical location: FeatureContext.bond_adjacency (set by featurize_fasta).
+        # StructureInputs.bond_adjacency is a legacy fallback.
+        bond_adjacency = ctx.bond_adjacency if ctx.bond_adjacency is not None else ctx.structure_inputs.bond_adjacency
         if bond_adjacency is not None:
             bond_trunk, bond_structure = self.bond_projection(bond_adjacency)
             feats["token_pair_trunk"] = feats["token_pair_trunk"] + bond_trunk

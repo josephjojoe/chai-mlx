@@ -68,16 +68,19 @@ src/chai1_mlx/
   kernels/
     sources.py          # Metal source snippets
     elementwise.py      # fused SwiGLU / gate+residual / AdaLN wrappers
-    blocked_local_attention.py
-                        # experimental custom blocked atom attention kernel
   weights/
     export_torchscript.py
                         # TorchScript -> NPZ export
+    convert_to_safetensors.py
+                        # NPZ -> safetensors conversion
+    name_map.py         # TorchScript -> MLX parameter name mapping
     load.py             # component loading helpers
+    validate.py         # weight shape validation
   examples/
     run_pipeline.py     # end-to-end example with precomputed tensors
     benchmark_diffusion.py
                         # cache + diffusion loop benchmark harness
+    validate_parity.py  # per-component numerical parity vs TorchScript
 ```
 
 ## Current status

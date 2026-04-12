@@ -94,6 +94,15 @@ def validate_feature_embedding(
     ts_mod = torch.jit.load(str(ts_path), map_location="cpu")
     ts_mod.eval()
 
+    _ATTR_NAMES = {
+        "TOKEN": "token_proj",
+        "TOKEN_PAIR": "token_pair_proj",
+        "ATOM": "atom_proj",
+        "ATOM_PAIR": "atom_pair_proj",
+        "MSA": "msa_proj",
+        "TEMPLATES": "template_proj",
+    }
+
     results: list[ParityResult] = []
     for feat_type, arr in features_np.items():
         t_in = torch.from_numpy(arr)
@@ -101,7 +110,7 @@ def validate_feature_embedding(
             t_out = ts_mod.input_projs[feat_type][0](t_in)
         ref_np = t_out.numpy()
 
-        proj = getattr(model.input_embedder.feature_embedding, f"{feat_type.lower()}_proj")
+        proj = getattr(model.input_embedder.feature_embedding, _ATTR_NAMES[feat_type])
         m_out = proj(mx.array(arr))
         mx.eval(m_out)
         mlx_np = _to_numpy(m_out)

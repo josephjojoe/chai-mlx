@@ -404,8 +404,8 @@ to the trunk.
 | 3 | CRITICAL | RBF encoding not implemented; 2 learned params dropped | TOKEN_PAIR 13 channels short; restraint features ignored | **FIXED** — `FeatureEmbedding._encode_rbf` with learned radii |
 | 4 | CRITICAL | TemplateResType OUTERSUM uses one-hot instead of learned Embedding | TEMPLATES dimension wrong (77 vs 76); runtime error | **FIXED** — `FeatureEmbedding._encode_template_restype` with `nn.Embedding(33,32)` |
 | 5 | MODERATE | Weight map drops 3 learned feature_embedding parameters | Model loads without error but encoding is numerically wrong | **FIXED** — 3 entries added to `_feature_embedding_map` |
-| 6 | MODERATE | Parity validation never tests the encoding path | Bugs 1–4 would not be caught by existing tests | OPEN |
-| 7 | MODERATE | No integration test for featurize_fasta | Full pipeline never exercised | OPEN |
+| 6 | MODERATE | Parity validation never tests the encoding path | Bugs 1–4 would not be caught by existing tests | OPEN — `validate_parity.py` attribute name bug fixed; encoding-path parity test still needed |
+| 7 | MODERATE | No integration test for featurize_fasta | Full pipeline never exercised | **FIXED** — `test_featurize_fasta.py` added (dimension checks) |
 | 8 | MINOR | Feature concatenation order may not match TorchScript | Potential silent misalignment if order differs | **FIXED** — alphabetical sort in `_concat_for_type` |
-| 9 | MINOR | bond_adjacency dual-sourcing | Fragile, could cause silent data loss | OPEN (documented) |
-| 10 | MINOR | Missing msa_mask/template_mask in StructureInputs | Trunk may not receive required masks via featurize_fasta | OPEN |
+| 9 | MINOR | bond_adjacency dual-sourcing | Fragile, could cause silent data loss | **FIXED** — documented `FeatureContext.bond_adjacency` as canonical, `StructureInputs` as fallback |
+| 10 | MINOR | Missing msa_mask/template_mask in StructureInputs | Trunk may not receive required masks via featurize_fasta | **FIXED** (previously) — masks populated in `_batch_to_feature_context` and threaded through trunk |

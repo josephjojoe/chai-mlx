@@ -141,7 +141,8 @@ class TriangleAttention(nn.Module):
         v_s = v1.transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
         bias_s = mx.broadcast_to(bias_start_raw[:, None, :, :, :], (b, n, H, n, n)).reshape(b * n, H, n, n)
         if pair_mask is not None:
-            row_mask = (pair_mask[:, :, :, None] & pair_mask[:, :, None, :]).reshape(b * n, 1, n, n)
+            pm_bool = pair_mask.astype(mx.bool_)
+            row_mask = (pm_bool[:, :, :, None] & pm_bool[:, :, None, :]).reshape(b * n, 1, n, n)
             bias_s = bias_s + make_additive_mask(row_mask)
         out_s = mx.fast.scaled_dot_product_attention(q_s, k_s, v_s, scale=D ** -0.5, mask=bias_s)
         out_s = out_s.reshape(b, n, H, n, D).transpose(0, 1, 3, 2, 4)  # [b, i, j, H, D]
@@ -154,7 +155,7 @@ class TriangleAttention(nn.Module):
         v_e = v2.transpose(0, 2, 1, 3, 4).transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
         bias_e = mx.broadcast_to(bias_end_raw[:, None, :, :, :], (b, n, H, n, n)).reshape(b * n, H, n, n)
         if pair_mask is not None:
-            col_mask_base = pair_mask.transpose(0, 2, 1)
+            col_mask_base = pm_bool.transpose(0, 2, 1)
             col_mask = (col_mask_base[:, :, :, None] & col_mask_base[:, :, None, :]).reshape(b * n, 1, n, n)
             bias_e = bias_e + make_additive_mask(col_mask)
         out_e = mx.fast.scaled_dot_product_attention(q_e, k_e, v_e, scale=D ** -0.5, mask=bias_e)

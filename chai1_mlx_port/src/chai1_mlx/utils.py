@@ -43,11 +43,12 @@ def masked_mean(
 
 
 def make_additive_mask(mask: mx.array, masked_value: float = -10000.0) -> mx.array:
-    if mask.dtype != mx.bool_:
-        return mask
-    zeros = mx.zeros(mask.shape, dtype=mx.float32)
-    neg = mx.full(mask.shape, masked_value, dtype=mx.float32)
-    return mx.where(mask, zeros, neg)
+    bool_mask = mask.astype(mx.bool_) if mask.dtype != mx.bool_ else mask
+    return mx.where(
+        bool_mask,
+        mx.zeros(mask.shape, dtype=mx.float32),
+        mx.full(mask.shape, masked_value, dtype=mx.float32),
+    )
 
 
 def stable_softmax(logits: mx.array, axis: int = -1) -> mx.array:
