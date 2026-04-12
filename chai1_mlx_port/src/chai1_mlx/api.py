@@ -50,8 +50,8 @@ class Chai1MLX(nn.Module):
     def embed_inputs(self, ctx: FeatureContext, *, use_custom_kernel: bool = False) -> EmbeddingOutputs:
         return self.input_embedder(ctx, use_custom_kernel=use_custom_kernel)
 
-    def trunk(self, emb: EmbeddingOutputs, *, recycles: int = 3, msa_mask: mx.array | None = None, triangle_chunk_size: int | None = None) -> TrunkOutputs:
-        return self.trunk_module(emb, recycles=recycles, msa_mask=msa_mask, triangle_chunk_size=triangle_chunk_size)
+    def trunk(self, emb: EmbeddingOutputs, *, recycles: int = 3, msa_mask: mx.array | None = None) -> TrunkOutputs:
+        return self.trunk_module(emb, recycles=recycles, msa_mask=msa_mask)
 
     def prepare_diffusion_cache(
         self,
@@ -120,11 +120,10 @@ class Chai1MLX(nn.Module):
         num_samples: int = 5,
         num_steps: int | None = None,
         use_custom_kernel: bool = False,
-        triangle_chunk_size: int | None = None,
     ) -> FoldOutputs:
         ctx = self.featurize(inputs)
         emb = self.embed_inputs(ctx, use_custom_kernel=use_custom_kernel)
-        trunk_out = self.trunk(emb, recycles=recycles, triangle_chunk_size=triangle_chunk_size)
+        trunk_out = self.trunk(emb, recycles=recycles)
         cache = self.prepare_diffusion_cache(trunk_out)
         mx.eval(cache.s_static, cache.z_cond, cache.blocked_pair_base, cache.atom_cond,
                 *cache.pair_biases)

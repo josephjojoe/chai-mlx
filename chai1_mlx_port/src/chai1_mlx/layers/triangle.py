@@ -16,10 +16,10 @@ class TriangleMultiplication(nn.Module):
         self.layernorm_in = nn.LayerNorm(pair_dim, eps=eps)
         self.linear_z_out = nn.Linear(pair_dim, pair_dim, bias=False)
 
-    def __call__(self, z: mx.array, pair_mask: mx.array | None = None, *, chunk_size: int | None = None) -> mx.array:
-        if chunk_size is not None:
-            return self._forward_chunked(z, pair_mask, chunk_size)
-        return self._forward_unchunked(z, pair_mask)
+    _CHUNK_SIZE: int = 32
+
+    def __call__(self, z: mx.array, pair_mask: mx.array | None = None) -> mx.array:
+        return self._forward_chunked(z, pair_mask, self._CHUNK_SIZE)
 
     def _forward_unchunked(self, z: mx.array, pair_mask: mx.array | None) -> mx.array:
         z_normed = self.layernorm_z_in(z)
