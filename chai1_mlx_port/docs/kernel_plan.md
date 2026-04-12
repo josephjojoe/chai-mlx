@@ -17,7 +17,7 @@ MLX’s SDPA is already tiled with fp32 softmax and additive mask support. Best 
 
 ## Optional next steps
 
-1. **Blocked local attention**: replace the per-element three-pass kernel with a threadgroup/shared-memory 32×128 kernel (or keep SDPA default). See `findings/OPTIMIZATIONS.md` §4.5.
+1. **Blocked local attention**: replace the per-element three-pass kernel with a threadgroup/shared-memory 32×128 kernel (or keep SDPA default). See `findings/OPTIMIZATIONS.md` §4.5. (NOTE: not worth it)
 2. **Pair-update / gather fusion**, confidence-head distance batching, and other items in `findings/OPTIMIZATIONS.md` §6.
 
 Full platform-agnostic spec: [`findings/OPTIMIZATIONS.md`](../../findings/OPTIMIZATIONS.md) (repo root).
