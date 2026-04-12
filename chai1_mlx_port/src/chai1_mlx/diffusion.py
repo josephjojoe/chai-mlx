@@ -55,7 +55,7 @@ class DiffusionConditioning(nn.Module):
         # initial representations.  See chai1.py static_diffusion_inputs:
         #   token_pair_initial_repr  = token_pair_structure_input_feats
         #   token_single_initial_repr = token_single_structure_input
-        pair_cat = mx.concatenate([trunk.pair_structure, trunk.pair_trunk], axis=-1)
+        pair_cat = mx.concatenate([trunk.pair_trunk, trunk.pair_structure], axis=-1)
         z = self.token_pair_proj(self.token_pair_norm(pair_cat))
         z = z + self.pair_trans1(z)
         z = z + self.pair_trans2(z)
@@ -163,6 +163,11 @@ class DiffusionModule(nn.Module):
         atom_cond = self.atom_attention_encoder.to_atom_cond(
             trunk.atom_single_structure_input
         )
+        atom_single_cond = self.atom_attention_encoder.prepare_cond(
+            atom_cond,
+            trunk.single_trunk,
+            structure.atom_token_index,
+        )
 
         return DiffusionCache(
             s_static=s_static,
@@ -170,6 +175,7 @@ class DiffusionModule(nn.Module):
             pair_biases=pair_biases,
             blocked_pair_base=blocked_pair_base,
             atom_cond=atom_cond,
+            atom_single_cond=atom_single_cond,
             trunk_outputs=trunk,
             structure_inputs=structure,
         )
@@ -191,14 +197,15 @@ class DiffusionModule(nn.Module):
         c_skip = sigma_data_sq / (sigma_sq + sigma_data_sq)
         c_out = sigma * self.cfg.diffusion.sigma_data / mx.sqrt(sigma_sq + sigma_data_sq)
 
+        num_samples = coords.shape[1]
         scaled_coords = coords * c_in[:, :, None, None]
         s_cond = self.diffusion_conditioning.with_sigma(cache.s_static, sigma)
 
         x = self.structure_cond_to_token_structure_proj(trunk.single_structure)
-        x = mx.broadcast_to(x[:, None, :, :], (coords.shape[0], coords.shape[1], *x.shape[1:]))
-        enc_tokens, atom_repr, atom_cond = self.atom_attention_encoder(
-            s_cond,
+        x = mx.broadcast_to(x[:, None, :, :], (coords.shape[0], num_samples, *x.shape[1:]))
+        enc_tokens, atom_repr = self.atom_attention_encoder(
             cache.atom_cond,
+            cache.atom_single_cond,
             cache.blocked_pair_base,
             structure.atom_token_index,
             structure.atom_exists_mask,
@@ -206,15 +213,22 @@ class DiffusionModule(nn.Module):
             structure.atom_kv_indices,
             structure.block_atom_pair_mask,
             num_tokens=trunk.single_initial.shape[1],
+            num_samples=num_samples,
             use_kernel=use_kernel,
         )
         x = x + enc_tokens
         x = self.diffusion_transformer(x, s_cond, cache.pair_biases, use_kernel=use_kernel)
         x = self.post_attn_layernorm(x)
-        atom_cond = self.post_atom_cond_layernorm(atom_cond)
+        decoder_cond = self.post_atom_cond_layernorm(
+            mx.broadcast_to(
+                cache.atom_single_cond[:, None, :, :],
+                (coords.shape[0], num_samples, *cache.atom_single_cond.shape[1:]),
+            )
+        )
         pos_updates = self.atom_attention_decoder(
             x,
-            atom_cond,
+            atom_repr,
+            decoder_cond,
             cache.blocked_pair_base,
             structure.atom_token_index,
             structure.atom_kv_indices,

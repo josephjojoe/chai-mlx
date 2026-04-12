@@ -111,6 +111,7 @@ class DiffusionCache:
     pair_biases: tuple[Array, ...]
     blocked_pair_base: Array
     atom_cond: Array
+    atom_single_cond: Array
     trunk_outputs: TrunkOutputs
     structure_inputs: StructureInputs
 

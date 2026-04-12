@@ -211,13 +211,19 @@ class MSAModule(nn.Module):
             first = msa[:, :1] + self.linear_s2m(single)[:, None, :, :]
             msa = mx.concatenate([first, msa[:, 1:]], axis=1)
 
+        # TorchScript ordering (trunk_toplevel_code.txt):
+        #   i=0..2: OPM → msa_transition → pair_weighted_avg → tri_mult ‖ pair_transition → tri_attn
+        #   i=3:    OPM → tri_mult ‖ pair_transition → tri_attn (no MSA ops)
+        # tri_mult and pair_transition both read from post-OPM pair; their
+        # outputs (tri_mult is residual) are summed:
+        #   pair_result = pair_opm + tri_delta + transition(pair_opm)
         for i in range(len(self.outer_product_mean)):
             pair = pair + self.outer_product_mean[i](msa, msa_mask=msa_mask)
-            pair = pair + self.pair_transition[i](pair)
-            if i < len(self.msa_pair_weighted_averaging):
-                msa = msa + self.msa_pair_weighted_averaging[i](msa, pair, token_pair_mask=token_pair_mask)
+            if i < len(self.msa_transition):
                 msa = msa + self.msa_transition[i](msa)
-            pair = self.triangular_multiplication[i](pair, pair_mask=token_pair_mask)
+                msa = msa + self.msa_pair_weighted_averaging[i](msa, pair, token_pair_mask=token_pair_mask)
+            pair_transition_out = self.pair_transition[i](pair)
+            pair = self.triangular_multiplication[i](pair, pair_mask=token_pair_mask) + pair_transition_out
             pair = self.triangular_attention[i](pair, pair_mask=token_pair_mask)
         return pair
 
@@ -258,6 +264,8 @@ class Trunk(nn.Module):
         msa_mask = si.msa_mask
         template_input_masks = si.template_input_masks
 
+        token_single_mask = si.token_exists_mask
+
         prev_single = single_init
         prev_pair = pair_init
         for _ in range(recycles):
@@ -276,7 +284,11 @@ class Trunk(nn.Module):
                 token_pair_mask=token_pair_mask,
                 msa_mask=msa_mask,
             )
-            single, pair = self.pairformer_stack(single, pair, pair_mask=token_pair_mask)
+            single, pair = self.pairformer_stack(
+                single, pair,
+                pair_mask=token_pair_mask,
+                single_mask=token_single_mask,
+            )
             prev_single, prev_pair = single, pair
 
         return TrunkOutputs(

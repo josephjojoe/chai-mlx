@@ -89,6 +89,16 @@ bring their own encoded tensors, and is verified bit-identical to the raw path.
 - **`bond_adjacency` dual-sourcing**: Documented `FeatureContext.bond_adjacency` as canonical, `StructureInputs.bond_adjacency` as legacy fallback.
 - **README layout**: Removed reference to nonexistent `blocked_local_attention.py`, added missing files (`convert_to_safetensors.py`, `name_map.py`, `validate.py`, `validate_parity.py`).
 
+## Architectural fixes (second audit round)
+
+- **Fix A — Pair conditioning concatenation order reversed**: `DiffusionConditioning.prepare_static` concatenated pair features as `[pair_structure, pair_trunk]` but TorchScript (`diffusion_module_forward256.py:1441`) uses `[pair_trunk, pair_structure]`. Fixed — the misaligned ordering would corrupt the subsequent Linear projection.
+- **Fix B — `token_to_atom_single` used sigma-dependent input**: The diffusion atom encoder was feeding `s_cond` (sigma-conditioned single tokens) to `token_to_atom_single`, but TorchScript uses the raw trunk single representation (sigma-independent). Fixed by moving this computation to `prepare_cond()` in the cache, using `trunk.single_trunk`.
+- **Fix C — Atom encoder merged initial state and conditioning**: TorchScript separates: `x = broadcast(to_atom_cond) + prev_pos_embed(coords)` as initial state, and `cond = LN(to_atom_cond + token_to_atom[indices])` as AdaLN conditioning. The MLX port was merging these into one tensor. Fixed with `prepare_cond()` and a new `cond_layer_norm` (affine=False).
+- **Fix D — `post_atom_cond_layernorm` applied to wrong quantity**: Was applied to bare `to_atom_cond`; now applied to the combined conditioning `atom_single_cond` (matching TorchScript line 3108). Decoder now also receives `encoder_atom_repr` as initial state, matching TorchScript's `input18 + token_to_atom(input68)`.
+- **Fix G — MSA module block ordering wrong**: Was `OPM → pair_transition → pair_weighted_avg → msa_transition → tri_mult → tri_attn`. TorchScript order is `OPM → msa_transition → pair_weighted_avg → tri_mult ‖ pair_transition → tri_attn` where tri_mult and pair_transition read from the same post-OPM pair.
+- **Fix G addendum — pair_transition reads from wrong pair in PairformerBlock**: Both MSA module and PairformerBlock compute `transition_pair(z)` from the original pair before `triangle_multiplication`, then add both deltas. Was feeding tri_mult output to pair_transition.
+- **Fix H — `token_single_mask` not threaded through pairformer**: TorchScript applies `token_single_mask * attention_delta` 48 times (once per pairformer block) to gate single attention residuals. Added `single_mask` parameter to `PairformerBlock` and `PairformerStack`, threaded from `Trunk.__call__` and `ConfidenceHead._run_single`.
+
 ## Still requiring parity work
 
 - **Weight loading end-to-end test**: Name mapping + einsum reshape logic is in place but untested with real weights. This is the single highest-priority validation step — export the TorchScript weights, load into the MLX model, and verify no missing/misshapen parameters.

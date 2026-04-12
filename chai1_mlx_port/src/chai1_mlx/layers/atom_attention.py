@@ -167,11 +167,22 @@ class TokenInputAtomEncoder(nn.Module):
 
 
 class DiffusionAtomAttentionEncoder(nn.Module):
+    """Atom attention encoder for the diffusion module.
+
+    TorchScript ground truth (diffusion_module_forward256.py):
+      - x (initial state) = broadcast(to_atom_cond) + prev_pos_embed(coords)
+      - cond (AdaLN)      = broadcast(LN(to_atom_cond + token_to_atom_single(trunk_single)[indices]))
+      - token_to_atom_single takes the RAW trunk single (sigma-independent)
+      - The affine=False LN on cond is an intermediate step; post_atom_cond_layernorm
+        is applied later (a parametric LN on top of the already-LN'd cond).
+    """
+
     def __init__(self, atom_dim: int, pair_dim: int, token_dim: int, diffusion_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
         self.to_atom_cond = nn.Linear(atom_dim, atom_dim, bias=False)
         self.token_to_atom_single_norm = nn.LayerNorm(token_dim, eps=eps)
         self.token_to_atom_single = nn.Linear(token_dim, atom_dim, bias=False)
+        self.cond_layer_norm = nn.LayerNorm(atom_dim, eps=eps, affine=False)
         self.prev_pos_embed = nn.Linear(3, atom_dim, bias=False)
         self.pair_update_block = PairUpdateBlock(atom_dim, pair_dim, eps=eps)
         self.atom_transformer = LocalAtomTransformer(
@@ -185,10 +196,27 @@ class DiffusionAtomAttentionEncoder(nn.Module):
         )
         self.to_token_single = nn.Linear(atom_dim, diffusion_dim, bias=False)
 
+    def prepare_cond(
+        self,
+        atom_cond_raw: mx.array,
+        trunk_single: mx.array,
+        atom_token_index: mx.array,
+    ) -> mx.array:
+        """Precompute the sigma-independent atom conditioning.
+
+        Returns LN(to_atom_cond + token_to_atom_single(trunk_single)[atom_indices]),
+        which is constant across diffusion steps.
+        """
+        token_proj = self.token_to_atom_single(
+            self.token_to_atom_single_norm(trunk_single)
+        )
+        token_to_atom = gather_tokens_to_atoms(token_proj, atom_token_index)
+        return self.cond_layer_norm(atom_cond_raw + token_to_atom)
+
     def __call__(
         self,
-        s_cond: mx.array,
-        atom_cond_projected: mx.array,
+        atom_cond_raw: mx.array,
+        atom_single_cond: mx.array,
         blocked_pair_base: mx.array,
         atom_token_index: mx.array,
         atom_mask: mx.array,
@@ -197,18 +225,25 @@ class DiffusionAtomAttentionEncoder(nn.Module):
         block_mask: mx.array,
         *,
         num_tokens: int,
+        num_samples: int,
         use_kernel: bool = False,
-    ) -> tuple[mx.array, mx.array, mx.array]:
-        b, ds, n, _ = s_cond.shape
-        atom_cond = atom_cond_projected
-        token_to_atom = gather_tokens_to_atoms(
-            self.token_to_atom_single(self.token_to_atom_single_norm(s_cond.reshape(b * ds, n, -1))),
-            mx.broadcast_to(atom_token_index[:, None, :], (b, ds, atom_token_index.shape[-1])).reshape(b * ds, -1),
-        )
-        atom_cond = mx.broadcast_to(atom_cond[:, None, :, :], (b, ds, *atom_cond.shape[1:])).reshape(b * ds, atom_cond.shape[1], atom_cond.shape[2])
-        atom_single = atom_cond + token_to_atom + self.prev_pos_embed(coords.reshape(b * ds, coords.shape[-2], 3))
+    ) -> tuple[mx.array, mx.array]:
+        b = atom_cond_raw.shape[0]
+        ds = num_samples
+        n_atoms = atom_cond_raw.shape[1]
 
-        num_blocks = atom_single.shape[1] // 32
+        atom_init = mx.broadcast_to(
+            atom_cond_raw[:, None, :, :], (b, ds, n_atoms, atom_cond_raw.shape[-1])
+        ).reshape(b * ds, n_atoms, atom_cond_raw.shape[-1])
+        atom_single = atom_init + self.prev_pos_embed(
+            coords.reshape(b * ds, coords.shape[-2], 3)
+        )
+
+        cond = mx.broadcast_to(
+            atom_single_cond[:, None, :, :], (b, ds, n_atoms, atom_single_cond.shape[-1])
+        ).reshape(b * ds, n_atoms, atom_single_cond.shape[-1])
+
+        num_blocks = n_atoms // 32
         q_atoms = atom_single.reshape(b * ds, num_blocks, 32, atom_single.shape[-1])
         kv_idx_flat = mx.broadcast_to(kv_idx[:, None, :, :], (b, ds, *kv_idx.shape[1:])).reshape(b * ds, *kv_idx.shape[1:])
         block_mask_flat = mx.broadcast_to(block_mask[:, None, :, :, :], (b, ds, *block_mask.shape[1:])).reshape(b * ds, *block_mask.shape[1:])
@@ -217,7 +252,7 @@ class DiffusionAtomAttentionEncoder(nn.Module):
         pair = self.pair_update_block(q_atoms, kv_atoms, blocked_pair)
         atom_repr = self.atom_transformer(
             atom_single,
-            atom_cond,
+            cond,
             pair,
             kv_idx_flat,
             block_mask_flat,
@@ -231,7 +266,10 @@ class DiffusionAtomAttentionEncoder(nn.Module):
             num_tokens,
             mask=atom_mask_flat,
         )
-        return token_repr.reshape(b, ds, num_tokens, -1), atom_repr.reshape(b, ds, atom_repr.shape[1], -1), atom_cond.reshape(b, ds, atom_cond.shape[1], -1)
+        return (
+            token_repr.reshape(b, ds, num_tokens, -1),
+            atom_repr.reshape(b, ds, atom_repr.shape[1], -1),
+        )
 
 
 class DiffusionAtomAttentionDecoder(nn.Module):
@@ -253,6 +291,7 @@ class DiffusionAtomAttentionDecoder(nn.Module):
     def __call__(
         self,
         token_repr: mx.array,
+        encoder_atom_repr: mx.array,
         atom_cond: mx.array,
         blocked_pair_base: mx.array,
         atom_token_index: mx.array,
@@ -264,7 +303,8 @@ class DiffusionAtomAttentionDecoder(nn.Module):
         b, ds, n, _ = token_repr.shape
         atom_token_index_flat = mx.broadcast_to(atom_token_index[:, None, :], (b, ds, atom_token_index.shape[-1])).reshape(b * ds, -1)
         atom_cond_flat = atom_cond.reshape(b * ds, atom_cond.shape[-2], atom_cond.shape[-1])
-        atom_single = gather_tokens_to_atoms(
+        encoder_atom_flat = encoder_atom_repr.reshape(b * ds, encoder_atom_repr.shape[-2], encoder_atom_repr.shape[-1])
+        atom_single = encoder_atom_flat + gather_tokens_to_atoms(
             self.token_to_atom(token_repr.reshape(b * ds, n, -1)),
             atom_token_index_flat,
         )

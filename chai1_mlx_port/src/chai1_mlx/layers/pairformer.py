@@ -55,18 +55,25 @@ class PairformerBlock(nn.Module):
         s: mx.array | None = None,
         *,
         pair_mask: mx.array | None = None,
+        single_mask: mx.array | None = None,
         precomputed_single_pair_bias: mx.array | None = None,
     ) -> tuple[mx.array, mx.array | None]:
+        # TorchScript: transition_pair reads from the ORIGINAL z (same input
+        # as triangle_mult), not from the post-tri_attn pair.
+        pair_transition_out = self.transition_pair(z)
         z = self.triangle_multiplication(z, pair_mask=pair_mask)
+        z = z + pair_transition_out
         z = self.triangle_attention(z, pair_mask=pair_mask)
-        z = z + self.transition_pair(z)
         if self.single_dim is not None and s is not None:
-            s = s + self.attention_pair_bias(
+            attn_delta = self.attention_pair_bias(
                 s,
                 z,
                 pair_mask=pair_mask,
                 precomputed_bias=precomputed_single_pair_bias,
             )
+            if single_mask is not None:
+                attn_delta = attn_delta * single_mask[..., None]
+            s = s + attn_delta
             s = s + self.transition_single(s)
         return z, s
 
@@ -82,10 +89,11 @@ class PairformerStack(nn.Module):
         z: mx.array,
         *,
         pair_mask: mx.array | None = None,
+        single_mask: mx.array | None = None,
         precomputed_single_pair_biases: tuple[mx.array, ...] | None = None,
     ) -> tuple[mx.array, mx.array]:
         for i, block in enumerate(self.blocks):
             bias = None if precomputed_single_pair_biases is None else precomputed_single_pair_biases[i]
-            z, s = block(z, s, pair_mask=pair_mask, precomputed_single_pair_bias=bias)
+            z, s = block(z, s, pair_mask=pair_mask, single_mask=single_mask, precomputed_single_pair_bias=bias)
         assert s is not None
         return s, z

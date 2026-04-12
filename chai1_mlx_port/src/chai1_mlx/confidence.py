@@ -56,7 +56,7 @@ class ConfidenceHead(nn.Module):
 
         s, z = single_trunk, pair
         for block in self.blocks:
-            z, s = block(z, s, pair_mask=structure.token_pair_mask)
+            z, s = block(z, s, pair_mask=structure.token_pair_mask, single_mask=token_mask)
         assert s is not None
 
         s = s * token_mask[..., None]

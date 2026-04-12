@@ -165,8 +165,8 @@ class Chai1MLX(nn.Module):
         emb = self.embed_inputs(ctx, use_kernel=use_kernel)
         trunk_out = self.trunk(emb, recycles=recycles)
         cache = self.prepare_diffusion_cache(trunk_out)
-        mx.eval(cache.s_static, cache.z_cond, cache.blocked_pair_base, cache.atom_cond,
-                *cache.pair_biases)
+        mx.eval(cache.s_static, cache.z_cond, cache.blocked_pair_base,
+                cache.atom_cond, cache.atom_single_cond, *cache.pair_biases)
         coords = self.init_noise(emb.token_single_input.shape[0], num_samples, emb.structure_inputs)
         for sigma_curr, sigma_next, gamma in self.schedule(num_steps=num_steps):
             coords = self.diffusion_step(
