@@ -135,7 +135,7 @@ class LocalAtomTransformer(nn.Module):
 class TokenInputAtomEncoder(nn.Module):
     def __init__(self, atom_dim: int, pair_dim: int, token_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
-        self.to_atom_cond = nn.Linear(atom_dim, atom_dim, bias=True)
+        self.to_atom_cond = nn.Linear(atom_dim, atom_dim, bias=False)
         self.pair_update_block = PairUpdateBlock(atom_dim, pair_dim, eps=eps)
         self.atom_transformer = LocalAtomTransformer(
             atom_dim,
@@ -146,7 +146,7 @@ class TokenInputAtomEncoder(nn.Module):
             head_dim=32,
             eps=eps,
         )
-        self.to_token_single = nn.Linear(atom_dim, token_dim, bias=True)
+        self.to_token_single = nn.Linear(atom_dim, token_dim, bias=False)
 
     def __call__(
         self,
@@ -174,16 +174,16 @@ class TokenInputAtomEncoder(nn.Module):
             block_mask,
             use_custom_kernel=use_custom_kernel,
         )
-        token_repr = self.to_token_single(atom_repr)
+        token_repr = mx.maximum(self.to_token_single(atom_repr), 0)
         return segment_mean(token_repr, atom_token_index, num_tokens, mask=atom_mask)
 
 
 class DiffusionAtomAttentionEncoder(nn.Module):
     def __init__(self, atom_dim: int, pair_dim: int, token_dim: int, diffusion_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
-        self.to_atom_cond = nn.Linear(atom_dim, atom_dim, bias=True)
+        self.to_atom_cond = nn.Linear(atom_dim, atom_dim, bias=False)
         self.token_to_atom_single_norm = nn.LayerNorm(token_dim, eps=eps)
-        self.token_to_atom_single = nn.Linear(token_dim, atom_dim, bias=True)
+        self.token_to_atom_single = nn.Linear(token_dim, atom_dim, bias=False)
         self.prev_pos_embed = nn.Linear(3, atom_dim, bias=False)
         self.pair_update_block = PairUpdateBlock(atom_dim, pair_dim, eps=eps)
         self.atom_transformer = LocalAtomTransformer(
@@ -239,7 +239,7 @@ class DiffusionAtomAttentionEncoder(nn.Module):
         atom_token_index_flat = mx.broadcast_to(atom_token_index[:, None, :], (b, ds, atom_token_index.shape[-1])).reshape(b * ds, -1)
         atom_mask_flat = mx.broadcast_to(atom_mask[:, None, :], (b, ds, atom_mask.shape[-1])).reshape(b * ds, -1)
         token_repr = segment_mean(
-            self.to_token_single(atom_repr),
+            mx.maximum(self.to_token_single(atom_repr), 0),
             atom_token_index_flat,
             num_tokens,
             mask=atom_mask_flat,
@@ -251,7 +251,6 @@ class DiffusionAtomAttentionDecoder(nn.Module):
     def __init__(self, diffusion_dim: int, atom_dim: int, pair_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
         self.token_to_atom = nn.Linear(diffusion_dim, atom_dim, bias=False)
-        self.pair_update_block = PairUpdateBlock(atom_dim, pair_dim, eps=eps)
         self.atom_transformer = LocalAtomTransformer(
             atom_dim,
             pair_dim,
@@ -261,8 +260,8 @@ class DiffusionAtomAttentionDecoder(nn.Module):
             head_dim=32,
             eps=eps,
         )
-        self.to_pos_updates = nn.Linear(atom_dim, 3, bias=False)
         self.output_norm = nn.LayerNorm(atom_dim, eps=eps)
+        self.to_pos_updates = nn.Linear(atom_dim, 3, bias=False)
 
     def __call__(
         self,
@@ -282,17 +281,13 @@ class DiffusionAtomAttentionDecoder(nn.Module):
             self.token_to_atom(token_repr.reshape(b * ds, n, -1)),
             atom_token_index_flat,
         )
-        num_blocks = atom_single.shape[1] // 32
-        q_atoms = atom_single.reshape(b * ds, num_blocks, 32, atom_single.shape[-1])
         kv_idx_flat = mx.broadcast_to(kv_idx[:, None, :, :], (b, ds, *kv_idx.shape[1:])).reshape(b * ds, *kv_idx.shape[1:])
         block_mask_flat = mx.broadcast_to(block_mask[:, None, :, :, :], (b, ds, *block_mask.shape[1:])).reshape(b * ds, *block_mask.shape[1:])
         blocked_pair = mx.broadcast_to(blocked_pair_base[:, None, :, :, :, :], (b, ds, *blocked_pair_base.shape[1:])).reshape(b * ds, *blocked_pair_base.shape[1:])
-        kv_atoms = gather_blocked_atom_values(atom_single, kv_idx_flat)
-        pair = self.pair_update_block(q_atoms, kv_atoms, blocked_pair)
         atom_repr = self.atom_transformer(
             atom_single,
             atom_cond_flat,
-            pair,
+            blocked_pair,
             kv_idx_flat,
             block_mask_flat,
             use_custom_kernel=use_custom_kernel,

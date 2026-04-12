@@ -14,7 +14,7 @@ class AdaLayerNorm(nn.Module):
     def __init__(self, dim: int, cond_dim: int, eps: float = 1e-5) -> None:
         super().__init__()
         self.norm = nn.LayerNorm(dim, eps=eps)
-        self.to_scale_shift = nn.Linear(cond_dim, 2 * dim, bias=True)
+        self.to_scale_shift = nn.Linear(cond_dim, 2 * dim, bias=False)
 
     def __call__(self, x: mx.array, cond: mx.array, *, use_kernel: bool = False) -> mx.array:
         scale, shift = chunk_last(self.to_scale_shift(cond), 2)
@@ -78,8 +78,8 @@ class ConditionedTransition(nn.Module):
 class ResidualMLP(nn.Module):
     def __init__(self, dim: int) -> None:
         super().__init__()
-        self.fc1 = nn.Linear(dim, dim, bias=True)
-        self.fc2 = nn.Linear(dim, dim, bias=True)
+        self.fc1 = nn.Linear(dim, dim, bias=False)
+        self.fc2 = nn.Linear(dim, dim, bias=False)
 
     def __call__(self, x: mx.array) -> mx.array:
         return x + self.fc2(nn.relu(self.fc1(x)))

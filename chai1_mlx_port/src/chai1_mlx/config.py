@@ -41,8 +41,8 @@ class PairformerConfig:
     num_blocks: int = 48
     single_heads: int = 16
     single_head_dim: int = 24
-    triangle_heads: int = 8
-    triangle_head_dim: int = 32
+    triangle_heads: int = 4
+    triangle_head_dim: int = 64
     single_transition_mult: int = 4
     pair_transition_mult: int = 4
 
@@ -70,8 +70,8 @@ class DiffusionConfig:
 class TemplateConfig:
     max_templates: int = 4
     num_blocks: int = 2
-    triangle_heads: int = 8
-    triangle_head_dim: int = 16
+    triangle_heads: int = 4
+    triangle_head_dim: int = 32
 
 
 @dataclass(frozen=True)

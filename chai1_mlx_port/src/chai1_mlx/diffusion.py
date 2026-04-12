@@ -51,13 +51,13 @@ class DiffusionConditioning(nn.Module):
         self.single_ln = nn.LayerNorm(cfg.hidden.token_single, eps=cfg.layer_norm_eps)
 
     def prepare_static(self, trunk: TrunkOutputs) -> tuple[mx.array, mx.array]:
-        pair_cat = mx.concatenate([trunk.pair_structure, trunk.pair_trunk], axis=-1)
+        pair_cat = mx.concatenate([trunk.pair_initial, trunk.pair_trunk], axis=-1)
         z = self.token_pair_proj(self.token_pair_norm(pair_cat))
         z = z + self.pair_trans1(z)
         z = z + self.pair_trans2(z)
         z_cond = self.pair_ln(z)
 
-        single_cat = mx.concatenate([trunk.single_structure, trunk.single_trunk], axis=-1)
+        single_cat = mx.concatenate([trunk.single_initial, trunk.single_trunk], axis=-1)
         s = self.token_in_proj(self.token_in_norm(single_cat))
         s = s + self.single_trans1(s)
         return s, z_cond
@@ -120,7 +120,7 @@ class DiffusionModule(nn.Module):
         self.cfg = cfg
         self.diffusion_conditioning = DiffusionConditioning(cfg)
         self.token_pair_to_atom_pair_norm = nn.LayerNorm(cfg.hidden.token_pair, eps=cfg.layer_norm_eps)
-        self.token_pair_to_atom_pair = nn.Linear(cfg.hidden.token_pair, cfg.hidden.atom_pair, bias=True)
+        self.token_pair_to_atom_pair = nn.Linear(cfg.hidden.token_pair, cfg.hidden.atom_pair, bias=False)
         self.atom_attention_encoder = DiffusionAtomAttentionEncoder(
             cfg.hidden.atom_single,
             cfg.hidden.atom_pair,

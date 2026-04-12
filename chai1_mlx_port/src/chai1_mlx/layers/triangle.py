@@ -40,10 +40,16 @@ class TriangleMultiplication(nn.Module):
 
 
 class TriangleAttention(nn.Module):
+    """Triangle attention v2a (trunk / MSA module).
+
+    pair2b outputs 2*num_heads values: first num_heads for starting-node,
+    last num_heads for ending-node direction (ARCHITECTURE §6.3.7).
+    """
+
     def __init__(self, pair_dim: int, num_heads: int, head_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
         self.pair_norm = nn.LayerNorm(pair_dim, eps=eps)
-        self.pair2b = nn.Linear(pair_dim, num_heads, bias=False)
+        self.pair2b = nn.Linear(pair_dim, 2 * num_heads, bias=False)
         self.pair2qkvg1 = nn.Linear(pair_dim, 4 * num_heads * head_dim, bias=False)
         self.pair2qkvg2 = nn.Linear(pair_dim, 4 * num_heads * head_dim, bias=False)
         self.linear_out = nn.Linear(2 * num_heads * head_dim, pair_dim, bias=False)
@@ -51,75 +57,58 @@ class TriangleAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = head_dim
 
-    def _starting_mask(self, pair_mask: mx.array) -> mx.array:
-        # [b, i, j] and [b, i, k] -> [b, i, j, k]
-        return pair_mask[:, :, :, None] & pair_mask[:, :, None, :]
-
-    def _ending_mask(self, pair_mask: mx.array) -> mx.array:
-        # operate over columns instead of rows -> [b, j, i, k]
-        col = pair_mask.transpose(0, 2, 1)
-        return col[:, :, :, None] & col[:, :, None, :]
-
     def __call__(self, z: mx.array, pair_mask: mx.array | None = None) -> mx.array:
         b, n, _, _ = z.shape
+        H, D = self.num_heads, self.head_dim
         z_ln = self.pair_norm(z)
-        bias = self.pair2b(z_ln).transpose(0, 3, 1, 2)
+
+        bias_all = self.pair2b(z_ln)  # [b, n, n, 2*H]
+        bias_start_raw = bias_all[..., :H].transpose(0, 3, 1, 2)  # [b, H, n, n]
+        bias_end_raw = bias_all[..., H:].transpose(0, 3, 1, 2)    # [b, H, n, n]
 
         q1, k1, v1, g1 = chunk_last(self.pair2qkvg1(z_ln), 4)
         q2, k2, v2, g2 = chunk_last(self.pair2qkvg2(z_ln), 4)
 
-        q1 = split_heads(q1, self.num_heads, self.head_dim)
-        k1 = split_heads(k1, self.num_heads, self.head_dim)
-        v1 = split_heads(v1, self.num_heads, self.head_dim)
-        g1 = split_heads(g1, self.num_heads, self.head_dim)
+        q1 = split_heads(q1, H, D)
+        k1 = split_heads(k1, H, D)
+        v1 = split_heads(v1, H, D)
+        g1 = split_heads(g1, H, D)
 
-        q2 = split_heads(q2, self.num_heads, self.head_dim)
-        k2 = split_heads(k2, self.num_heads, self.head_dim)
-        v2 = split_heads(v2, self.num_heads, self.head_dim)
-        g2 = split_heads(g2, self.num_heads, self.head_dim)
+        q2 = split_heads(q2, H, D)
+        k2 = split_heads(k2, H, D)
+        v2 = split_heads(v2, H, D)
+        g2 = split_heads(g2, H, D)
 
-        # Starting-node attention: fix i, attend j -> k, with bias from (j, k).
-        q_start = q1.transpose(0, 1, 3, 2, 4).reshape(b * n, self.num_heads, n, self.head_dim)
-        k_start = k1.transpose(0, 1, 3, 2, 4).reshape(b * n, self.num_heads, n, self.head_dim)
-        v_start = v1.transpose(0, 1, 3, 2, 4).reshape(b * n, self.num_heads, n, self.head_dim)
-        bias_start = mx.broadcast_to(bias[:, None, :, :, :], (b, n, self.num_heads, n, n)).reshape(
-            b * n, self.num_heads, n, n
-        )
+        # Starting-node: fix row i, attend over columns j→k.
+        # q1/k1/v1: [b, i, j, H, D] → batch over i → [b*n, H, n, D]
+        q_s = q1.transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
+        k_s = k1.transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
+        v_s = v1.transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
+        bias_s = mx.broadcast_to(bias_start_raw[:, None, :, :, :], (b, n, H, n, n)).reshape(b * n, H, n, n)
         if pair_mask is not None:
-            start_mask = self._starting_mask(pair_mask).reshape(b * n, 1, n, n)
-            bias_start = bias_start + make_additive_mask(start_mask)
-        out_start = mx.fast.scaled_dot_product_attention(
-            q_start,
-            k_start,
-            v_start,
-            scale=self.head_dim ** -0.5,
-            mask=bias_start,
-        )
-        out_start = out_start.reshape(b, n, self.num_heads, n, self.head_dim).transpose(0, 1, 3, 2, 4)
-        out_start = out_start * sigmoid(g1)
+            row_mask = (pair_mask[:, :, :, None] & pair_mask[:, :, None, :]).reshape(b * n, 1, n, n)
+            bias_s = bias_s + make_additive_mask(row_mask)
+        out_s = mx.fast.scaled_dot_product_attention(q_s, k_s, v_s, scale=D ** -0.5, mask=bias_s)
+        out_s = out_s.reshape(b, n, H, n, D).transpose(0, 1, 3, 2, 4)  # [b, i, j, H, D]
+        out_s = out_s * sigmoid(g1)
 
-        # Ending-node attention: fix j, attend i -> k, with bias from (i, k).
-        q_end = q2.transpose(0, 2, 3, 1, 4).reshape(b * n, self.num_heads, n, self.head_dim)
-        k_end = k2.transpose(0, 2, 3, 1, 4).reshape(b * n, self.num_heads, n, self.head_dim)
-        v_end = v2.transpose(0, 2, 3, 1, 4).reshape(b * n, self.num_heads, n, self.head_dim)
-        bias_end = mx.broadcast_to(bias[:, None, :, :, :], (b, n, self.num_heads, n, n)).reshape(
-            b * n, self.num_heads, n, n
-        )
+        # Ending-node: fix column j, attend over rows i→k.
+        # q2/k2/v2: [b, i, j, H, D] → transpose pair dims → [b, j, i, H, D] → batch over j
+        q_e = q2.transpose(0, 2, 1, 3, 4).transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
+        k_e = k2.transpose(0, 2, 1, 3, 4).transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
+        v_e = v2.transpose(0, 2, 1, 3, 4).transpose(0, 1, 3, 2, 4).reshape(b * n, H, n, D)
+        bias_e = mx.broadcast_to(bias_end_raw[:, None, :, :, :], (b, n, H, n, n)).reshape(b * n, H, n, n)
         if pair_mask is not None:
-            end_mask = self._ending_mask(pair_mask).reshape(b * n, 1, n, n)
-            bias_end = bias_end + make_additive_mask(end_mask)
-        out_end = mx.fast.scaled_dot_product_attention(
-            q_end,
-            k_end,
-            v_end,
-            scale=self.head_dim ** -0.5,
-            mask=bias_end,
-        )
-        out_end = out_end.reshape(b, n, self.num_heads, n, self.head_dim).transpose(0, 3, 1, 2, 4)
-        out_end = out_end * sigmoid(g2)
+            col_mask_base = pair_mask.transpose(0, 2, 1)
+            col_mask = (col_mask_base[:, :, :, None] & col_mask_base[:, :, None, :]).reshape(b * n, 1, n, n)
+            bias_e = bias_e + make_additive_mask(col_mask)
+        out_e = mx.fast.scaled_dot_product_attention(q_e, k_e, v_e, scale=D ** -0.5, mask=bias_e)
+        # [b*n, H, n, D] → [b, j, H, i, D] → [b, i, j, H, D]
+        out_e = out_e.reshape(b, n, H, n, D).transpose(0, 3, 1, 2, 4)
+        out_e = out_e * sigmoid(g2)
 
-        out = mx.concatenate([out_start, out_end], axis=-1)
-        out = self.linear_out(merge_heads(out)) * self.out_scalers
+        combined = mx.concatenate([merge_heads(out_s), merge_heads(out_e)], axis=-1)
+        out = self.linear_out(combined) * self.out_scalers
         return z + out
 
 

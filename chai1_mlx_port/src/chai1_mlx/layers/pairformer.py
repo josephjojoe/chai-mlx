@@ -57,6 +57,8 @@ class PairformerBlock(nn.Module):
         pair_mask: mx.array | None = None,
         precomputed_single_pair_bias: mx.array | None = None,
     ) -> tuple[mx.array, mx.array | None]:
+        z = self.triangle_multiplication(z, pair_mask=pair_mask)
+        z = self.triangle_attention(z, pair_mask=pair_mask)
         z = z + self.transition_pair(z)
         if self.single_dim is not None and s is not None:
             s = s + self.attention_pair_bias(
@@ -66,8 +68,6 @@ class PairformerBlock(nn.Module):
                 precomputed_bias=precomputed_single_pair_bias,
             )
             s = s + self.transition_single(s)
-        z = self.triangle_multiplication(z, pair_mask=pair_mask)
-        z = self.triangle_attention(z, pair_mask=pair_mask)
         return z, s
 
 

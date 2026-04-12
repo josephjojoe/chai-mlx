@@ -31,10 +31,10 @@ class ConfidenceHead(nn.Module):
         self.plddt_projection = nn.Linear(
             cfg.hidden.token_single,
             cfg.confidence.plddt_atom_positions * cfg.confidence.plddt_bins,
-            bias=True,
+            bias=False,
         )
-        self.pae_projection = nn.Linear(cfg.hidden.token_pair, cfg.confidence.pair_bins, bias=True)
-        self.pde_projection = nn.Linear(cfg.hidden.token_pair, cfg.confidence.pair_bins, bias=True)
+        self.pae_projection = nn.Linear(cfg.hidden.token_pair, cfg.confidence.pair_bins, bias=False)
+        self.pde_projection = nn.Linear(cfg.hidden.token_pair, cfg.confidence.pair_bins, bias=False)
 
     def _run_single(self, trunk: TrunkOutputs, coords: mx.array) -> ConfidenceOutputs:
         structure = trunk.structure_inputs
