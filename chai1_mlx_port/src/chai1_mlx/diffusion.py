@@ -51,13 +51,18 @@ class DiffusionConditioning(nn.Module):
         self.single_ln = nn.LayerNorm(cfg.hidden.token_single, eps=cfg.layer_norm_eps)
 
     def prepare_static(self, trunk: TrunkOutputs) -> tuple[mx.array, mx.array]:
-        pair_cat = mx.concatenate([trunk.pair_initial, trunk.pair_trunk], axis=-1)
+        # The reference diffusion module concatenates the *structure-path*
+        # initial representations with trunk outputs — NOT the trunk-path
+        # initial representations.  See chai1.py static_diffusion_inputs:
+        #   token_pair_initial_repr  = token_pair_structure_input_feats
+        #   token_single_initial_repr = token_single_structure_input
+        pair_cat = mx.concatenate([trunk.pair_structure, trunk.pair_trunk], axis=-1)
         z = self.token_pair_proj(self.token_pair_norm(pair_cat))
         z = z + self.pair_trans1(z)
         z = z + self.pair_trans2(z)
         z_cond = self.pair_ln(z)
 
-        single_cat = mx.concatenate([trunk.single_initial, trunk.single_trunk], axis=-1)
+        single_cat = mx.concatenate([trunk.single_structure, trunk.single_trunk], axis=-1)
         s = self.token_in_proj(self.token_in_norm(single_cat))
         s = s + self.single_trans1(s)
         return s, z_cond
@@ -276,7 +281,8 @@ class DiffusionModule(nn.Module):
         d_i = (coords_hat - denoised) / sigma_hat[:, :, None, None]
         coords_euler = coords_hat + (sigma_next - sigma_hat)[:, :, None, None] * d_i
 
-        if self.cfg.diffusion.second_order:
+        sigma_next_nonzero = bool(mx.any(sigma_next != 0).item())
+        if self.cfg.diffusion.second_order and sigma_next_nonzero:
             denoised_next = self.denoise(
                 cache, coords_euler, sigma_next, use_custom_kernel=use_custom_kernel
             )

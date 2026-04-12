@@ -52,13 +52,20 @@ class TemplateEmbedder(nn.Module):
 class OuterProductMean(nn.Module):
     """Outer-product-mean from MSA to pair representation.
 
-    Reference: ARCHITECTURE.md §6.3.2.
-    weight_ab: [2, 8, 8, msa_dim] -- two projections mapping MSA-dim to 8x8.
-    Einsum 1 (projection): "abc, defc -> abdef" where a=batch*depth, b=tokens,
-        c=msa_dim and d=2 (proj index), e=8 (row), f=8 (col).
-    Einsum 2 (outer product): "abcde, afcdg -> cegabf" -- contracts over batch
-        and depth dimensions, producing the [n, n, 8, 8] outer product that is
-        reshaped to [n, n, 512] before LN + linear.
+    weight_ab: [2, 8_group, 8_inner, msa_dim] -- two projections from msa_dim
+    to (8 groups × 8 inner).
+
+    TorchScript reference (trunk_forward256.py):
+      Einsum 1 — projection per weight half after unbind(dim=0):
+        "abc, defc -> abdef"  with weight [8, 8, msa_dim] and
+        x [batch, depth, tokens, msa_dim].
+        Result: [8_group, 8_inner, batch, depth, tokens] per half.
+      Einsum 2 — outer product across depth:
+        "abcde, afcdg -> cegabf"
+        a = 8_group (shared), b/f = 8_inner_{a,b}, c = batch,
+        d = depth (contracted), e/g = tokens_{i,j}.
+        Result: [batch, n_i, n_j, 8_group, 8_inner_a, 8_inner_b]
+              → reshape to [batch, n, n, 512] before LN + linear.
     """
 
     def __init__(self, msa_dim: int, pair_dim: int, *, eps: float = 1e-5) -> None:
@@ -70,26 +77,18 @@ class OuterProductMean(nn.Module):
 
     def __call__(self, msa: mx.array, msa_mask: mx.array | None = None) -> mx.array:
         x = self.norm(msa)
-        # x: [b, m, n, msa_dim]; weight_ab: [2, 8, 8, msa_dim]
-        # proj: [b, m, n, 2, 8, 8] via einsum "bmnc, defc -> bmnde f" (contract c)
         proj = mx.einsum("bmnc,defc->bmndef", x, self.weight_ab)
 
         if msa_mask is not None:
             m = msa_mask.astype(x.dtype)[..., None, None, None]
             proj = proj * m
 
-        # Outer product over depth dimension:
-        # a_proj = proj[..., 0, :, :]: [b, m, n, 8, 8]  (proj index 0)
-        # b_proj = proj[..., 1, :, :]: [b, m, n, 8, 8]  (proj index 1)
-        a_proj = proj[:, :, :, 0, :, :]
-        b_proj = proj[:, :, :, 1, :, :]
-        # outer product: contract batch*depth, produce [n_i, n_j, 8_a, 8_b, 8_c, 8_d]
-        # but we want [b, n_i, n_j, 8, 8] from contracting m.
-        # Reference einsum 2: "abcde, afcdg -> cegabf" is specific to the
-        # TorchScript implementation shape conventions.  The core operation is:
-        #   op[b, i, j, ra, cb] = sum_m  a_proj[b, m, i, ra, :] * b_proj[b, m, j, :, cb]
-        # which is an outer product of rows/cols across MSA depth.
-        op = mx.einsum("bmiae,bmjbe->bijab", a_proj, b_proj)
+        a_proj = proj[:, :, :, 0, :, :]  # [b, m, n, 8_group, 8_inner_a]
+        b_proj = proj[:, :, :, 1, :, :]  # [b, m, n, 8_group, 8_inner_b]
+
+        # Contract depth (m), share group dim (g), keep both inner dims (e, f)
+        # → [b, n_i, n_j, 8_group, 8_inner_a, 8_inner_b] = 512 per (i,j)
+        op = mx.einsum("bmige,bmjgf->bijgef", a_proj, b_proj)
 
         if msa_mask is not None:
             pair_count = mx.einsum(
@@ -97,7 +96,7 @@ class OuterProductMean(nn.Module):
                 msa_mask.astype(x.dtype),
                 msa_mask.astype(x.dtype),
             )
-            denom = mx.maximum(pair_count[..., None, None], 1.0)
+            denom = mx.maximum(pair_count[..., None, None, None], 1.0)
             op = op / denom
         else:
             op = op / float(msa.shape[1])
