@@ -1,0 +1,1440 @@
+=== trunk.template_embedder.pairformer.squash_norm ===
+def forward(self) -> NoneType:
+  return None
+
+
+=== trunk.template_embedder.proj_in ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  return (_1).forward((_0).forward(input, ), )
+
+
+=== trunk.template_embedder.proj_in.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input0 = torch.layer_norm(torch.to(input, 6), [256], weight, bias)
+  return input0
+
+
+=== trunk.template_embedder.proj_in.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  proj_token_pair_repr = torch.linear(torch.to(argument_1, 15), _0)
+  return proj_token_pair_repr
+
+
+=== trunk.template_embedder.template_layernorm ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  updated_pair_repr = torch.layer_norm(torch.to(input, 6), [64], weight, bias)
+  return updated_pair_repr
+
+
+=== trunk.template_embedder.proj_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  return (_1).forward((_0).forward(input, ), )
+
+
+=== trunk.template_embedder.proj_out.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  return torch.relu(input)
+
+
+=== trunk.template_embedder.proj_out.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  _1 = torch.linear(torch.to(argument_1, 15), _0)
+  return _1
+
+
+=== trunk.msa_module.linear_s2m ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  x = torch.linear(input, torch.to(weight, 15))
+  return x
+
+
+=== trunk.msa_module.msa_transition.0 ===
+def forward(self,
+    msa_repr: Tensor) -> Tensor:
+  linear_out = self.linear_out
+  weight = linear_out.weight
+  layer_norm = self.layer_norm
+  bias = layer_norm.bias
+  layer_norm0 = self.layer_norm
+  weight0 = layer_norm0.weight
+  linear_no_bias_ab = self.linear_no_bias_ab
+  weight1 = linear_no_bias_ab.weight
+  _0 = ops.prim.NumToTensor(torch.size(weight1, 0))
+  other = ops.prim.NumToTensor(torch.size(weight1, 1))
+  _1 = ops.prim.NumToTensor(torch.numel(msa_repr))
+  _2 = torch.mul(_1, torch.floor_divide(_0, other))
+  n_chunks = torch.floor_divide(torch.floor_divide(_2, CONSTANTS.c0), CONSTANTS.c1)
+  _3 = torch.chunk(msa_repr, int(n_chunks), -2)
+  feat_repr_chunk, feat_repr_chunk0, = _3
+  _4 = ops.prim.NumToTensor(torch.size(feat_repr_chunk, 3))
+  _5 = int(_4)
+  x_normed = torch.layer_norm(torch.to(feat_repr_chunk, 6), [_5], weight0, bias)
+  _6 = torch.to(weight1, 15)
+  _7 = torch.linear(torch.to(x_normed, 15), _6)
+  input, b, = torch.chunk(_7, 2, -1)
+  prod = torch.mul_(torch.silu(input), b)
+  _8 = torch.linear(prod, torch.to(weight, 15))
+  _9 = ops.prim.NumToTensor(torch.size(feat_repr_chunk0, 3))
+  _10 = int(_9)
+  x_normed0 = torch.layer_norm(torch.to(feat_repr_chunk0, 6), [_10], weight0, bias)
+  _11 = torch.to(weight1, 15)
+  _12 = torch.linear(torch.to(x_normed0, 15), _11)
+  input0, b0, = torch.chunk(_12, 2, -1)
+  prod0 = torch.mul_(torch.silu(input0), b0)
+  _13 = torch.linear(prod0, torch.to(weight, 15))
+  return torch.cat([_8, _13], -2)
+
+
+=== trunk.msa_module.msa_transition.1 ===
+def forward(self,
+    msa_repr: Tensor) -> Tensor:
+  linear_out = self.linear_out
+  weight = linear_out.weight
+  layer_norm = self.layer_norm
+  bias = layer_norm.bias
+  layer_norm0 = self.layer_norm
+  weight0 = layer_norm0.weight
+  linear_no_bias_ab = self.linear_no_bias_ab
+  weight1 = linear_no_bias_ab.weight
+  _0 = ops.prim.NumToTensor(torch.size(weight1, 0))
+  other = ops.prim.NumToTensor(torch.size(weight1, 1))
+  _1 = ops.prim.NumToTensor(torch.numel(msa_repr))
+  _2 = torch.mul(_1, torch.floor_divide(_0, other))
+  n_chunks = torch.floor_divide(torch.floor_divide(_2, CONSTANTS.c0), CONSTANTS.c1)
+  _3 = torch.chunk(msa_repr, int(n_chunks), -2)
+  feat_repr_chunk, feat_repr_chunk0, = _3
+  _4 = ops.prim.NumToTensor(torch.size(feat_repr_chunk, 3))
+  _5 = int(_4)
+  x_normed = torch.layer_norm(torch.to(feat_repr_chunk, 6), [_5], weight0, bias)
+  _6 = torch.to(weight1, 15)
+  _7 = torch.linear(torch.to(x_normed, 15), _6)
+  input, b, = torch.chunk(_7, 2, -1)
+  prod = torch.mul_(torch.silu(input), b)
+  _8 = torch.linear(prod, torch.to(weight, 15))
+  _9 = ops.prim.NumToTensor(torch.size(feat_repr_chunk0, 3))
+  _10 = int(_9)
+  x_normed0 = torch.layer_norm(torch.to(feat_repr_chunk0, 6), [_10], weight0, bias)
+  _11 = torch.to(weight1, 15)
+  _12 = torch.linear(torch.to(x_normed0, 15), _11)
+  input0, b0, = torch.chunk(_12, 2, -1)
+  prod0 = torch.mul_(torch.silu(input0), b0)
+  _13 = torch.linear(prod0, torch.to(weight, 15))
+  return torch.cat([_8, _13], -2)
+
+
+=== trunk.msa_module.msa_transition.2 ===
+def forward(self,
+    msa_repr: Tensor) -> Tensor:
+  linear_out = self.linear_out
+  weight = linear_out.weight
+  layer_norm = self.layer_norm
+  bias = layer_norm.bias
+  layer_norm0 = self.layer_norm
+  weight0 = layer_norm0.weight
+  linear_no_bias_ab = self.linear_no_bias_ab
+  weight1 = linear_no_bias_ab.weight
+  _0 = ops.prim.NumToTensor(torch.size(weight1, 0))
+  other = ops.prim.NumToTensor(torch.size(weight1, 1))
+  _1 = ops.prim.NumToTensor(torch.numel(msa_repr))
+  _2 = torch.mul(_1, torch.floor_divide(_0, other))
+  n_chunks = torch.floor_divide(torch.floor_divide(_2, CONSTANTS.c0), CONSTANTS.c1)
+  _3 = torch.chunk(msa_repr, int(n_chunks), -2)
+  feat_repr_chunk, feat_repr_chunk0, = _3
+  _4 = ops.prim.NumToTensor(torch.size(feat_repr_chunk, 3))
+  _5 = int(_4)
+  x_normed = torch.layer_norm(torch.to(feat_repr_chunk, 6), [_5], weight0, bias)
+  _6 = torch.to(weight1, 15)
+  _7 = torch.linear(torch.to(x_normed, 15), _6)
+  input, b, = torch.chunk(_7, 2, -1)
+  prod = torch.mul_(torch.silu(input), b)
+  _8 = torch.linear(prod, torch.to(weight, 15))
+  _9 = ops.prim.NumToTensor(torch.size(feat_repr_chunk0, 3))
+  _10 = int(_9)
+  x_normed0 = torch.layer_norm(torch.to(feat_repr_chunk0, 6), [_10], weight0, bias)
+  _11 = torch.to(weight1, 15)
+  _12 = torch.linear(torch.to(x_normed0, 15), _11)
+  input0, b0, = torch.chunk(_12, 2, -1)
+  prod0 = torch.mul_(torch.silu(input0), b0)
+  _13 = torch.linear(prod0, torch.to(weight, 15))
+  return torch.cat([_8, _13], -2)
+
+
+=== trunk.pairformer_stack.blocks.0.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(input, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.0.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.0.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.1.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.1.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.1.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.2.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.2.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.2.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.3.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.3.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.3.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.4.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.4.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.4.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.5.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.5.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.5.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.6.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.6.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.6.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.7.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.7.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.7.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.8.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.8.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.8.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.9.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.9.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.9.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.10.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.10.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.10.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.11.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.11.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.11.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.12.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.12.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.12.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.13.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.13.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.13.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.14.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.14.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.14.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.15.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.15.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.15.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.16.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.16.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.16.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.17.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.17.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.17.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.18.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.18.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.18.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.19.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.19.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.19.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.20.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.20.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.20.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.21.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.21.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.21.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.22.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.22.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.22.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.23.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.23.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.23.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.24.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.24.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.24.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.25.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.25.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.25.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.26.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.26.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.26.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.27.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.27.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.27.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.28.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.28.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.28.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.29.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.29.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.29.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.30.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.30.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.30.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.31.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.31.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.31.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.32.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.32.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.32.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.33.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.33.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.33.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.34.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.34.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.34.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.35.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.35.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.35.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.36.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.36.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.36.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.37.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.37.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.37.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.38.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.38.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.38.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.39.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.39.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.39.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.40.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.40.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.40.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.41.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.41.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.41.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.42.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.42.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.42.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.43.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.43.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.43.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.44.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.44.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.44.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.45.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.45.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.45.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.46.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.46.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.46.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.blocks.47.attention_pair_bias.single_layer_norm ===
+def forward(self,
+    token_single_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(token_single_repr, 6), [384], weight, bias)
+  return _0
+
+
+=== trunk.pairformer_stack.blocks.47.attention_pair_bias.attention.input2qkvg ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  return torch.einsum("dfa,aebc->edbfc", _0)
+
+
+=== trunk.pairformer_stack.blocks.47.attention_pair_bias.attention.output_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  out = torch.einsum("ecbd,cda->eba", [argument_1, torch.to(weight, 15)])
+  return out
+
+
+=== trunk.pairformer_stack.squash_norm ===
+def forward(self) -> NoneType:
+  return None
+
+
+=== trunk.token_single_recycle_proj ===
+def forward(self,
+    token_single_trunk_repr: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_0).forward(token_single_trunk_repr, )
+  return (_1).forward(_2, )
+
+
+=== trunk.token_single_recycle_proj.0 ===
+def forward(self,
+    token_single_trunk_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.layer_norm(torch.to(token_single_trunk_repr, 6), [384], weight, bias)
+  return input
+
+
+=== trunk.token_single_recycle_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  _1 = torch.linear(torch.to(argument_1, 15), _0)
+  return _1
+
+
+=== trunk.token_pair_recycle_proj ===
+def forward(self,
+    token_pair_trunk_repr: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(token_pair_trunk_repr, ), )
+  return _2
+
+
+=== trunk.token_pair_recycle_proj.0 ===
+def forward(self,
+    token_pair_trunk_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.layer_norm(torch.to(token_pair_trunk_repr, 6), [256], weight, bias)
+  return input
+
+
+=== trunk.token_pair_recycle_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  _1 = torch.linear(torch.to(argument_1, 15), _0)
+  return _1
+

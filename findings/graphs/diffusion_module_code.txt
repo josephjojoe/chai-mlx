@@ -1,0 +1,1704 @@
+=== diffusion_module.diffusion_conditioning.token_pair_proj ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  return (_1).forward((_0).forward(input, ), )
+
+
+=== diffusion_module.diffusion_conditioning.token_pair_proj.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input0 = torch.layer_norm(input, [512], weight, bias)
+  return input0
+
+
+=== diffusion_module.diffusion_conditioning.token_pair_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(argument_1, weight)
+
+
+=== diffusion_module.diffusion_conditioning.token_in_proj ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  return (_1).forward((_0).forward(input, ), )
+
+
+=== diffusion_module.diffusion_conditioning.token_in_proj.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input0 = torch.layer_norm(input, [768], weight, bias)
+  return input0
+
+
+=== diffusion_module.diffusion_conditioning.token_in_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(argument_1, weight)
+
+
+=== diffusion_module.diffusion_conditioning.single_trans1 ===
+def forward(self,
+    feat_repr: Tensor) -> Tensor:
+  linear_out = self.linear_out
+  weight = linear_out.weight
+  layer_norm = self.layer_norm
+  bias = layer_norm.bias
+  layer_norm0 = self.layer_norm
+  weight0 = layer_norm0.weight
+  linear_no_bias_ab = self.linear_no_bias_ab
+  weight1 = linear_no_bias_ab.weight
+  _0 = ops.prim.NumToTensor(torch.size(weight1, 0))
+  other = ops.prim.NumToTensor(torch.size(weight1, 1))
+  _1 = ops.prim.NumToTensor(torch.numel(feat_repr))
+  _2 = torch.mul(_1, torch.floor_divide(_0, other))
+  n_chunks = torch.floor_divide(torch.floor_divide(_2, CONSTANTS.c0), CONSTANTS.c1)
+  _3 = torch.chunk(feat_repr, int(n_chunks), -2)
+  feat_repr_chunk, = _3
+  _4 = ops.prim.NumToTensor(torch.size(feat_repr_chunk, 3))
+  x_normed = torch.layer_norm(feat_repr_chunk, [int(_4)], weight0, bias)
+  _5 = torch.chunk(torch.linear(x_normed, weight1), 2, -1)
+  input, b, = _5
+  prod = torch.mul_(torch.silu(input), b)
+  return torch.linear(prod, weight)
+
+
+=== diffusion_module.diffusion_conditioning.pair_trans1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  linear_out = self.linear_out
+  weight = linear_out.weight
+  layer_norm = self.layer_norm
+  bias = layer_norm.bias
+  layer_norm0 = self.layer_norm
+  weight0 = layer_norm0.weight
+  linear_no_bias_ab = self.linear_no_bias_ab
+  weight1 = linear_no_bias_ab.weight
+  _0 = ops.prim.NumToTensor(torch.size(weight1, 0))
+  other = ops.prim.NumToTensor(torch.size(weight1, 1))
+  _1 = ops.prim.NumToTensor(torch.numel(argument_1))
+  _2 = torch.mul(_1, torch.floor_divide(_0, other))
+  n_chunks = torch.floor_divide(torch.floor_divide(_2, CONSTANTS.c0), CONSTANTS.c1)
+  _3 = torch.chunk(argument_1, int(n_chunks), -2)
+  feat_repr_chunk, = _3
+  _4 = ops.prim.NumToTensor(torch.size(feat_repr_chunk, 3))
+  x_normed = torch.layer_norm(feat_repr_chunk, [int(_4)], weight0, bias)
+  _5 = torch.chunk(torch.linear(x_normed, weight1), 2, -1)
+  input, b, = _5
+  prod = torch.mul_(torch.silu(input), b)
+  return torch.linear(prod, weight)
+
+
+=== diffusion_module.diffusion_conditioning.single_trans2 ===
+def forward(self,
+    feat_repr: Tensor) -> Tensor:
+  linear_out = self.linear_out
+  weight = linear_out.weight
+  layer_norm = self.layer_norm
+  bias = layer_norm.bias
+  layer_norm0 = self.layer_norm
+  weight0 = layer_norm0.weight
+  linear_no_bias_ab = self.linear_no_bias_ab
+  weight1 = linear_no_bias_ab.weight
+  _0 = ops.prim.NumToTensor(torch.size(weight1, 0))
+  other = ops.prim.NumToTensor(torch.size(weight1, 1))
+  _1 = ops.prim.NumToTensor(torch.numel(feat_repr))
+  _2 = torch.mul(_1, torch.floor_divide(_0, other))
+  n_chunks = torch.floor_divide(torch.floor_divide(_2, CONSTANTS.c0), CONSTANTS.c1)
+  _3 = torch.chunk(feat_repr, int(n_chunks), -2)
+  feat_repr_chunk, = _3
+  _4 = ops.prim.NumToTensor(torch.size(feat_repr_chunk, 3))
+  x_normed = torch.layer_norm(feat_repr_chunk, [int(_4)], weight0, bias)
+  _5 = torch.chunk(torch.linear(x_normed, weight1), 2, -1)
+  input, b, = _5
+  prod = torch.mul_(torch.silu(input), b)
+  return torch.linear(prod, weight)
+
+
+=== diffusion_module.diffusion_conditioning.pair_trans2 ===
+def forward(self,
+    feat_repr: Tensor) -> Tensor:
+  linear_out = self.linear_out
+  weight = linear_out.weight
+  layer_norm = self.layer_norm
+  bias = layer_norm.bias
+  layer_norm0 = self.layer_norm
+  weight0 = layer_norm0.weight
+  linear_no_bias_ab = self.linear_no_bias_ab
+  weight1 = linear_no_bias_ab.weight
+  _0 = ops.prim.NumToTensor(torch.size(weight1, 0))
+  other = ops.prim.NumToTensor(torch.size(weight1, 1))
+  _1 = ops.prim.NumToTensor(torch.numel(feat_repr))
+  _2 = torch.mul(_1, torch.floor_divide(_0, other))
+  n_chunks = torch.floor_divide(torch.floor_divide(_2, CONSTANTS.c0), CONSTANTS.c1)
+  _3 = torch.chunk(feat_repr, int(n_chunks), -2)
+  feat_repr_chunk, = _3
+  _4 = ops.prim.NumToTensor(torch.size(feat_repr_chunk, 3))
+  x_normed = torch.layer_norm(feat_repr_chunk, [int(_4)], weight0, bias)
+  _5 = torch.chunk(torch.linear(x_normed, weight1), 2, -1)
+  input, b, = _5
+  prod = torch.mul_(torch.silu(input), b)
+  return torch.linear(prod, weight)
+
+
+=== diffusion_module.diffusion_conditioning.fourier_proj.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input0 = torch.layer_norm(input, [256], weight, bias)
+  return input0
+
+
+=== diffusion_module.diffusion_conditioning.fourier_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(argument_1, weight)
+
+
+=== diffusion_module.diffusion_conditioning.single_ln ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  token_single_cond_repr = torch.layer_norm(input, [384], weight, bias)
+  return token_single_cond_repr
+
+
+=== diffusion_module.diffusion_conditioning.pair_ln ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  token_pair_structure_repr = torch.layer_norm(input, [256], weight, bias)
+  return token_pair_structure_repr
+
+
+=== diffusion_module.atom_attention_encoder.to_atom_cond ===
+def forward(self,
+    atom_single_input_feats: Tensor) -> Tensor:
+  weight = self.weight
+  x = torch.linear(atom_single_input_feats, weight)
+  return x
+
+
+=== diffusion_module.atom_attention_encoder.token_to_atom_single ===
+def forward(self,
+    token_single_trunk_repr: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_0).forward(token_single_trunk_repr, )
+  return (_1).forward(_2, )
+
+
+=== diffusion_module.atom_attention_encoder.token_to_atom_single.0 ===
+def forward(self,
+    token_single_trunk_repr: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.layer_norm(token_single_trunk_repr, [384], weight, bias)
+  return input
+
+
+=== diffusion_module.atom_attention_encoder.token_to_atom_single.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(argument_1, weight)
+
+
+=== diffusion_module.atom_attention_encoder.prev_pos_embed ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.pair_update_block ===
+def forward(self,
+    atom_block_pair_input_feats: Tensor,
+    token_atom_pair_repr: Tensor,
+    input: Tensor,
+    input0: Tensor) -> Tensor:
+  atom_pair_mlp = self.atom_pair_mlp
+  atom_single_to_atom_pair_proj_w = self.atom_single_to_atom_pair_proj_w
+  atom_single_to_atom_pair_proj_h = self.atom_single_to_atom_pair_proj_h
+  atom_pair_repr = torch.add(atom_block_pair_input_feats, token_atom_pair_repr)
+  _0 = (atom_single_to_atom_pair_proj_h).forward(input, )
+  _1 = (atom_single_to_atom_pair_proj_w).forward(input0, )
+  _2 = torch.unsqueeze(atom_pair_repr, 1)
+  element = ops.prim.NumToTensor(torch.size(_0, 0))
+  element0 = ops.prim.NumToTensor(torch.size(_0, 1))
+  element1 = ops.prim.NumToTensor(torch.size(_0, 2))
+  element2 = ops.prim.NumToTensor(torch.size(_0, 3))
+  element3 = ops.prim.NumToTensor(torch.size(_0, 4))
+  _3 = int(torch.mul(element, CONSTANTS.c0))
+  _4 = int(torch.mul(element0, CONSTANTS.c0))
+  _5 = int(torch.mul(element1, CONSTANTS.c0))
+  _6 = int(torch.mul(element2, CONSTANTS.c0))
+  _7 = int(torch.mul(element3, CONSTANTS.c0))
+  _8 = torch.reshape(_0, [_3, _4, _5, _6, 1, _7])
+  _9 = torch.add(_2, _8)
+  element4 = ops.prim.NumToTensor(torch.size(_1, 0))
+  element5 = ops.prim.NumToTensor(torch.size(_1, 1))
+  element6 = ops.prim.NumToTensor(torch.size(_1, 2))
+  element7 = ops.prim.NumToTensor(torch.size(_1, 3))
+  element8 = ops.prim.NumToTensor(torch.size(_1, 4))
+  _10 = int(torch.mul(element4, CONSTANTS.c0))
+  _11 = int(torch.mul(element5, CONSTANTS.c0))
+  _12 = int(torch.mul(element6, CONSTANTS.c0))
+  _13 = int(torch.mul(element7, CONSTANTS.c0))
+  _14 = int(torch.mul(element8, CONSTANTS.c0))
+  _15 = torch.reshape(_1, [_10, _11, _12, 1, _13, _14])
+  input1 = torch.add(_9, _15)
+  x = torch.add_((atom_pair_mlp).forward(input1, ), input1)
+  return x
+
+
+=== diffusion_module.atom_attention_encoder.pair_update_block.atom_single_to_atom_pair_proj_h ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  return (_1).forward((_0).forward(input, ), )
+
+
+=== diffusion_module.atom_attention_encoder.pair_update_block.atom_single_to_atom_pair_proj_h.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  return torch.relu(input)
+
+
+=== diffusion_module.atom_attention_encoder.pair_update_block.atom_single_to_atom_pair_proj_h.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(argument_1, weight)
+
+
+=== diffusion_module.atom_attention_encoder.pair_update_block.atom_single_to_atom_pair_proj_w ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  return (_1).forward((_0).forward(input, ), )
+
+
+=== diffusion_module.atom_attention_encoder.pair_update_block.atom_single_to_atom_pair_proj_w.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  return torch.relu(input)
+
+
+=== diffusion_module.atom_attention_encoder.pair_update_block.atom_single_to_atom_pair_proj_w.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(argument_1, weight)
+
+
+=== diffusion_module.atom_attention_encoder.pair_update_block.atom_pair_mlp ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  _2 = getattr(self, "2")
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _3 = (_2).forward((_1).forward((_0).forward(input, ), ), )
+  return _3
+
+
+=== diffusion_module.atom_attention_encoder.pair_update_block.atom_pair_mlp.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.pair_update_block.atom_pair_mlp.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.relu_(argument_1)
+
+
+=== diffusion_module.atom_attention_encoder.pair_update_block.atom_pair_mlp.2 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(argument_1, weight)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.transitions.0.ada_ln.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.transitions.0.linear_a_nobias_double ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.transitions.0.linear_b_nobias ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.transitions.0.linear_s_biasinit_m2 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  return torch.linear(input, weight, bias)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.transitions.1.ada_ln.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.transitions.1.linear_a_nobias_double ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.transitions.1.linear_b_nobias ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.transitions.1.linear_s_biasinit_m2 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  return torch.linear(input, weight, bias)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.transitions.2.ada_ln.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.transitions.2.linear_a_nobias_double ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.transitions.2.linear_b_nobias ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.transitions.2.linear_s_biasinit_m2 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  return torch.linear(input, weight, bias)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.local_attentions.0.single_layer_norm.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.local_attentions.0.to_qkv ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  post_rearrange = self.post_rearrange
+  weight = self.weight
+  x = torch.einsum("eda,fbca->febdc", [argument_1, weight])
+  return (post_rearrange).forward(x, )
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.local_attentions.0.to_qkv.post_rearrange ===
+def forward(self,
+    x: Tensor) -> Tensor:
+  element = ops.prim.NumToTensor(torch.size(x, 0))
+  element0 = ops.prim.NumToTensor(torch.size(x, 1))
+  element1 = ops.prim.NumToTensor(torch.size(x, 2))
+  element2 = ops.prim.NumToTensor(torch.size(x, 3))
+  element3 = ops.prim.NumToTensor(torch.size(x, 4))
+  _0 = int(torch.mul(element, CONSTANTS.c0))
+  result = torch.mul(element0, CONSTANTS.c0)
+  _1 = int(torch.mul_(result, element1))
+  _2 = int(torch.mul(element2, CONSTANTS.c0))
+  _3 = int(torch.mul(element3, CONSTANTS.c0))
+  return torch.reshape(x, [_0, _1, _2, _3])
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.local_attentions.0.out_proj ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  return torch.linear(input, weight, bias)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.local_attentions.1.single_layer_norm.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.local_attentions.1.to_qkv ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  post_rearrange = self.post_rearrange
+  weight = self.weight
+  x = torch.einsum("eda,fbca->febdc", [argument_1, weight])
+  return (post_rearrange).forward(x, )
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.local_attentions.1.to_qkv.post_rearrange ===
+def forward(self,
+    x: Tensor) -> Tensor:
+  element = ops.prim.NumToTensor(torch.size(x, 0))
+  element0 = ops.prim.NumToTensor(torch.size(x, 1))
+  element1 = ops.prim.NumToTensor(torch.size(x, 2))
+  element2 = ops.prim.NumToTensor(torch.size(x, 3))
+  element3 = ops.prim.NumToTensor(torch.size(x, 4))
+  _0 = int(torch.mul(element, CONSTANTS.c0))
+  result = torch.mul(element0, CONSTANTS.c0)
+  _1 = int(torch.mul_(result, element1))
+  _2 = int(torch.mul(element2, CONSTANTS.c0))
+  _3 = int(torch.mul(element3, CONSTANTS.c0))
+  return torch.reshape(x, [_0, _1, _2, _3])
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.local_attentions.1.out_proj ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  return torch.linear(input, weight, bias)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.local_attentions.2.single_layer_norm.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.local_attentions.2.to_qkv ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  post_rearrange = self.post_rearrange
+  weight = self.weight
+  x = torch.einsum("eda,fbca->febdc", [argument_1, weight])
+  return (post_rearrange).forward(x, )
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.local_attentions.2.to_qkv.post_rearrange ===
+def forward(self,
+    x: Tensor) -> Tensor:
+  element = ops.prim.NumToTensor(torch.size(x, 0))
+  element0 = ops.prim.NumToTensor(torch.size(x, 1))
+  element1 = ops.prim.NumToTensor(torch.size(x, 2))
+  element2 = ops.prim.NumToTensor(torch.size(x, 3))
+  element3 = ops.prim.NumToTensor(torch.size(x, 4))
+  _0 = int(torch.mul(element, CONSTANTS.c0))
+  result = torch.mul(element0, CONSTANTS.c0)
+  _1 = int(torch.mul_(result, element1))
+  _2 = int(torch.mul(element2, CONSTANTS.c0))
+  _3 = int(torch.mul(element3, CONSTANTS.c0))
+  return torch.reshape(x, [_0, _1, _2, _3])
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.local_attentions.2.out_proj ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  return torch.linear(input, weight, bias)
+
+
+=== diffusion_module.atom_attention_encoder.atom_transformer.local_diffn_transformer.blocked_pairs2blocked_bias.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(input, [16], weight, bias)
+  return _0
+
+
+=== diffusion_module.atom_attention_encoder.to_token_single ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  return (_1).forward((_0).forward(input, ), )
+
+
+=== diffusion_module.atom_attention_encoder.to_token_single.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_encoder.to_token_single.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.relu_(argument_1)
+
+
+=== diffusion_module.atom_attention_encoder.token_pair_to_atom_pair ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.atom_attention_encoder.token_pair_to_atom_pair.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.layer_norm(argument_1, [256], weight, bias)
+  return input
+
+
+=== diffusion_module.atom_attention_encoder.token_pair_to_atom_pair.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(argument_1, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.0.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.0.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.0.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.0.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.0.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.0.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.1.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.1.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.1.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.1.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.1.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.1.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.2.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.2.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.2.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.2.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.2.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.2.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.3.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.3.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.3.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.3.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.3.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.3.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.4.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.4.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.4.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.4.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.4.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.4.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.5.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.5.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.5.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.5.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.5.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.5.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.6.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.6.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.6.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.6.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.6.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.6.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.7.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.7.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.7.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.7.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.7.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.7.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.8.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.8.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.8.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.8.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.8.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.8.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.9.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.9.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.9.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.9.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.9.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.9.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.10.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.10.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.10.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.10.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.10.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.10.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.11.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.11.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.11.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.11.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.11.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.11.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.12.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.12.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.12.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.12.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.12.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.12.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.13.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.13.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.13.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.13.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.13.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.13.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.14.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.14.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.14.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.14.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.14.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.14.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.15.transition.ada_ln ===
+def forward(self,
+    feat_repr: Tensor,
+    argument_2: Tensor) -> Tensor:
+  lin_s_merged = self.lin_s_merged
+  weight = lin_s_merged.weight
+  _0 = ops.prim.NumToTensor(torch.size(feat_repr, 3))
+  feat_repr0 = torch.layer_norm(feat_repr, [int(_0)], None, None, 0.10000000000000001)
+  cond = torch.linear(argument_2, weight)
+  scale, shift, = torch.chunk(cond, 2, -1)
+  _1 = torch.mul(feat_repr0, torch.add(scale, CONSTANTS.c0))
+  return torch.add(_1, shift)
+
+
+=== diffusion_module.diffusion_transformer.blocks.15.to_qkv ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.diffusion_transformer.blocks.15.gate_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _2 = (_1).forward((_0).forward(argument_1, ), )
+  return _2
+
+
+=== diffusion_module.diffusion_transformer.blocks.15.gate_proj.0 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input = torch.linear(argument_1, weight, bias)
+  return input
+
+
+=== diffusion_module.diffusion_transformer.blocks.15.gate_proj.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.sigmoid(argument_1)
+
+
+=== diffusion_module.diffusion_transformer.blocks.15.to_out ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.token_to_atom ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.transitions.0.ada_ln.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.transitions.0.linear_a_nobias_double ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.transitions.0.linear_b_nobias ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.transitions.0.linear_s_biasinit_m2 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  return torch.linear(input, weight, bias)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.transitions.1.ada_ln.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.transitions.1.linear_a_nobias_double ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.transitions.1.linear_b_nobias ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.transitions.1.linear_s_biasinit_m2 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  return torch.linear(input, weight, bias)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.transitions.2.ada_ln.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.transitions.2.linear_a_nobias_double ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.transitions.2.linear_b_nobias ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.transitions.2.linear_s_biasinit_m2 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  return torch.linear(input, weight, bias)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.local_attentions.0.single_layer_norm.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.local_attentions.0.to_qkv ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  post_rearrange = self.post_rearrange
+  weight = self.weight
+  x = torch.einsum("eda,fbca->febdc", [argument_1, weight])
+  return (post_rearrange).forward(x, )
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.local_attentions.0.to_qkv.post_rearrange ===
+def forward(self,
+    x: Tensor) -> Tensor:
+  element = ops.prim.NumToTensor(torch.size(x, 0))
+  element0 = ops.prim.NumToTensor(torch.size(x, 1))
+  element1 = ops.prim.NumToTensor(torch.size(x, 2))
+  element2 = ops.prim.NumToTensor(torch.size(x, 3))
+  element3 = ops.prim.NumToTensor(torch.size(x, 4))
+  _0 = int(torch.mul(element, CONSTANTS.c0))
+  result = torch.mul(element0, CONSTANTS.c0)
+  _1 = int(torch.mul_(result, element1))
+  _2 = int(torch.mul(element2, CONSTANTS.c0))
+  _3 = int(torch.mul(element3, CONSTANTS.c0))
+  return torch.reshape(x, [_0, _1, _2, _3])
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.local_attentions.0.out_proj ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  return torch.linear(input, weight, bias)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.local_attentions.1.single_layer_norm.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.local_attentions.1.to_qkv ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  post_rearrange = self.post_rearrange
+  weight = self.weight
+  x = torch.einsum("eda,fbca->febdc", [argument_1, weight])
+  return (post_rearrange).forward(x, )
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.local_attentions.1.to_qkv.post_rearrange ===
+def forward(self,
+    x: Tensor) -> Tensor:
+  element = ops.prim.NumToTensor(torch.size(x, 0))
+  element0 = ops.prim.NumToTensor(torch.size(x, 1))
+  element1 = ops.prim.NumToTensor(torch.size(x, 2))
+  element2 = ops.prim.NumToTensor(torch.size(x, 3))
+  element3 = ops.prim.NumToTensor(torch.size(x, 4))
+  _0 = int(torch.mul(element, CONSTANTS.c0))
+  result = torch.mul(element0, CONSTANTS.c0)
+  _1 = int(torch.mul_(result, element1))
+  _2 = int(torch.mul(element2, CONSTANTS.c0))
+  _3 = int(torch.mul(element3, CONSTANTS.c0))
+  return torch.reshape(x, [_0, _1, _2, _3])
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.local_attentions.1.out_proj ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  return torch.linear(input, weight, bias)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.local_attentions.2.single_layer_norm.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.local_attentions.2.to_qkv ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  post_rearrange = self.post_rearrange
+  weight = self.weight
+  x = torch.einsum("eda,fbca->febdc", [argument_1, weight])
+  return (post_rearrange).forward(x, )
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.local_attentions.2.to_qkv.post_rearrange ===
+def forward(self,
+    x: Tensor) -> Tensor:
+  element = ops.prim.NumToTensor(torch.size(x, 0))
+  element0 = ops.prim.NumToTensor(torch.size(x, 1))
+  element1 = ops.prim.NumToTensor(torch.size(x, 2))
+  element2 = ops.prim.NumToTensor(torch.size(x, 3))
+  element3 = ops.prim.NumToTensor(torch.size(x, 4))
+  _0 = int(torch.mul(element, CONSTANTS.c0))
+  result = torch.mul(element0, CONSTANTS.c0)
+  _1 = int(torch.mul_(result, element1))
+  _2 = int(torch.mul(element2, CONSTANTS.c0))
+  _3 = int(torch.mul(element3, CONSTANTS.c0))
+  return torch.reshape(x, [_0, _1, _2, _3])
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.local_attentions.2.out_proj ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  return torch.linear(input, weight, bias)
+
+
+=== diffusion_module.atom_attention_decoder.atom_transformer.local_diffn_transformer.blocked_pairs2blocked_bias.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(input, [16], weight, bias)
+  return _0
+
+
+=== diffusion_module.atom_attention_decoder.to_pos_updates ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  return (_1).forward((_0).forward(input, ), )
+
+
+=== diffusion_module.atom_attention_decoder.to_pos_updates.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  input0 = torch.layer_norm(input, [128], weight, bias)
+  return input0
+
+
+=== diffusion_module.atom_attention_decoder.to_pos_updates.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(argument_1, weight)
+
+
+=== diffusion_module.structure_cond_to_token_structure_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(argument_1, weight)
+
+
+=== diffusion_module.post_attn_layernorm ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  token_single_structure_repr = torch.layer_norm(input, [768], weight, bias)
+  return token_single_structure_repr
+
+
+=== diffusion_module.post_atom_cond_layernorm ===
+def forward(self,
+    x: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  x0 = torch.layer_norm(x, [128], weight, bias)
+  return x0
+

@@ -276,7 +276,7 @@ Compute **multi-head attention** with **additive logits bias** (no separate soft
 | Pairformer token self-attn | 16 | 24 | Pair bias from `z` |
 | Triangle attention (trunk / MSA / template) | 8 | 32 | Bias from pair; batching over triangle axis as in reference |
 | Diffusion transformer | 16 | 48 | Bias = cached `pair_bias_k` or on-the-fly |
-| Confidence triangle variant | 8 | 64 | As in confidence `.pt` |
+| Confidence triangle variant | 4 | 64 | Fused single-projection, no out_scalers; as in confidence `.pt` |
 
 **Complexity**
 

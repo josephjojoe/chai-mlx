@@ -1065,14 +1065,23 @@ Same execution order as trunk Pairformer blocks (§6.4):
 - `transition_single`: SwiGLU at dim 384 (4×)
 - `attention_pair_bias`: 16 heads, 24 head_dim (identical to trunk)
 
-**Different triangle attention variant**:
+**Different triangle attention variant** (`TriangleAttentionUpdate_v1`):
 - `pair2qkvgb: Linear(256, 2056, no bias)` — fused single-projection:
-  **8 heads × (q64 + k64 + v64 + g64 + bias1) = 2056**
-- `linear_out: Linear(512, 512, no bias)` — 8 heads × 64 v_dim
-- Both directions computed via chunk(2), producing 2 SDPA calls per block
+  **2056 = 2048 (qkvg) + 8 (bias)**, where:
+  - 2048 = 2 directions × 4 components(q,k,v,g) × **4 heads** × 64 dim
+  - 8 = 2 directions × **4 heads** (one bias scalar per head per direction)
+- `linear_out: Linear(512, 512, no bias)` — 512 = 2 dirs × 4 heads × 64 dim
+- No `out_scalers` (unlike the trunk's `TriangleAttentionUpdate_v2a`)
+- Both directions computed via chunk(2) on qkvg half, producing 2 SDPA calls per block
+- `linear_out` output (512) is split into two 256-dim halves, both added to residual
 
-This uses **8 heads at 64 head_dim** (vs the trunk's 8 heads at 32 head_dim), and
-fuses q, k, v, g, and per-head bias into a single projection.
+This uses **4 heads at 64 head_dim** (vs the trunk's 8 heads at 32 head_dim).
+The ending direction's qkvg half is pair-transposed before attention; the
+`linear_out` mixes starting(i,j) and ending(j,i) contributions at each position.
+
+Verified directly from `confidence_head.pt` TorchScript:
+`mock_num_heads_cinner = [4, 64]`, `split_with_sizes([2048, 8])`,
+`linear_out.weight: [512, 512]`.
 
 ### 8.3 Output Heads
 
@@ -1189,7 +1198,7 @@ Abramson et al. 2024 (Nature) and the
 3. **Covalent bond features**: Separate projection pathway
 4. **MSA module asymmetry**: 4 OPM blocks but only 3 MSA attention/transition blocks
 5. **Confidence head triangle attention**: Fused single-projection (2056-dim) with
-   8 heads at 64 head_dim, vs trunk's dual-projection with 32 head_dim
+   4 heads at 64 head_dim, vs trunk's dual-projection (8 heads at 32 head_dim)
 6. **pLDDT output**: 37 atom positions × 50 bins = 1850 per token
 7. **Triangular operations compute both directions** in every block (not alternating)
 
