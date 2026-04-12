@@ -74,7 +74,7 @@ class TemplateEmbedder(nn.Module):
             has_any = mx.any(combined_mask, axis=(-2, -1))  # (B, T)
             n_valid = mx.maximum(has_any.astype(mx.float32).sum(axis=1), 1.0)  # (B,)
         else:
-            n_valid = mx.array(float(t))
+            n_valid = mx.full((b,), float(t))
 
         per_template_outputs = []
         for ti in range(t):

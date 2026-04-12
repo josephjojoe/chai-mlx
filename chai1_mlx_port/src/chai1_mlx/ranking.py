@@ -8,7 +8,7 @@ from .utils import expectation_from_logits, gather_tokens_to_atoms, pairwise_dis
 
 
 def _unique_int_values(x: mx.array) -> list[int]:
-    return [int(v) for v in mx.unique(x).tolist()]
+    return sorted(set(x.reshape(-1).tolist()))
 
 
 class Ranker:

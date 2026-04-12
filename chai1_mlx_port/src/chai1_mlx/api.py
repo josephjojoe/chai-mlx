@@ -9,7 +9,17 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from .confidence import ConfidenceHead
-from .config import Chai1Config
+from .config import (
+    AtomBlockConfig,
+    Chai1Config,
+    ConfidenceConfig,
+    DiffusionConfig,
+    FeatureDims,
+    HiddenDims,
+    MSAConfig,
+    PairformerConfig,
+    TemplateConfig,
+)
 from .diffusion import DiffusionModule
 from .embeddings import InputEmbedder
 from .featurize import featurize as _featurize
@@ -76,7 +86,28 @@ class Chai1MLX(nn.Module):
         config_path = path / "config.json"
         if config_path.exists():
             with open(config_path) as f:
-                cfg = Chai1Config(**json.load(f))
+                raw = json.load(f)
+            _NESTED = {
+                "feature_dims": FeatureDims,
+                "hidden": HiddenDims,
+                "atom_blocks": AtomBlockConfig,
+                "pairformer": PairformerConfig,
+                "diffusion": DiffusionConfig,
+                "templates": TemplateConfig,
+                "msa": MSAConfig,
+                "confidence": ConfidenceConfig,
+            }
+            if "supported_token_sizes" in raw and isinstance(raw["supported_token_sizes"], list):
+                raw["supported_token_sizes"] = tuple(raw["supported_token_sizes"])
+            for key, cls_ in _NESTED.items():
+                if key in raw and isinstance(raw[key], dict):
+                    v = raw[key]
+                    if "distance_bin_edges" in v and isinstance(v["distance_bin_edges"], list):
+                        v["distance_bin_edges"] = tuple(v["distance_bin_edges"])
+                    if "supported_token_sizes" in v and isinstance(v["supported_token_sizes"], list):
+                        v["supported_token_sizes"] = tuple(v["supported_token_sizes"])
+                    raw[key] = cls_(**v)
+            cfg = Chai1Config(**raw)
         else:
             cfg = Chai1Config()
 
