@@ -47,8 +47,8 @@ class Chai1MLX(nn.Module):
     def featurize(self, inputs: FeatureContext | InputBundle | dict) -> FeatureContext:
         return _featurize(inputs)
 
-    def embed_inputs(self, ctx: FeatureContext, *, use_custom_kernel: bool = False) -> EmbeddingOutputs:
-        return self.input_embedder(ctx, use_custom_kernel=use_custom_kernel)
+    def embed_inputs(self, ctx: FeatureContext, *, use_kernel: bool = False) -> EmbeddingOutputs:
+        return self.input_embedder(ctx, use_kernel=use_kernel)
 
     def trunk(self, emb: EmbeddingOutputs, *, recycles: int = 3, msa_mask: mx.array | None = None) -> TrunkOutputs:
         return self.trunk_module(emb, recycles=recycles, msa_mask=msa_mask)
@@ -73,10 +73,10 @@ class Chai1MLX(nn.Module):
         coords: mx.array,
         sigma: mx.array,
         *,
-        use_custom_kernel: bool = False,
+        use_kernel: bool = False,
     ) -> mx.array:
         return self.diffusion_module.denoise(
-            cache, coords, sigma, use_custom_kernel=use_custom_kernel
+            cache, coords, sigma, use_kernel=use_kernel
         )
 
     def diffusion_step(
@@ -87,7 +87,7 @@ class Chai1MLX(nn.Module):
         sigma_next: mx.array | float,
         gamma: mx.array | float,
         *,
-        use_custom_kernel: bool = False,
+        use_kernel: bool = False,
     ) -> mx.array:
         return self.diffusion_module.diffusion_step(
             cache,
@@ -95,7 +95,7 @@ class Chai1MLX(nn.Module):
             sigma_curr,
             sigma_next,
             gamma,
-            use_custom_kernel=use_custom_kernel,
+            use_kernel=use_kernel,
         )
 
     def confidence(self, trunk_out: TrunkOutputs, coords: mx.array) -> ConfidenceOutputs:
@@ -119,10 +119,10 @@ class Chai1MLX(nn.Module):
         recycles: int = 3,
         num_samples: int = 5,
         num_steps: int | None = None,
-        use_custom_kernel: bool = False,
+        use_kernel: bool = False,
     ) -> FoldOutputs:
         ctx = self.featurize(inputs)
-        emb = self.embed_inputs(ctx, use_custom_kernel=use_custom_kernel)
+        emb = self.embed_inputs(ctx, use_kernel=use_kernel)
         trunk_out = self.trunk(emb, recycles=recycles)
         cache = self.prepare_diffusion_cache(trunk_out)
         mx.eval(cache.s_static, cache.z_cond, cache.blocked_pair_base, cache.atom_cond,
@@ -135,7 +135,7 @@ class Chai1MLX(nn.Module):
                 sigma_curr,
                 sigma_next,
                 gamma,
-                use_custom_kernel=use_custom_kernel,
+                use_kernel=use_kernel,
             )
             mx.eval(coords)
         conf = self.confidence(trunk_out, coords)

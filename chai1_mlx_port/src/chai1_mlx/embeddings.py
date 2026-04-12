@@ -84,7 +84,7 @@ class TokenInputEmbedding(nn.Module):
         atom_mask: mx.array,
         kv_idx: mx.array,
         block_mask: mx.array,
-        use_custom_kernel: bool = False,
+        use_kernel: bool = False,
     ) -> tuple[mx.array, mx.array, mx.array]:
         num_tokens = token_single_input.shape[1]
         atom_agg = self.atom_encoder(
@@ -95,7 +95,7 @@ class TokenInputEmbedding(nn.Module):
             kv_idx,
             block_mask,
             num_tokens=num_tokens,
-            use_custom_kernel=use_custom_kernel,
+            use_kernel=use_kernel,
         )
         token_concat = mx.concatenate([token_single_input, atom_agg], axis=-1)
         single_initial = self.token_single_proj_in_trunk(token_concat)
@@ -115,7 +115,7 @@ class InputEmbedder(nn.Module):
         self.bond_projection = BondProjection(cfg)
         self.token_input = TokenInputEmbedding(cfg)
 
-    def __call__(self, ctx: FeatureContext, *, use_custom_kernel: bool = False) -> EmbeddingOutputs:
+    def __call__(self, ctx: FeatureContext, *, use_kernel: bool = False) -> EmbeddingOutputs:
         feats = self.feature_embedding(ctx)
 
         bond_adjacency = ctx.bond_adjacency
@@ -136,7 +136,7 @@ class InputEmbedder(nn.Module):
             atom_mask=structure.atom_exists_mask,
             kv_idx=structure.atom_kv_indices,
             block_mask=structure.block_atom_pair_mask,
-            use_custom_kernel=use_custom_kernel,
+            use_kernel=use_kernel,
         )
 
         return EmbeddingOutputs(

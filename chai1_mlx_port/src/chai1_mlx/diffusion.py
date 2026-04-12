@@ -181,7 +181,7 @@ class DiffusionModule(nn.Module):
         coords: mx.array,
         sigma: mx.array,
         *,
-        use_custom_kernel: bool = False,
+        use_kernel: bool = False,
     ) -> mx.array:
         trunk = cache.trunk_outputs
         structure = cache.structure_inputs
@@ -207,10 +207,10 @@ class DiffusionModule(nn.Module):
             structure.atom_kv_indices,
             structure.block_atom_pair_mask,
             num_tokens=trunk.single_initial.shape[1],
-            use_custom_kernel=use_custom_kernel,
+            use_kernel=use_kernel,
         )
         x = x + enc_tokens
-        x = self.diffusion_transformer(x, s_cond, cache.pair_biases, use_kernel=use_custom_kernel)
+        x = self.diffusion_transformer(x, s_cond, cache.pair_biases, use_kernel=use_kernel)
         x = self.post_attn_layernorm(x)
         atom_cond = self.post_atom_cond_layernorm(atom_cond)
         pos_updates = self.atom_attention_decoder(
@@ -220,7 +220,7 @@ class DiffusionModule(nn.Module):
             structure.atom_token_index,
             structure.atom_kv_indices,
             structure.block_atom_pair_mask,
-            use_custom_kernel=use_custom_kernel,
+            use_kernel=use_kernel,
         )
         return c_skip[:, :, None, None] * coords + c_out[:, :, None, None] * pos_updates
 
@@ -261,7 +261,7 @@ class DiffusionModule(nn.Module):
         sigma_next: mx.array | float,
         gamma: mx.array | float,
         *,
-        use_custom_kernel: bool = False,
+        use_kernel: bool = False,
     ) -> mx.array:
         structure = cache.structure_inputs
         sigma_curr = mx.full((coords.shape[0], coords.shape[1]), float(sigma_curr), dtype=mx.float32)
@@ -282,14 +282,14 @@ class DiffusionModule(nn.Module):
         sigma_delta = mx.maximum(sigma_hat * sigma_hat - sigma_curr * sigma_curr, self.cfg.diffusion_sqrt_eps)
         coords_hat = coords_aug + noise * mx.sqrt(sigma_delta)[:, :, None, None]
 
-        denoised = self.denoise(cache, coords_hat, sigma_hat, use_custom_kernel=use_custom_kernel)
+        denoised = self.denoise(cache, coords_hat, sigma_hat, use_kernel=use_kernel)
         d_i = (coords_hat - denoised) / sigma_hat[:, :, None, None]
         coords_euler = coords_hat + (sigma_next - sigma_hat)[:, :, None, None] * d_i
 
         sigma_next_nonzero = bool(mx.any(sigma_next != 0).item())
         if self.cfg.diffusion.second_order and sigma_next_nonzero:
             denoised_next = self.denoise(
-                cache, coords_euler, sigma_next, use_custom_kernel=use_custom_kernel
+                cache, coords_euler, sigma_next, use_kernel=use_kernel
             )
             d_i_prime = (coords_euler - denoised_next) / sigma_next[:, :, None, None]
             coords_euler = coords_euler + (sigma_next - sigma_hat)[:, :, None, None] * (d_i_prime + d_i) / 2.0

@@ -3,7 +3,6 @@ from __future__ import annotations
 import mlx.core as mx
 import mlx.nn as nn
 
-from ..kernels.blocked_local_attention import blocked_local_attention as blocked_local_attention_kernel
 from ..utils import (
     gather_blocked_atom_values,
     gather_tokens_to_atoms,
@@ -49,11 +48,11 @@ class LocalAttentionPairBiasBlock(nn.Module):
         additive_bias: mx.array,
         block_mask: mx.array,
         *,
-        use_custom_kernel: bool = False,
+        use_kernel: bool = False,
     ) -> mx.array:
         b, a, d = x.shape
         num_blocks = a // 32
-        x_norm = self.adaln(x, cond, use_kernel=use_custom_kernel)
+        x_norm = self.adaln(x, cond, use_kernel=use_kernel)
         q_all, k_all, v_all = [
             split_heads(t, self.num_heads, self.head_dim) for t in mx.split(self.to_qkv(x_norm), 3, axis=-1)
         ]
@@ -71,22 +70,13 @@ class LocalAttentionPairBiasBlock(nn.Module):
         v_flat = v.reshape(b * num_blocks, self.num_heads, 128, self.head_dim)
         bias_flat = additive_bias.reshape(b * num_blocks, self.num_heads, 32, 128)
 
-        if use_custom_kernel:
-            out = blocked_local_attention_kernel(
-                q_flat.astype(mx.float32),
-                k_flat.astype(mx.float32),
-                v_flat.astype(mx.float32),
-                bias_flat.astype(mx.float32),
-                self.head_dim ** -0.5,
-            ).astype(x.dtype)
-        else:
-            out = mx.fast.scaled_dot_product_attention(
-                q_flat,
-                k_flat,
-                v_flat,
-                scale=self.head_dim ** -0.5,
-                mask=bias_flat,
-            )
+        out = mx.fast.scaled_dot_product_attention(
+            q_flat,
+            k_flat,
+            v_flat,
+            scale=self.head_dim ** -0.5,
+            mask=bias_flat,
+        )
         out = out.reshape(b, num_blocks, self.num_heads, 32, self.head_dim).transpose(0, 1, 3, 2, 4)
         out = self.output_proj(merge_heads(out)).reshape(b, a, d)
         return x + out
@@ -115,7 +105,7 @@ class LocalAtomTransformer(nn.Module):
         kv_idx: mx.array,
         block_mask: mx.array,
         *,
-        use_custom_kernel: bool = False,
+        use_kernel: bool = False,
     ) -> mx.array:
         pair_bias = self.blocked_pairs2blocked_bias(self.pair_norm(pair))
         for i, (attn, ff) in enumerate(zip(self.attn_blocks, self.transitions)):
@@ -126,9 +116,9 @@ class LocalAtomTransformer(nn.Module):
                 kv_idx,
                 bias_slice,
                 block_mask,
-                use_custom_kernel=use_custom_kernel,
+                use_kernel=use_kernel,
             )
-            x = ff(x, cond, use_kernel=use_custom_kernel)
+            x = ff(x, cond, use_kernel=use_kernel)
         return x
 
 
@@ -158,7 +148,7 @@ class TokenInputAtomEncoder(nn.Module):
         block_mask: mx.array,
         *,
         num_tokens: int,
-        use_custom_kernel: bool = False,
+        use_kernel: bool = False,
     ) -> mx.array:
         b, a, d = atom_single_input.shape
         num_blocks = a // 32
@@ -172,7 +162,7 @@ class TokenInputAtomEncoder(nn.Module):
             pair,
             kv_idx,
             block_mask,
-            use_custom_kernel=use_custom_kernel,
+            use_kernel=use_kernel,
         )
         token_repr = mx.maximum(self.to_token_single(atom_repr), 0)
         return segment_mean(token_repr, atom_token_index, num_tokens, mask=atom_mask)
@@ -209,7 +199,7 @@ class DiffusionAtomAttentionEncoder(nn.Module):
         block_mask: mx.array,
         *,
         num_tokens: int,
-        use_custom_kernel: bool = False,
+        use_kernel: bool = False,
     ) -> tuple[mx.array, mx.array, mx.array]:
         b, ds, n, _ = s_cond.shape
         atom_cond = atom_cond_projected
@@ -233,7 +223,7 @@ class DiffusionAtomAttentionEncoder(nn.Module):
             pair,
             kv_idx_flat,
             block_mask_flat,
-            use_custom_kernel=use_custom_kernel,
+            use_kernel=use_kernel,
         )
         atom_token_index_flat = mx.broadcast_to(atom_token_index[:, None, :], (b, ds, atom_token_index.shape[-1])).reshape(b * ds, -1)
         atom_mask_flat = mx.broadcast_to(atom_mask[:, None, :], (b, ds, atom_mask.shape[-1])).reshape(b * ds, -1)
@@ -271,7 +261,7 @@ class DiffusionAtomAttentionDecoder(nn.Module):
         kv_idx: mx.array,
         block_mask: mx.array,
         *,
-        use_custom_kernel: bool = False,
+        use_kernel: bool = False,
     ) -> mx.array:
         b, ds, n, _ = token_repr.shape
         atom_token_index_flat = mx.broadcast_to(atom_token_index[:, None, :], (b, ds, atom_token_index.shape[-1])).reshape(b * ds, -1)
@@ -289,6 +279,6 @@ class DiffusionAtomAttentionDecoder(nn.Module):
             blocked_pair,
             kv_idx_flat,
             block_mask_flat,
-            use_custom_kernel=use_custom_kernel,
+            use_kernel=use_kernel,
         )
         return self.to_pos_updates(self.output_norm(atom_repr)).reshape(b, ds, atom_repr.shape[1], 3)
