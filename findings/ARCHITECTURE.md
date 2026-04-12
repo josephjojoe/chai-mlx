@@ -519,19 +519,19 @@ Template features [b, 4, n, n, 64]
 proj_in: LayerNorm(256) → Linear(256, 64, no bias)
     │
     ▼
-2× PairformerBlock (at dim 64):
-    ├─ transition_pair: LN(64) → SwiGLU(64→256→128→64)
+2× PairformerBlock (at dim 64, executed in this order):
     ├─ triangle_multiplication:
     │   ├─ layernorm_z_in: LN(64)
     │   ├─ merged_linear_p: Linear(64, 256, no bias)
     │   ├─ merged_linear_g: Linear(64, 320, no bias) → sigmoid gated
     │   └─ linear_z_out: Linear(64, 64, no bias)
-    └─ triangle_attention:
-        ├─ pair2b: Linear(64, 8, no bias) → 8 heads bias
-        ├─ pair2qkvg1: Linear(64, 512, no bias) → starting node
-        ├─ pair2qkvg2: Linear(64, 512, no bias) → ending node
-        ├─ linear_out: Linear(256, 64, no bias)
-        └─ out_scalers: [64] learned per-channel output scaling
+    ├─ triangle_attention:
+    │   ├─ pair2b: Linear(64, 8, no bias) → 2 directions × 4 heads bias
+    │   ├─ pair2qkvg1: Linear(64, 512, no bias) → starting node
+    │   ├─ pair2qkvg2: Linear(64, 512, no bias) → ending node
+    │   ├─ linear_out: Linear(256, 64, no bias)
+    │   └─ out_scalers: [64] learned per-channel output scaling
+    └─ transition_pair: LN(64) → SwiGLU(64→256→128→64)
     │
     ▼
 template_layernorm: LayerNorm(64) → proj_out: Linear(64, 256, no bias)
@@ -638,14 +638,19 @@ Weight shapes: `merged_linear_p: Linear(256, 1024)`, `merged_linear_g: Linear(25
 Both **starting-node and ending-node** attention are computed in every block via two
 `scaled_dot_product_attention` calls per block:
 
-- `pair2qkvg1: Linear(256, 1024, no bias)` — starting node projection: **8 heads × (q32 + k32 + v32 + g32)**
+- `pair2qkvg1: Linear(256, 1024, no bias)` — starting node projection: **4 heads × (q64 + k64 + v64 + g64)**
 - `pair2qkvg2: Linear(256, 1024, no bias)` — ending node projection: same decomposition
-- `pair2b: Linear(256, 8, no bias)` — per-head attention bias
-- `linear_out: Linear(512, 256, no bias)` — 512 = 8 heads × 32 v_dim × 2 directions
-- `out_scalers: [256]` — learned per-channel output scaling
+- `pair2b: Linear(256, 8, no bias)` — **2 directions × 4 heads** attention bias
+- `linear_out: Linear(512, 256, no bias)` — 512 = 4 heads × 64 v_dim × 2 directions
+- `out_scalers: [256]` — learned per-channel output scaling (applied to `linear_out` weight rows)
 
-The pair2qkvg outputs are split into q, k, v, g via `unbind` (4 equal components).
-Both directions' attention outputs are combined and gated by sigmoid(g).
+The pair2qkvg outputs are reshaped to `[b, n, n, 4_heads, 4_qkvg, 64_head_dim]`,
+permuted to `[4_qkvg, b*4_heads, n, n, 64]`, then `unbind` into q, k, v, g.
+Both directions' attention outputs are concatenated (512-dim) and projected through
+`linear_out` (with `out_scalers` applied element-wise to its weight rows).
+
+Verified from TorchScript: `mock_num_heads = [4]` (confirming 4 heads, not 8);
+`pair2b` output 8 = 2 directions × 4 heads.
 
 #### 6.3.8 MSA Pairing Algorithm
 
@@ -696,24 +701,35 @@ Each of the 48 identical blocks executes 5 sub-layers in this order:
 ```
 z, s = pair_repr, single_repr
 
-1. z += PairTransition(z)              # SwiGLU on pair repr
-2. s += AttentionPairBias(s, z)        # single self-attn biased by pair
-3. s += SingleTransition(s)            # SwiGLU on single repr
-4. z += TriangularMultiplication(z)    # both outgoing + incoming
-5. z += TriangleAttention(z)           # both starting + ending node
+1. z += TriangularMultiplication(z)    # both outgoing + incoming
+2. z += TriangleAttention(z)           # both starting + ending node
+3. z += PairTransition(z)              # SwiGLU on pair repr
+4. s += AttentionPairBias(s, z)        # single self-attn biased by pair
+5. s += SingleTransition(s)            # SwiGLU on single repr
 ```
+
+Verified by tracing ops between `squash_norm` boundaries in the TorchScript graph:
+TriMul einsums → 2× SDPA (triangle) → SwiGLU (pair) → SDPA (pair bias) → SwiGLU (single).
 
 Total SDPA calls per block: **3** (1 attention_pair_bias + 2 triangle_attention).
 
 A `SquashNorm` module is called between blocks but is a **no-op at inference** (all
 methods return `None`; active only during training for gradient/activation management).
 
-#### 6.4.1 Pair Transition
+#### 6.4.1 Triangle Multiplication
+
+Same architecture as MSA module (§6.3.6). Operates at pair dim 256.
+
+#### 6.4.2 Triangle Attention
+
+Same architecture as MSA module (§6.3.7). 4 heads, 64 head_dim, at pair dim 256.
+
+#### 6.4.3 Pair Transition
 
 `LayerNorm(256)` → `Linear(256, 1024, no bias)` → SwiGLU → `Linear(512, 256)`.
 Expansion: **4×**.
 
-#### 6.4.2 Attention with Pair Bias
+#### 6.4.4 Attention with Pair Bias
 
 - `single_layer_norm: LayerNorm(384)`, `pair_layer_norm: LayerNorm(256)`
 - `pair_linear: Linear(256, 16, no bias)` — pair → per-head attention bias
@@ -723,36 +739,28 @@ Expansion: **4×**.
 
 Attention: softmax(q·k^T / √24 + pair_bias) · v, gated by sigmoid(g).
 
-#### 6.4.3 Single Transition
+#### 6.4.5 Single Transition
 
 `LayerNorm(384)` → `Linear(384, 1536, no bias)` → SwiGLU → `Linear(768, 384)`.
 Expansion: **4×**.
-
-#### 6.4.4 Triangle Multiplication
-
-Same architecture as MSA module (§6.3.6). Operates at pair dim 256.
-
-#### 6.4.5 Triangle Attention
-
-Same architecture as MSA module (§6.3.7). 8 heads, 32 head_dim, at pair dim 256.
 
 ### 6.5 Summary Table
 
 | Block Type | Count | Key Dimensions |
 |-----------|-------|---------------|
-| Template Pairformer | 2 | pair=64, 8 heads, 16 head_dim |
+| Template Pairformer | 2 | pair=64, 4 heads, 32 head_dim |
 | MSA outer product mean | 4 | MSA=64 → pair=256, 8×8 outer |
 | MSA pair-weighted avg | 3 | 8 heads, 32 value_dim |
 | MSA transition | 3 | 64→512→256→64 (SwiGLU 8×) |
 | Pair transition (MSA) | 4 | 256→2048→1024→256 (SwiGLU 8×) |
 | Triangular mult (MSA) | 4 | pair=256, sigmoid gate, both dirs |
-| Triangular attn (MSA) | 4 | pair=256, 8 heads, 32 head_dim, both dirs |
+| Triangular attn (MSA) | 4 | pair=256, 4 heads, 64 head_dim, both dirs |
 | Pairformer blocks | 48 | single=384, pair=256 |
+| — triangle mult | 48 | pair=256, sigmoid gate, both dirs |
+| — triangle attn | 48 | pair=256, 4 heads, 64 head_dim, both dirs |
+| — transition pair | 48 | 256→1024→512→256 (SwiGLU 4×) |
 | — attention pair bias | 48 | 16 heads, 24 head_dim, gated |
 | — transition single | 48 | 384→1536→768→384 (SwiGLU 4×) |
-| — transition pair | 48 | 256→1024→512→256 (SwiGLU 4×) |
-| — triangle mult | 48 | pair=256, sigmoid gate, both dirs |
-| — triangle attn | 48 | pair=256, 8 heads, 32 head_dim, both dirs |
 
 ---
 
@@ -1075,7 +1083,9 @@ Same execution order as trunk Pairformer blocks (§6.4):
 - Both directions computed via chunk(2) on qkvg half, producing 2 SDPA calls per block
 - `linear_out` output (512) is split into two 256-dim halves, both added to residual
 
-This uses **4 heads at 64 head_dim** (vs the trunk's 8 heads at 32 head_dim).
+This uses the same **4 heads at 64 head_dim** as the trunk's triangle attention,
+but with a fused single-projection (`pair2qkvgb`) vs the trunk's separate
+`pair2qkvg1`/`pair2qkvg2`/`pair2b` (`TriangleAttentionUpdate_v2a`).
 The ending direction's qkvg half is pair-transposed before attention; the
 `linear_out` mixes starting(i,j) and ending(j,i) contributions at each position.
 
@@ -1197,8 +1207,11 @@ Abramson et al. 2024 (Nature) and the
 2. **Constraint features**: Contact (RBF 6), pocket (RBF 6), docking (one-hot 6 bins)
 3. **Covalent bond features**: Separate projection pathway
 4. **MSA module asymmetry**: 4 OPM blocks but only 3 MSA attention/transition blocks
-5. **Confidence head triangle attention**: Fused single-projection (2056-dim) with
-   4 heads at 64 head_dim, vs trunk's dual-projection (8 heads at 32 head_dim)
+5. **Confidence head triangle attention**: Fused single-projection (`pair2qkvgb`,
+   2056-dim, `TriangleAttentionUpdate_v1`) vs trunk's dual-projection
+   (`pair2qkvg1`/`pair2qkvg2`/`pair2b`, `TriangleAttentionUpdate_v2a`).
+   Both use 4 heads at 64 head_dim, but the confidence variant includes per-head
+   bias in the fused projection and outputs 512-dim (split 2×256 for residual)
 6. **pLDDT output**: 37 atom positions × 50 bins = 1850 per token
 7. **Triangular operations compute both directions** in every block (not alternating)
 
@@ -1212,8 +1225,10 @@ Abramson et al. 2024 (Nature) and the
 | Atom single dim | 128 | 128 |
 | Atom pair dim | 16 | 16 |
 | Pairformer blocks | 48 | 48 |
-| Pairformer heads | 16 | 16 |
-| Pairformer head dim | 24 | 24 |
+| Pairformer attn-pair-bias heads | 16 | 16 |
+| Pairformer attn-pair-bias head dim | 24 | 24 |
+| Triangle attention heads | **4** | 4 |
+| Triangle attention head dim | **64** | 32 |
 | Diffusion blocks | **16** | 24 |
 | Diffusion heads | 16 | 16 |
 | Diffusion head dim | **48** | 64 |
@@ -1225,7 +1240,8 @@ Abramson et al. 2024 (Nature) and the
 | Atom attn head dim | 32 | 32 |
 
 Notable: Chai-1 uses **pair dim 256** (vs AF3's 128), **16 diffusion blocks**
-(vs 24), and **48 diffusion head dim** (vs 64).
+(vs 24), **48 diffusion head dim** (vs 64), and **64 triangle attention head dim**
+(vs AF3's 32, with 4 heads in both).
 
 ---
 
