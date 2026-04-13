@@ -128,13 +128,54 @@ Per-op trace through the 16-block diffusion transformer (block 0 → 15):
 | MLX trunk → MPS diffusion (cache analysis) | z_cond 50% rel. error, s_static 11%, pair_biases max 5–22 | Trunk chaotic divergence corrupts conditioning tensors too heavily |
 | Different ODE solvers (Euler, Heun) | No improvement | Error is per-evaluation bias, not discretization error |
 | Stochastic noise injection (gamma > 0) | Worse (87→118 Å) | Per-step error too large for stochastic correction |
+| **fp64 matmul proof-of-life** (see below) | **No change** (4.02 on valid atoms) | nn.Linear matmul is NOT the dominant error source |
 
-**The core negative result**: every precision intervention (bf16 weights,
-fp32 weights, fp32 activations, BF16Linear) produces the same ~4.0
-per-step denoise error and the same ~25 Å invalid Cα spacing. The error
-is not about the number of bits — it's about Metal's matmul producing
-systematically different results from the backend the model was trained on
-(CUDA, with MPS as a compatible alternative).
+### Proof-of-life experiment: fp64 matmul in the denoiser
+
+Replaced every `nn.Linear` in the diffusion module with an fp64 NumPy
+oracle (`bf16 → fp64 → matmul → fp64 → bf16`). Also tested with
+fp64 SDPA (reference `scaled_dot_product_attention`). Fed MPS reference
+trunk outputs to isolate the denoiser from trunk divergence.
+
+| Configuration | Linears swapped | Per-step max error (valid atoms) |
+|---------------|-----------------|--------------------------------|
+| Stock MLX (bf16 weights, baseline) | 0 | 4.02 |
+| fp64 matmul, transformer + atom attn | 199 | 4.02 |
+| fp64 matmul, entire diffusion module | 211 | 4.02 |
+| fp64 matmul + fp64 SDPA, entire module | 211 + SDPA | 4.02 |
+| fp32 weights, stock matmul | 0 | 4.02 |
+| fp32 weights + fp64 matmul + fp64 SDPA | 211 + SDPA | 4.02 |
+
+**The per-step error is invariant to matmul precision.** Replacing every
+matrix multiplication (both `nn.Linear` and `scaled_dot_product_attention`)
+with fp64 ground truth produces no measurable improvement. This falsifies
+the hypothesis that Metal's matmul tiling order is the primary error source
+for the diffusion module.
+
+The ~4.0 per-step error persists even with:
+- fp64-accurate matmul (eliminates tiling-order divergence)
+- fp32 weights (eliminates bf16 quantization noise)
+- fp64 SDPA (eliminates attention kernel divergence)
+
+**Revised hypothesis**: the per-step error is dominated by a structural
+implementation difference between the MLX port and the TorchScript
+reference, or by non-matmul numerical differences (layernorm reductions,
+elementwise precision, conditioning path differences). The per-op trace
+in `diffusion_diagnostics.py` attributed the error to matmul because it
+compared individual operations in isolation with resynced inputs — masking
+the true cascade source.
+
+**Next steps**: trace the TorchScript graph dump to identify structural
+differences in the conditioning path, atom attention, or transformer
+loop. The error may be a port fidelity issue rather than a precision issue.
+
+Script: `scripts/proof_of_life.py`.
+
+**The core negative result (revised)**: the per-step denoise error of ~4.0
+is NOT from matmul tiling order and NOT from weight/activation precision.
+It persists with fp64-accurate matmul and SDPA. The error source is
+upstream of numerical precision — likely a structural difference between
+the MLX and TorchScript implementations of the diffusion module.
 
 ## Why Stable Diffusion works on MLX
 

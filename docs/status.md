@@ -65,6 +65,7 @@ precision.  Full git history has details.
 | `scripts/per_op_divergence.py` | Per-operation Metal-vs-MPS divergence |
 | `scripts/diffusion_diagnostics.py` | Lyapunov sweep, per-op trace, hybrid test |
 | `scripts/cache_conditioning_divergence.py` | Trunk divergence propagation into diffusion cache |
+| `scripts/proof_of_life.py` | fp64 matmul oracle in denoiser (proof-of-life) |
 | `scripts/structural_validation.py` | End-to-end structure quality vs PDB |
 | `scripts/memory_estimate.py` | Peak memory at various sequence lengths |
 | `examples/fasta_smoke.py` | Full pipeline dimension check |
