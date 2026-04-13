@@ -76,8 +76,9 @@ class LocalAttentionPairBiasBlock(nn.Module):
             mask=bias_flat,
         )
         out = out.reshape(b, num_blocks, self.num_heads, 32, self.head_dim).transpose(0, 1, 3, 2, 4)
-        out = self.output_proj(merge_heads(out)).reshape(b, a, d)
-        return x + out
+        out = merge_heads(out).reshape(b, a, d)
+        gate = mx.sigmoid(self.output_proj(cond))
+        return x + out * gate
 
 
 class LocalAtomTransformer(nn.Module):
@@ -103,10 +104,13 @@ class LocalAtomTransformer(nn.Module):
         kv_idx: mx.array,
         block_mask: mx.array,
         *,
+        atom_mask: mx.array | None = None,
         use_kernel: bool = False,
     ) -> mx.array:
         pair_bias = self.blocked_pairs2blocked_bias(self.pair_norm(pair))
         for i, (attn, ff) in enumerate(zip(self.attn_blocks, self.transitions)):
+            if atom_mask is not None:
+                x = x * atom_mask[..., None].astype(x.dtype)
             bias_slice = pair_bias[..., i * self.num_heads : (i + 1) * self.num_heads]
             x = attn(
                 x,
@@ -124,6 +128,7 @@ class TokenInputAtomEncoder(nn.Module):
     def __init__(self, atom_dim: int, pair_dim: int, token_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
         self.to_atom_cond = nn.Linear(atom_dim, atom_dim, bias=False)
+        self.cond_layer_norm = nn.LayerNorm(atom_dim, eps=eps, affine=False)
         self.pair_update_block = PairUpdateBlock(atom_dim, pair_dim, eps=eps)
         self.atom_transformer = LocalAtomTransformer(
             atom_dim,
@@ -148,18 +153,20 @@ class TokenInputAtomEncoder(nn.Module):
         num_tokens: int,
         use_kernel: bool = False,
     ) -> mx.array:
-        b, a, d = atom_single_input.shape
+        b, a, _ = atom_single_input.shape
         num_blocks = a // 32
-        cond = self.to_atom_cond(atom_single_input)
-        q_atoms = atom_single_input.reshape(b, num_blocks, 32, d)
-        kv_atoms = gather_blocked_atom_values(atom_single_input, kv_idx)
+        cond_raw = self.to_atom_cond(atom_single_input)
+        cond = self.cond_layer_norm(cond_raw)
+        q_atoms = cond.reshape(b, num_blocks, 32, cond.shape[-1])
+        kv_atoms = gather_blocked_atom_values(cond, kv_idx)
         pair = self.pair_update_block(q_atoms, kv_atoms, atom_pair_input)
         atom_repr = self.atom_transformer(
-            atom_single_input,
+            cond_raw,
             cond,
             pair,
             kv_idx,
             block_mask,
+            atom_mask=atom_mask,
             use_kernel=use_kernel,
         )
         token_repr = mx.maximum(self.to_token_single(atom_repr), 0)

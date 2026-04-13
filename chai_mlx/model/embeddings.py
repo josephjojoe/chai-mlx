@@ -299,7 +299,7 @@ class TokenInputEmbedding(nn.Module):
             num_tokens=num_tokens,
             use_kernel=use_kernel,
         )
-        token_concat = mx.concatenate([token_single_input, atom_agg], axis=-1)
+        token_concat = mx.concatenate([atom_agg, token_single_input], axis=-1)
         single_initial = self.token_single_proj_in_trunk(token_concat)
         single_structure = self.token_single_proj_in_structure(token_concat)
 
