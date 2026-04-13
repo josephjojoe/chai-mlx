@@ -3,13 +3,14 @@
 ## The problem in one paragraph
 
 Chai-1's MLX/Metal port is structurally identical to the PyTorch/MPS
-reference but produces invalid protein structures. The cause is a single
-operation — **bf16 matrix multiplication** — where Metal and MPS accumulate
-dot-product reductions in different orders, producing ~2e-3 max error per
-matmul. This error is amplified by nonlinearities (SwiGLU, sigmoid gates)
-within each transformer block, then compounded across 48 sequential
-pairformer blocks and 200 sequential ODE steps. The architecture has no
-self-correcting mechanism: errors only accumulate.
+reference but produces invalid protein structures. The root cause is
+**Metal's matmul tiling order** differing from MPS's, producing ~2e-3
+max error per matmul (both backends use fp32 accumulators internally — the
+difference is operand summation order, not precision). This error is
+amplified ~500× per transformer block by SwiGLU nonlinearities, then
+compounded across 48 sequential pairformer blocks and 200 sequential ODE
+steps. Neither weight precision (fp32 vs bf16) nor explicit fp32
+accumulation changes the outcome.
 
 ## Architecture overview
 
@@ -34,7 +35,7 @@ ODE solver (Heun second-order) that iteratively denoises atom coordinates.
 
 **Confidence head**: 4 pairformer blocks. Produces pLDDT, PAE, PDE logits.
 
-## The sole error source: bf16 matmul
+## The error source: matmul tiling order (not precision)
 
 Tested every elementary operation with identical bf16 inputs on Metal vs MPS:
 
@@ -43,11 +44,14 @@ Tested every elementary operation with identical bf16 inputs on Metal vs MPS:
 | Einsum (no reduction), sigmoid | 0.0 | Exact |
 | Softmax, LayerNorm, SDPA, SiLU (all fp32) | <5e-7 | Negligible |
 | **Matmul (bf16 × bf16)** | **2e-3** | **Root cause** |
-| Matmul (bf16 × fp32) | 8e-7 | 2400× better |
+| Matmul (bf16 × fp32) | 8e-7 | 2400× better (less weight quantization noise) |
 
-Both backends are IEEE-compliant; the difference is summation order in the
-dot-product reduction. Metal and MPS use different tiling/accumulation
-strategies, producing different rounding at each partial sum.
+**Critical finding**: Metal bf16 matmul already uses fp32 accumulators.
+Verified: `bf16 @ bf16` produces bit-identical results to
+`fp32(bf16) @ fp32(bf16)` on Metal. The 2e-3 error between Metal and MPS
+comes from different **tiling/reduction orderings** — each backend tiles
+the matrix into blocks and accumulates partial sums in a different
+sequence, producing different fp32 rounding at each step.
 
 ## How 2e-3 becomes catastrophic
 
@@ -79,8 +83,7 @@ Perturbing the trunk input by 1 bf16 LSB (7.8e-3) and measuring output:
 The system **saturates**: whether the per-op error is 2e-3 (bf16×bf16) or
 8e-7 (bf16×fp32), the trunk output divergence is identical (~1069 max on
 pair). Tested explicitly with `BF16Linear` (fp32 weights) and pure fp32 —
-all produce the same trunk error. Precision improvements cannot help the
-trunk. This is a property of the 48-block depth.
+all produce the same trunk error.
 
 Despite this, **discrete predictions survive**: confidence argmax agreement
 is 99.6–100%. The trunk representations are statistically equivalent (same
@@ -99,9 +102,9 @@ A Lyapunov sweep perturbing denoise inputs across magnitudes:
 | 1.0 | 1.7e-1 | 0.2× |
 
 **The diffusion module is NOT saturated.** Output error scales with input
-perturbation. This means reducing per-operation matmul error will
-proportionally reduce per-step denoise error, potentially pushing the
-200-step ODE below its convergence threshold.
+perturbation. However, this proportionality is academic — the per-step
+error (~4.0 max) doesn't come from precision; it comes from Metal's tiling
+order. Reducing precision has no effect (see experiments below).
 
 Per-op trace through the 16-block diffusion transformer (block 0 → 15):
 
@@ -115,23 +118,27 @@ Per-op trace through the 16-block diffusion transformer (block 0 → 15):
 
 ## What has been tried
 
-| Approach | Result | Why |
-|----------|--------|-----|
-| Match TorchScript precision (bf16 act × fp32 weight) | No change to trunk error | Trunk is saturated — per-op improvement invisible after 48 blocks |
-| Pure fp32 (weights + activations) | No change to trunk error | Same saturation; Metal-vs-MPS kernel diff alone sufficient |
-| Feed MPS reference trunk → MLX diffusion | Still broken (58–118 Å spacing) | Diffusion module's own amplification is independently fatal |
+| Approach | Result | Why it didn't help |
+|----------|--------|--------------------|
+| FP32 upcast (bf16→fp32 before matmul) | **No-op** — bit-identical | Metal bf16 matmul already uses fp32 accumulators |
+| FP32 weights (original precision, no bf16 quantization) | 24.94→24.95 Å (no change) | Weight quantization error is negligible vs tiling order error |
+| Match TorchScript precision (bf16 act × fp32 weight) | No change | Same tiling-order divergence regardless of weight precision |
+| Pure fp32 (weights + activations) | No change | All precision changes are invisible — the error is structural |
+| Feed MPS reference trunk → MLX diffusion | Still broken (58–118 Å) | Diffusion module's own Metal divergence is independently fatal |
 | Different ODE solvers (Euler, Heun) | No improvement | Error is per-evaluation bias, not discretization error |
 | Stochastic noise injection (gamma > 0) | Worse (87→118 Å) | Per-step error too large for stochastic correction |
-| FP32 weights for diffusion only | No change | fp32 weights still go through bf16 activations; same matmul seed |
 
-Key negative result: precision profile changes don't help because the
-trunk is saturated and the diffusion module's bf16 activations still
-produce the 2e-3 matmul seed regardless of weight precision.
+**The core negative result**: every precision intervention (bf16 weights,
+fp32 weights, fp32 activations, BF16Linear) produces the same ~4.0
+per-step denoise error and the same ~25 Å invalid Cα spacing. The error
+is not about the number of bits — it's about Metal's matmul producing
+systematically different results from the backend the model was trained on
+(CUDA, with MPS as a compatible alternative).
 
 ## Why Stable Diffusion works on MLX
 
 Image-domain Stable Diffusion has the same per-op Metal-vs-MPS error
-(~2e-3 per bf16 matmul) but produces correct images. The differences:
+(~2e-3 per bf16 matmul) but produces correct images:
 
 | | Stable Diffusion | Chai-1 |
 |--|-----------------|--------|
@@ -142,42 +149,45 @@ Image-domain Stable Diffusion has the same per-op Metal-vs-MPS error
 | Accumulated error | ~50 × 1e-3 ≈ 0.05 | ~200 × 4.0 ≈ 800 |
 | Output tolerance | Perceptual (pixels are forgiving) | Geometric (bonds must be ~1.5 Å ± 0.1 Å) |
 
-The U-Net is not a chaotic amplifier. A 1e-3 perturbation in produces
-~1e-3 out. Chai-1's sequential transformer architecture amplifies the same
-seed error by orders of magnitude before passing it to the next ODE step.
+The U-Net is not a chaotic amplifier. Chai-1's sequential transformer
+amplifies the same 2e-3 seed error by orders of magnitude before passing
+it to the next ODE step.
 
-## Proposals
+## Proposals (revised after precision experiments)
 
-### 1. Kahan-summation Metal matmul kernel
+### 1. Hybrid inference — MPS diffusion loop
 
-**Priority: highest for pure MLX.** Complexity: high.
-
-Write a custom Metal kernel for `C = A @ B` using Kahan compensated
-summation in the dot-product accumulation loop. This doesn't match MPS's
-proprietary accumulation order — it's more accurate than both backends.
-
-Target: reduce per-matmul error from 2e-3 to <1e-5. The Lyapunov sweep
-shows the diffusion module's output error is proportional to input
-perturbation, so a 200× reduction in matmul error should produce a ~200×
-reduction in per-step denoise error. Whether this crosses the ODE
-convergence threshold is the open question.
-
-Throughput cost: ~2× slower per matmul due to the compensator. Could be
-applied selectively to the diffusion module only (512 MB weights, ~80% of
-inference time), leaving the trunk on standard matmul.
-
-### 2. Hybrid inference (MPS diffusion loop)
-
-**Priority: highest for working structures now.** Complexity: medium.
+**Priority: highest. Only proven path to valid structures.**
 
 Run the trunk and confidence head in MLX, serialize the `DiffusionCache`,
 run the 200-step ODE on PyTorch/MPS. The MPS reference produces correct
 structures (3.82 Å Cα spacing on 1L2Y).
 
-Open question: whether MPS diffusion can tolerate the numerically-divergent
-MLX trunk outputs as conditioning. Confidence argmax is 99.6–100%
-correct, suggesting the trunk representations are functionally adequate
-despite large raw numerical error. This is the next experiment to run.
+**Open question**: whether MPS diffusion can tolerate the
+numerically-divergent MLX trunk outputs as continuous conditioning.
+Confidence argmax agreement (99.6–100%) is measured on a classifier head,
+which is robust to distributional-but-not-trajectorial error. The
+diffusion module consumes trunk outputs as continuous conditioning (pair
+bias into SDPA, single embeddings), which is a harsher test.
+
+**Next experiment**: measure L2 distance between MLX and MPS trunk outputs
+specifically on the tensors that become diffusion conditioning (`s_static`,
+`z_cond`, `pair_biases`), not on the final representations in aggregate.
+
+### 2. Custom Metal matmul kernel matching MPS reduction order
+
+**Priority: speculative but high impact if feasible.**
+
+The error is specifically from Metal's tiling order. If we could determine
+MPS's reduction order and replicate it in a custom Metal kernel, the
+per-matmul error would drop from 2e-3 to ~0. This is reverse-engineering
+Apple's proprietary MPS implementation, which is impractical.
+
+Alternative: Kahan compensated summation reduces sensitivity to reduction
+ordering (error becomes independent of order). This would produce a THIRD
+numerical trajectory, more accurate than both Metal and MPS but matching
+neither. Whether this trajectory converges the ODE is an open question —
+it was trained on CUDA's trajectory, and MPS happens to be close enough.
 
 ### 3. Consistency distillation
 
@@ -185,12 +195,7 @@ despite large raw numerical error. This is the next experiment to run.
 
 Train a consistency model that maps noisy coordinates to clean structures
 in 1–4 steps instead of 200. With so few steps, per-step error of ~4.0
-doesn't accumulate catastrophically. Would also make inference ~50–100×
-faster.
-
-Requires training infrastructure and data that Chai Discovery hasn't
-released. This is the theoretically correct solution but practically out
-of reach without significant compute investment.
+doesn't accumulate catastrophically.
 
 ### 4. Physical constraint projection
 
@@ -198,18 +203,22 @@ of reach without significant compute investment.
 
 After each denoise step, project atom positions back onto the manifold of
 physically valid geometries (enforce Cα spacing ~3.8 Å, bond angles,
-clash removal). This doesn't fix the ODE — it keeps the trajectory from
-wandering into unrecoverable regions.
+clash removal). Risk: fights the model's learned denoising trajectory.
 
-Risk: fights the model's learned denoising trajectory. The model was
-trained without these constraints and may not respond well to mid-loop
-corrections.
+### 5. Alternative ODE solvers
+
+**Partially reconsidered.** An implicit or multistep solver that averages
+multiple evaluations at nearby points could reduce bias if the Metal kernel
+error has input-dependent structure (different tiling hits different
+rounding on different inputs). Worth a quick check once the ODE convergence
+threshold is known empirically. Not a fix on its own.
 
 ### Ruled out
 
-- **Alternative ODE solvers**: the error is per-evaluation network bias,
-  not discretization error. Higher-order solvers use more evaluations per
-  step, increasing accumulated bias.
-- **Stochastic samplers**: tested — gamma > 0 makes structures worse.
-- **Precision profile matching**: tested exhaustively — no benefit due to
-  trunk saturation.
+- **FP32 accumulation / fp32 upcast**: Metal already uses fp32 accumulators
+  for bf16 matmul. Explicitly upcasting is a no-op (bit-identical results).
+- **FP32 weights**: eliminating bf16 weight quantization has no effect on
+  the full 200-step ODE (24.94→24.95 Å, both invalid).
+- **Precision profile matching**: all precision variants (bf16×bf16,
+  bf16×fp32, fp32×fp32) produce the same ~4.0 per-step denoise error.
+- **Stochastic samplers**: tested, makes structures worse.
