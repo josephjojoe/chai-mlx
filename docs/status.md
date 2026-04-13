@@ -103,15 +103,15 @@ bring their own encoded tensors, and is verified bit-identical to the raw path.
 
 ## Still requiring parity work
 
-- **Weight loading end-to-end test**: Name mapping + einsum reshape logic is in place but untested with real weights. This is the single highest-priority validation step — export the TorchScript weights, load into the MLX model, and verify no missing/misshapen parameters.
-- Exhaustive per-layer tensor parity checks against the reference runtime.
+- **Artifact-backed validation still needs to be run regularly**: `scripts/weight_loading_e2e.py` now exercises the real convert -> strict load -> smoke-forward path, but it is still a manual/integration check until it is wired into a release process.
+- **Reference dump parity now has a harness**: `scripts/layer_parity.py` compares captured MLX intermediate tensors against a reference runtime dump, but it depends on generating those reference dump artifacts out-of-band.
 - Parity test that exercises `_batch_to_feature_context` end-to-end against the reference `feature_embedding.pt` output (existing `scripts/parity_check.py` only tests the Linear projections, not the encoding path). The `examples/fasta_smoke.py` smoke script exercises dimensions but not numerical parity.
 
 ## Recommended path to productionize
 
-1. Export and load the real weights via `chai-mlx-export-torchscript` and `chai-mlx-convert-torchscript`.
+1. Export and load the real weights via `python scripts/weight_loading_e2e.py --torchscript-dir ...`.
 2. Run `python scripts/parity_check.py` to verify per-component numerical agreement.
-3. Dump intermediate tensors from the reference implementation.
+3. Dump intermediate tensors from the reference implementation and compare them with `python scripts/layer_parity.py --weights-dir ... --input-npz ... --reference-npz ...`.
 4. Validate one component at a time:
    - feature embedding (use `examples/fasta_smoke.py` for dimensions, `scripts/parity_check.py` for numerics),
    - token input embedder,

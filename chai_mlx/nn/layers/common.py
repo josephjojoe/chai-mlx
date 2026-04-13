@@ -90,20 +90,6 @@ class ResidualMLP(nn.Module):
         return x + self.fc2(nn.relu(self.fc1(x)))
 
 
-class OutputGate(nn.Module):
-    def __init__(self, dim: int, cond_dim: int | None = None, bias: bool = True) -> None:
-        super().__init__()
-        self.cond_dim = cond_dim
-        self.linear = nn.Linear(cond_dim if cond_dim is not None else dim, dim, bias=bias)
-
-    def __call__(self, x: mx.array, cond: mx.array | None = None, *, use_kernel: bool = False) -> mx.array:
-        gate_src = x if cond is None else cond
-        gate = self.linear(gate_src)
-        if use_kernel:
-            return fused_gated_residual(mx.zeros_like(x), x, gate)
-        return sigmoid(gate) * x
-
-
 @dataclass(frozen=True)
 class TriangleDims:
     pair_dim: int

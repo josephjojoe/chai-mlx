@@ -45,6 +45,7 @@ def convert_npz_dir_to_safetensors(
     output_dir: Path,
     *,
     cfg: ChaiConfig | None = None,
+    allow_unmapped: bool = False,
 ) -> Path:
     """Load all component NPZ files, rename, merge, and write safetensors.
 
@@ -72,11 +73,16 @@ def convert_npz_dir_to_safetensors(
 
         unmapped = [k for k in renamed if k.startswith("__unmapped__.")]
         if unmapped:
+            preview = ", ".join(unmapped[:5])
+            if len(unmapped) > 5:
+                preview += "..."
+            if not allow_unmapped:
+                raise ValueError(
+                    f"{comp}: found {len(unmapped)} unmapped NPZ keys: {preview}"
+                )
             import warnings
             warnings.warn(
-                f"{comp}: {len(unmapped)} unmapped keys: "
-                + ", ".join(unmapped[:5])
-                + ("..." if len(unmapped) > 5 else ""),
+                f"{comp}: {len(unmapped)} unmapped keys: {preview}",
                 stacklevel=2,
             )
 
@@ -152,8 +158,17 @@ def main(argv: Iterable[str] | None = None) -> None:
     )
     parser.add_argument("npz_dir", type=Path, help="Directory with per-component .npz files")
     parser.add_argument("output_dir", type=Path, help="Output directory for safetensors")
+    parser.add_argument(
+        "--allow-unmapped",
+        action="store_true",
+        help="Write safetensors even when NPZ keys do not map to MLX params",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
-    convert_npz_dir_to_safetensors(args.npz_dir, args.output_dir)
+    convert_npz_dir_to_safetensors(
+        args.npz_dir,
+        args.output_dir,
+        allow_unmapped=args.allow_unmapped,
+    )
     print(f"Wrote safetensors to {args.output_dir}")
 
 

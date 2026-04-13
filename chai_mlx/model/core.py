@@ -127,9 +127,7 @@ class ChaiMLX(nn.Module):
     def prepare_diffusion_cache(
         self,
         trunk_out: TrunkOutputs,
-        structure_inputs=None,
     ) -> DiffusionCache:
-        _ = structure_inputs  # kept for API compatibility with the requested call shape
         return self.diffusion_module.prepare_cache(trunk_out)
 
     def schedule(self, num_steps: int | None = None) -> Iterator[tuple[mx.array, mx.array, mx.array]]:

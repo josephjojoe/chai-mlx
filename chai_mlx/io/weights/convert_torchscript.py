@@ -46,6 +46,8 @@ def convert_torchscript_component(
     pt_path: Path,
     component: str,
     out_path: Path,
+    *,
+    allow_unmapped: bool = False,
 ) -> dict[str, str]:
     """Convert a single ``.pt`` file to one safetensors shard."""
     from safetensors.numpy import save_file
@@ -88,6 +90,13 @@ def convert_torchscript_component(
         renamed[new_key] = arr
 
     if unmapped:
+        preview = ", ".join(unmapped[:10])
+        if len(unmapped) > 10:
+            preview += f", ... and {len(unmapped) - 10} more"
+        if not allow_unmapped:
+            raise ValueError(
+                f"{component}: found {len(unmapped)} unmapped TorchScript keys: {preview}"
+            )
         print(f"  WARNING: {len(unmapped)} unmapped keys:")
         for key in unmapped[:10]:
             print(f"    - {key}")
@@ -117,6 +126,7 @@ def convert_torchscript_dir_to_safetensors(
     output_dir: Path,
     *,
     cfg: ChaiConfig | None = None,
+    allow_unmapped: bool = False,
 ) -> Path:
     """Convert a directory of component ``.pt`` files to safetensors shards."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -132,7 +142,12 @@ def convert_torchscript_dir_to_safetensors(
             continue
 
         out_path = output_dir / f"model-{component}.safetensors"
-        weight_map = convert_torchscript_component(pt_path, component, out_path)
+        weight_map = convert_torchscript_component(
+            pt_path,
+            component,
+            out_path,
+            allow_unmapped=allow_unmapped,
+        )
         full_weight_map.update(weight_map)
         total_size += out_path.stat().st_size
         gc.collect()
@@ -161,8 +176,17 @@ def main(argv: Iterable[str] | None = None) -> None:
     )
     parser.add_argument("--pt-dir", type=Path, required=True, help="Directory with .pt files")
     parser.add_argument("--out-dir", type=Path, required=True, help="Output directory")
+    parser.add_argument(
+        "--allow-unmapped",
+        action="store_true",
+        help="Write shards even when TorchScript keys do not map to MLX params",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
-    convert_torchscript_dir_to_safetensors(args.pt_dir, args.out_dir)
+    convert_torchscript_dir_to_safetensors(
+        args.pt_dir,
+        args.out_dir,
+        allow_unmapped=args.allow_unmapped,
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

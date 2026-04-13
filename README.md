@@ -62,7 +62,9 @@ examples/
   diffusion_benchmark.py # diffusion loop timing harness
   fasta_smoke.py        # FASTA -> feature embedding smoke script
 scripts/
-  parity_check.py       # TorchScript vs MLX parity harness
+  parity_check.py       # per-component TorchScript vs MLX parity harness
+  layer_parity.py       # dump-based intermediate tensor parity harness
+  weight_loading_e2e.py # convert/load/smoke validation against real weights
 docs/
   README.md              # docs map
   architecture.md        # package map and responsibilities
@@ -86,6 +88,8 @@ The repo-level `weights/` directory is intended for local model artifacts during
 - Benchmark the diffusion loop: `python examples/diffusion_benchmark.py`
 - Run the FASTA path: `python examples/fasta_smoke.py --fasta path/to/input.fasta`
 - Run TorchScript/MLX parity checks: `python scripts/parity_check.py --torchscript-dir ... --safetensors-dir ...`
+- Run dump-based layer parity checks: `python scripts/layer_parity.py --weights-dir weights/ --input-npz ... --reference-npz ...`
+- Run convert/load/smoke validation on real TorchScript artifacts: `python scripts/weight_loading_e2e.py --torchscript-dir ...`
 - Export TorchScript weights to NPZ: `chai-mlx-export-torchscript src.pt out.npz`
 - Convert `.pt` shards directly to safetensors: `chai-mlx-convert-torchscript --pt-dir path/to/pt --out-dir weights/`
 - Convert NPZ weights to safetensors: `chai-mlx-convert-npz npz_dir weights/`

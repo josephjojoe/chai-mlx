@@ -3,7 +3,7 @@ from __future__ import annotations
 import mlx.core as mx
 import mlx.nn as nn
 
-from chai_mlx.utils import chunk_last, make_additive_mask, merge_heads, sigmoid
+from chai_mlx.utils import make_additive_mask, merge_heads, sigmoid
 
 
 class TriangleMultiplication(nn.Module):
@@ -20,28 +20,6 @@ class TriangleMultiplication(nn.Module):
 
     def __call__(self, z: mx.array, pair_mask: mx.array | None = None) -> mx.array:
         return self._forward_chunked(z, pair_mask, self._CHUNK_SIZE)
-
-    def _forward_unchunked(self, z: mx.array, pair_mask: mx.array | None) -> mx.array:
-        z_normed = self.layernorm_z_in(z)
-        p = self.merged_linear_p(z_normed)
-        g = sigmoid(self.merged_linear_g(z_normed))
-
-        ab = p * g[..., : 4 * z.shape[-1]]
-        ab_left, ab_right = chunk_last(ab, 2)
-        a1, b1 = chunk_last(ab_left, 2)
-        a2, b2 = chunk_last(ab_right, 2)
-
-        if pair_mask is not None:
-            row_mask = pair_mask[..., None].astype(z.dtype)
-            col_mask = pair_mask.transpose(0, 2, 1)[..., None].astype(z.dtype)
-            a1, b1 = a1 * row_mask, b1 * row_mask
-            a2, b2 = a2 * col_mask, b2 * col_mask
-
-        x_out = mx.einsum("bikd,bjkd->bijd", a1, b1)
-        x_in = mx.einsum("bkid,bkjd->bijd", a2, b2)
-        out = self.linear_z_out(self.layernorm_out(x_out) + self.layernorm_in(x_in))
-        out = out * g[..., 4 * z.shape[-1] :]
-        return z + out
 
     def _forward_chunked(self, z: mx.array, pair_mask: mx.array | None, chunk_size: int) -> mx.array:
         """Memory-efficient triangle multiplication by chunking over the feature dimension.
