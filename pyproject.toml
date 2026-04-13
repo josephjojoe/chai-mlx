@@ -23,6 +23,9 @@ convert = [
   "torch>=2.0",
   "safetensors>=0.4",
 ]
+test = [
+  "pytest",
+]
 
 [project.scripts]
 chai-mlx-export-torchscript = "chai_mlx.io.weights.export_torchscript:main"
@@ -31,3 +34,6 @@ chai-mlx-convert-npz = "chai_mlx.io.weights.convert_npz:main"
 
 [tool.setuptools.packages.find]
 include = ["chai_mlx*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
