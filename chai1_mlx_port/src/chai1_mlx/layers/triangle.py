@@ -105,7 +105,7 @@ class TriangleAttention(nn.Module):
     memory drops from O(N³) to O(chunk_size × N²).
     """
 
-    _ROW_CHUNK: int = 64
+    _ROW_CHUNK: int = 32
 
     def __init__(self, pair_dim: int, num_heads: int, head_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
@@ -218,7 +218,7 @@ class ConfidenceTriangleAttention(nn.Module):
     Row-batch dimension is chunked identically to :class:`TriangleAttention`.
     """
 
-    _ROW_CHUNK: int = 64
+    _ROW_CHUNK: int = 32
 
     def __init__(self, pair_dim: int, num_heads: int, head_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
