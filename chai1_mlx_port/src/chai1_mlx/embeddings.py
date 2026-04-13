@@ -5,7 +5,7 @@ import mlx.nn as nn
 
 from .config import Chai1Config
 from .layers.atom_attention import TokenInputAtomEncoder
-from .types import EmbeddingOutputs, FeatureContext, RawFeatures
+from .types import EmbeddingOutputs, FeatureContext, RawFeatures, StructureInputs
 from .utils import chunk_last
 
 
@@ -67,6 +67,8 @@ _TEMPLATE_FEATURES = [
     ("TemplateResType",   "emb_outersum", 32),
     ("TemplateUnitVector","id",          3),
 ]  # total = 76
+
+_MSA_FEATURE_NAMES = {name for name, _, _ in _MSA_FEATURES}
 
 
 class FeatureEmbedding(nn.Module):
@@ -315,7 +317,75 @@ class InputEmbedder(nn.Module):
         self.bond_projection = BondProjection(cfg)
         self.token_input = TokenInputEmbedding(cfg)
 
+    @staticmethod
+    def _trim_empty_msa_rows(ctx: FeatureContext) -> FeatureContext:
+        """Trim trailing all-false MSA rows to the batch's effective depth.
+
+        chai-lab pads every sample to a fixed MSA depth (16384). Those padded
+        rows are semantically inert because their masks are all false, but they
+        still dominate MLX memory. We keep a single dummy row for the fully
+        empty-MSA case to preserve the existing trunk control flow.
+        """
+        msa_mask = ctx.structure_inputs.msa_mask
+        if msa_mask is None or msa_mask.shape[1] == 0:
+            return ctx
+
+        valid_rows = mx.any(msa_mask.astype(mx.bool_), axis=-1)
+        target_depth = max(int(mx.max(mx.sum(valid_rows.astype(mx.int32), axis=1)).item()), 1)
+        if target_depth >= msa_mask.shape[1]:
+            return ctx
+
+        structure = ctx.structure_inputs
+        trimmed_structure = StructureInputs(
+            atom_exists_mask=structure.atom_exists_mask,
+            token_exists_mask=structure.token_exists_mask,
+            token_pair_mask=structure.token_pair_mask,
+            atom_token_index=structure.atom_token_index,
+            atom_within_token_index=structure.atom_within_token_index,
+            token_reference_atom_index=structure.token_reference_atom_index,
+            token_asym_id=structure.token_asym_id,
+            token_entity_id=structure.token_entity_id,
+            token_chain_id=structure.token_chain_id,
+            token_is_polymer=structure.token_is_polymer,
+            atom_ref_positions=structure.atom_ref_positions,
+            atom_ref_space_uid=structure.atom_ref_space_uid,
+            atom_coords=structure.atom_coords,
+            bond_adjacency=structure.bond_adjacency,
+            atom_q_indices=structure.atom_q_indices,
+            atom_kv_indices=structure.atom_kv_indices,
+            block_atom_pair_mask=structure.block_atom_pair_mask,
+            reference_coords=structure.reference_coords,
+            msa_mask=msa_mask[:, :target_depth],
+            template_input_masks=structure.template_input_masks,
+        )
+
+        trimmed_raw = ctx.raw_features
+        if trimmed_raw is not None:
+            trimmed_raw = {
+                name: (feat[:, :target_depth] if name in _MSA_FEATURE_NAMES else feat)
+                for name, feat in trimmed_raw.items()
+            }
+
+        trimmed_msa_features = (
+            ctx.msa_features[:, :target_depth]
+            if ctx.msa_features.shape[1] > target_depth
+            else ctx.msa_features
+        )
+
+        return FeatureContext(
+            token_features=ctx.token_features,
+            token_pair_features=ctx.token_pair_features,
+            atom_features=ctx.atom_features,
+            atom_pair_features=ctx.atom_pair_features,
+            msa_features=trimmed_msa_features,
+            template_features=ctx.template_features,
+            structure_inputs=trimmed_structure,
+            bond_adjacency=ctx.bond_adjacency,
+            raw_features=trimmed_raw,
+        )
+
     def __call__(self, ctx: FeatureContext, *, use_kernel: bool = False) -> EmbeddingOutputs:
+        ctx = self._trim_empty_msa_rows(ctx)
         feats = self.feature_embedding(ctx)
 
         # Canonical location: FeatureContext.bond_adjacency (set by featurize_fasta).

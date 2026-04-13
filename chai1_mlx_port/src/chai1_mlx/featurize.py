@@ -191,6 +191,8 @@ def _batch_to_feature_context(
     for v in polymer_values:
         is_polymer[entity_type == v] = 1.0
 
+    B = token_exists.shape[0]
+
     structure = StructureInputs(
         atom_exists_mask=_mx(atom_exists.float()),
         token_exists_mask=_mx(token_exists.float()),
@@ -221,7 +223,6 @@ def _batch_to_feature_context(
         ),
     )
 
-    B = token_exists.shape[0]
     N = token_exists.shape[1]
     empty = mx.zeros((B, 0))
 
