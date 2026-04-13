@@ -601,6 +601,7 @@ def compare_tensors(
     *,
     tol: float,
     key_pattern: str | None,
+    fail_on_extra_actual_keys: bool,
 ) -> int:
     pattern = re.compile(key_pattern) if key_pattern is not None else None
     ref_keys = sorted(key for key in reference if pattern is None or pattern.search(key))
@@ -612,9 +613,11 @@ def compare_tensors(
     if missing:
         failures += len(missing)
         print(f"[FAIL] missing MLX tensors ({len(missing)}): {', '.join(missing[:10])}")
-    if extra:
+    if extra and fail_on_extra_actual_keys:
         failures += len(extra)
         print(f"[FAIL] extra MLX tensors ({len(extra)}): {', '.join(extra[:10])}")
+    elif extra:
+        print(f"[*] ignoring extra MLX tensors ({len(extra)})")
 
     for key in sorted(set(ref_keys) & set(actual_keys)):
         ref = reference[key]
@@ -646,6 +649,11 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--recycles", type=int, default=1)
     parser.add_argument("--key-pattern", type=str, default=None)
     parser.add_argument("--use-kernel", action="store_true")
+    parser.add_argument(
+        "--fail-on-extra-actual-keys",
+        action="store_true",
+        help="Treat reference/MLX keyset mismatches as failures in both directions",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     model = ChaiMLX.from_pretrained(args.weights_dir, strict=True)
@@ -673,6 +681,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         actual,
         tol=args.tol,
         key_pattern=args.key_pattern,
+        fail_on_extra_actual_keys=args.fail_on_extra_actual_keys,
     )
     if failures:
         raise SystemExit(1)

@@ -104,7 +104,8 @@ bring their own encoded tensors, and is verified bit-identical to the raw path.
 ## Still requiring parity work
 
 - **Artifact-backed validation still needs to be run regularly**: `scripts/weight_loading_e2e.py` now exercises the real convert -> strict load -> smoke-forward path, but it is still a manual/integration check until it is wired into a release process.
-- **Reference dump parity now has a harness**: `scripts/layer_parity.py` compares captured MLX intermediate tensors against a reference runtime dump, but it depends on generating those reference dump artifacts out-of-band.
+- **Reference dump parity now has a harness**: `scripts/layer_parity.py` compares captured MLX intermediate tensors against a reference runtime dump, and `scripts/chai_lab_reference_dump.py` generates FASTA-backed `input_npz` / `reference_npz` artifacts from the local `chai-lab` checkout.
+- **Current FASTA-backed parity still diverges downstream of feature embedding**: on a minimal single-chain FASTA, feature embedding + bond projection match closely, but the first `token_embedder` outputs (`single_initial`, `single_structure`, `pair_initial`) already diverge materially from TorchScript, and trunk / denoise / confidence continue to drift from there. This is now reproducible with `scripts/chai_lab_reference_dump.py` followed by `scripts/layer_parity.py`.
 - Parity test that exercises `_batch_to_feature_context` end-to-end against the reference `feature_embedding.pt` output (existing `scripts/parity_check.py` only tests the Linear projections, not the encoding path). The `examples/fasta_smoke.py` smoke script exercises dimensions but not numerical parity.
 
 ## Recommended path to productionize
