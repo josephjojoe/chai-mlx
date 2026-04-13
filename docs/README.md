@@ -3,13 +3,12 @@
 - User-facing material lives in the root `README.md` and `examples/`.
 - Contributor/reference material lives here in `docs/` plus `scripts/`.
 
-| File | Audience | Purpose |
-|------|----------|---------|
-| [`../README.md`](../README.md) | users | install, public API, common workflows |
-| [`architecture.md`](./architecture.md) | users + contributors | package map and module responsibilities |
-| [`status.md`](./status.md) | contributors | port status, isolation parity numbers, path forward |
-| [`weight_mapping.md`](./weight_mapping.md) | contributors | TorchScript → MLX naming and conversion checks |
-| [`kernel_plan.md`](./kernel_plan.md) | contributors | performance notes, cache strategy, kernel tradeoffs |
-| [`bf16_plan.md`](./bf16_plan.md) | contributors | mixed-precision conversion plan, memory/throughput analysis |
+| File | Purpose |
+|------|---------|
+| [`architecture.md`](./architecture.md) | Package map and module data flow |
+| [`numerical_divergence.md`](./numerical_divergence.md) | Why Metal vs MPS matmul breaks the port, data, and proposals |
+| [`status.md`](./status.md) | Port status, isolation parity, memory, validation scripts |
+| [`weight_mapping.md`](./weight_mapping.md) | TorchScript → MLX naming and conversion checks |
+| [`kernel_plan.md`](./kernel_plan.md) | Fast paths and kernel notes |
 
 Reverse-engineering notes and graph dumps live under `findings/`.
