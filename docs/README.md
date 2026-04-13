@@ -10,5 +10,6 @@
 | [`status.md`](./status.md) | contributors | port status, isolation parity numbers, path forward |
 | [`weight_mapping.md`](./weight_mapping.md) | contributors | TorchScript → MLX naming and conversion checks |
 | [`kernel_plan.md`](./kernel_plan.md) | contributors | performance notes, cache strategy, kernel tradeoffs |
+| [`bf16_plan.md`](./bf16_plan.md) | contributors | mixed-precision conversion plan, memory/throughput analysis |
 
 Reverse-engineering notes and graph dumps live under `findings/`.
