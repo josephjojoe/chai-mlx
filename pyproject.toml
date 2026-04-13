@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chai-mlx"
+version = "0.1.0"
+description = "MLX inference port of Chai-1 with a clean pipeline API and reusable tooling"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "huggingface_hub>=0.28",
+  "mlx>=0.16",
+]
+
+[project.optional-dependencies]
+featurize = [
+  "torch>=2.0",
+  "chai_lab",
+]
+convert = [
+  "torch>=2.0",
+  "safetensors>=0.4",
+]
+
+[project.scripts]
+chai-mlx-export-torchscript = "chai_mlx.io.weights.export_torchscript:main"
+chai-mlx-convert-npz = "chai_mlx.io.weights.convert_to_safetensors:main"
+
+[tool.setuptools.packages.find]
+include = ["chai_mlx*"]
