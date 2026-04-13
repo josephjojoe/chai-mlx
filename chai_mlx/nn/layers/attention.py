@@ -97,10 +97,11 @@ class DiffusionSelfAttention(nn.Module):
     ) -> mx.array:
         """Gated attention delta (no residual)."""
         x_norm = self.adaln(x, s_cond, use_kernel=use_kernel)
-        q, k, v = chunk_last(self.to_qkv(x_norm), 3)
-        q = split_heads(q, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
-        k = split_heads(k, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
-        v = split_heads(v, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
+        qkv = split_heads(self.to_qkv(x_norm), self.num_heads, 3 * self.head_dim)
+        q, k, v = chunk_last(qkv, 3)
+        q = q.transpose(0, 2, 1, 3)
+        k = k.transpose(0, 2, 1, 3)
+        v = v.transpose(0, 2, 1, 3)
         q = q + self.query_bias[None, :, None, :]
         out = mx.fast.scaled_dot_product_attention(
             q, k, v, scale=self.head_dim ** -0.5, mask=pair_bias
