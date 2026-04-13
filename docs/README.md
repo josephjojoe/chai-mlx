@@ -1,6 +1,9 @@
 # Docs Map
 
-Start here if you want the cleaned-up mental model for the repo:
+Use this split:
+
+- User-facing material lives in `README.md` and the workflow scripts under `examples/`.
+- Contributor/reference material lives here in `docs/` plus the heavier tooling under `scripts/`.
 
 | File | Audience | Purpose |
 |------|----------|---------|

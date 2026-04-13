@@ -2,7 +2,7 @@
 
 Usage::
 
-    python examples/validate_parity.py \
+    python scripts/parity_check.py \
         --torchscript-dir /path/to/pt_files/ \
         --safetensors-dir /path/to/safetensors_dir/
 
@@ -518,7 +518,7 @@ def run_validation(
     verbose: bool = True,
 ) -> list[ParityResult]:
     """Run all per-component parity checks."""
-    from chai_mlx.model.api import ChaiMLX
+    from chai_mlx.model.core import ChaiMLX
 
     if safetensors_dir is not None:
         model = ChaiMLX.from_pretrained(safetensors_dir, strict=False)

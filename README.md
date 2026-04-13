@@ -58,12 +58,12 @@ chai_mlx/
   nn/                    # reusable neural-network building blocks and kernels
   io/weights/            # weight export, conversion, loading, validation
 examples/
-  run_pipeline.py        # minimal end-to-end dummy-input smoke example
-  benchmark_diffusion.py # diffusion loop timing harness
-  featurize_fasta.py     # FASTA -> feature embedding smoke script
-  validate_parity.py     # TorchScript vs MLX parity harness
+  basic_inference.py     # minimal end-to-end dummy-input smoke example
+  diffusion_benchmark.py # diffusion loop timing harness
+  fasta_smoke.py        # FASTA -> feature embedding smoke script
 scripts/
   convert_weights.py     # memory-aware TorchScript -> safetensors conversion
+  parity_check.py       # TorchScript vs MLX parity harness
 docs/
   README.md              # docs map
   architecture.md        # package map and responsibilities
@@ -83,9 +83,10 @@ The repo-level `weights/` directory is intended for local model artifacts during
 
 ## Common workflows
 
-- Smoke test the package: `python examples/run_pipeline.py`
-- Benchmark the diffusion loop: `python examples/benchmark_diffusion.py`
-- Run the FASTA path: `python examples/featurize_fasta.py --fasta path/to/input.fasta`
+- Smoke test the package: `python examples/basic_inference.py`
+- Benchmark the diffusion loop: `python examples/diffusion_benchmark.py`
+- Run the FASTA path: `python examples/fasta_smoke.py --fasta path/to/input.fasta`
+- Run TorchScript/MLX parity checks: `python scripts/parity_check.py --torchscript-dir ... --safetensors-dir ...`
 - Export TorchScript weights to NPZ: `chai-mlx-export-torchscript src.pt out.npz`
 - Convert NPZ weights to safetensors: `chai-mlx-convert-npz npz_dir weights/`
 - Convert `.pt` shards directly with the memory-aware helper: `python scripts/convert_weights.py --pt-dir path/to/pt --out-dir weights`
@@ -93,5 +94,5 @@ The repo-level `weights/` directory is intended for local model artifacts during
 ## Notes
 
 - The MLX neural core is separate from the upstream bioinformatics frontend. `featurize_fasta(...)` delegates to `chai_lab` rather than reimplementing that stack.
-- The repo is much closer to a usable developer package now, but numerical parity and production validation still live in the docs and examples rather than a full automated test suite.
+- The repo is organized so `examples/` stays user-facing while `scripts/` holds contributor tooling such as parity and weight-conversion helpers.
 - The authoritative status page is [`docs/status.md`](docs/status.md).

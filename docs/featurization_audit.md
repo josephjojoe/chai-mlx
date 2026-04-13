@@ -245,7 +245,7 @@ and extend `_feature_embedding_map()` accordingly.
 
 ## Issue 6 — MODERATE: Parity validation bypasses the encoding bug
 
-**Files:** `examples/validate_parity.py:validate_feature_embedding`.
+**Files:** `scripts/parity_check.py:validate_feature_embedding`.
 
 The parity test generates random pre-encoded feature tensors (matching the
 expected dimensions 2638, 163, etc.) and feeds them directly to the Linear
@@ -261,9 +261,9 @@ projections.  This validates the Linears but **never tests the encoding path**
 
 ---
 
-## Issue 7 — MODERATE: `run_pipeline.py` bypasses featurize_fasta entirely
+## Issue 7 — MODERATE: `basic_inference.py` bypasses featurize_fasta entirely
 
-**Files:** `examples/run_pipeline.py`.
+**Files:** `examples/basic_inference.py`.
 
 The example creates dummy random tensors at the pre-encoded dimensions and
 calls `featurize()` (the passthrough path), never exercising `featurize_fasta()`
@@ -408,8 +408,8 @@ to the trunk.
 | 3 | CRITICAL | RBF encoding not implemented; 2 learned params dropped | TOKEN_PAIR 13 channels short; restraint features ignored | **FIXED** — `FeatureEmbedding._encode_rbf` with learned radii |
 | 4 | CRITICAL | TemplateResType OUTERSUM uses one-hot instead of learned Embedding | TEMPLATES dimension wrong (77 vs 76); runtime error | **FIXED** — `FeatureEmbedding._encode_template_restype` with `nn.Embedding(33,32)` |
 | 5 | MODERATE | Weight map drops 3 learned feature_embedding parameters | Model loads without error but encoding is numerically wrong | **FIXED** — 3 entries added to `_feature_embedding_map` |
-| 6 | MODERATE | Parity validation never tests the encoding path | Bugs 1–4 would not be caught by existing tests | OPEN — `validate_parity.py` attribute name bug fixed; encoding-path parity test still needed |
-| 7 | MODERATE | No integration test for featurize_fasta | Full pipeline never exercised | **FIXED** — `examples/featurize_fasta.py` added (dimension checks) |
+| 6 | MODERATE | Parity validation never tests the encoding path | Bugs 1–4 would not be caught by existing tests | OPEN — `parity_check.py` attribute name bug fixed; encoding-path parity test still needed |
+| 7 | MODERATE | No integration test for featurize_fasta | Full pipeline never exercised | **FIXED** — `examples/fasta_smoke.py` added (dimension checks) |
 | 8 | MINOR | Feature concatenation order may not match TorchScript | Potential silent misalignment if order differs | **FIXED** — alphabetical sort in `_concat_for_type` |
 | 9 | MINOR | bond_adjacency dual-sourcing | Fragile, could cause silent data loss | **FIXED** — documented `FeatureContext.bond_adjacency` as canonical, `StructureInputs` as fallback |
 | 10 | MINOR | Missing msa_mask/template_mask in StructureInputs | Trunk may not receive required masks via featurize_fasta | **FIXED** (previously) — masks populated in `_batch_to_feature_context` and threaded through trunk |

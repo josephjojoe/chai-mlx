@@ -1,4 +1,4 @@
-"""Integration test for featurize_fasta → FeatureEmbedding.
+"""Smoke test for featurize_fasta → FeatureEmbedding.
 
 Exercises the full FASTA → raw features → encoding → projection pipeline
 and verifies output dimensions match the model config.
@@ -6,7 +6,7 @@ and verifies output dimensions match the model config.
 Requires ``chai-lab`` and ``torch`` to be installed::
 
     pip install .[featurize]
-    python examples/featurize_fasta.py --fasta /path/to/input.fasta
+    python examples/fasta_smoke.py --fasta /path/to/input.fasta
 
 If no --fasta is provided, a minimal synthetic FASTA is created in a temp dir.
 """

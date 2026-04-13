@@ -87,9 +87,9 @@ bring their own encoded tensors, and is verified bit-identical to the raw path.
 - **Confidence head missing `token_single_mask`**: TorchScript applies `token_exists_mask` multiplicatively to the single representation after pairformer blocks. Added.
 - **Trunk first recycle skipped recycle projection**: The reference always applies `recycle_proj(prev)` even on the first iteration (where `prev = initial`). The port was skipping this. Fixed by initializing `prev_single = single_init, prev_pair = pair_init` and always applying recycle projection at the start of each iteration.
 - **Unused import in `diffusion.py`**: Removed unused `make_additive_mask` import.
-- **`validate_parity.py` attribute name bug**: `TEMPLATES.lower()` gave `templates_proj` but the actual attribute is `template_proj`. Fixed with an explicit name mapping dict.
+- **`parity_check.py` attribute name bug**: `TEMPLATES.lower()` gave `templates_proj` but the actual attribute is `template_proj`. Fixed with an explicit name mapping dict.
 - **`bond_adjacency` dual-sourcing**: Documented `FeatureContext.bond_adjacency` as canonical, `StructureInputs.bond_adjacency` as legacy fallback.
-- **README layout**: Removed reference to nonexistent `blocked_local_attention.py`, added missing files (`convert_to_safetensors.py`, `name_map.py`, `validate.py`, `validate_parity.py`).
+- **README layout**: Removed reference to nonexistent `blocked_local_attention.py`, added missing files (`convert_to_safetensors.py`, `name_map.py`, `validate.py`, `parity_check.py`).
 
 ## Architectural fixes (second audit round)
 
@@ -105,15 +105,15 @@ bring their own encoded tensors, and is verified bit-identical to the raw path.
 
 - **Weight loading end-to-end test**: Name mapping + einsum reshape logic is in place but untested with real weights. This is the single highest-priority validation step — export the TorchScript weights, load into the MLX model, and verify no missing/misshapen parameters.
 - Exhaustive per-layer tensor parity checks against the reference runtime.
-- Parity test that exercises `_batch_to_feature_context` end-to-end against the reference `feature_embedding.pt` output (existing `examples/validate_parity.py` only tests the Linear projections, not the encoding path). The `examples/featurize_fasta.py` smoke script exercises dimensions but not numerical parity.
+- Parity test that exercises `_batch_to_feature_context` end-to-end against the reference `feature_embedding.pt` output (existing `scripts/parity_check.py` only tests the Linear projections, not the encoding path). The `examples/fasta_smoke.py` smoke script exercises dimensions but not numerical parity.
 
 ## Recommended path to productionize
 
 1. Export and load the real weights via `chai-mlx-export-torchscript` or `python scripts/convert_weights.py`.
-2. Run `python examples/validate_parity.py` to verify per-component numerical agreement.
+2. Run `python scripts/parity_check.py` to verify per-component numerical agreement.
 3. Dump intermediate tensors from the reference implementation.
 4. Validate one component at a time:
-   - feature embedding (use `examples/featurize_fasta.py` for dimensions, `examples/validate_parity.py` for numerics),
+   - feature embedding (use `examples/fasta_smoke.py` for dimensions, `scripts/parity_check.py` for numerics),
    - token input embedder,
    - one trunk recycle (especially OPM output shapes),
    - one diffusion denoise call,

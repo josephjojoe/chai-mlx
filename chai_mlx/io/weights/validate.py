@@ -8,7 +8,7 @@ from typing import Sequence
 import mlx.core as mx
 import mlx.nn as nn
 
-from chai_mlx.model.api import ChaiMLX
+from chai_mlx.model.core import ChaiMLX
 from chai_mlx.config import ChaiConfig
 
 

@@ -5,7 +5,7 @@ import time
 import mlx.core as mx
 
 from chai_mlx import ChaiMLX, featurize
-from run_pipeline import build_dummy_inputs
+from basic_inference import build_dummy_inputs
 
 
 def main() -> None:
