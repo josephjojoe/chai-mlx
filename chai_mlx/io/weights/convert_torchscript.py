@@ -17,7 +17,11 @@ from typing import Iterable
 import numpy as np
 
 from chai_mlx.config import ChaiConfig
-from chai_mlx.io.weights.name_map import build_rename_map, reshape_einsum_weight
+from chai_mlx.io.weights.name_map import (
+    build_rename_map,
+    is_ignored_state_key,
+    reshape_einsum_weight,
+)
 
 COMPONENTS = [
     "feature_embedding",
@@ -78,6 +82,8 @@ def convert_torchscript_component(
     unmapped: list[str] = []
     reshaped_count = 0
     for old_key, arr in raw.items():
+        if is_ignored_state_key(component, old_key):
+            continue
         new_key = rename_map.get(old_key)
         if new_key is None:
             unmapped.append(old_key)

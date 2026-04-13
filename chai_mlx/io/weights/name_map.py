@@ -358,6 +358,7 @@ def _confidence_head_map() -> dict[str, str]:
 
     m["single_to_pair_proj.weight"] = f"{dst}.single_to_pair_proj.weight"
     m["atom_distance_bins_projection.weight"] = f"{dst}.atom_distance_bins_projection.weight"
+    m["atom_distance_v_bins"] = f"{dst}.atom_distance_v_bins"
 
     for i in range(4):
         m.update(_pairformer_block_map(
@@ -385,11 +386,25 @@ COMPONENT_BUILDERS: dict[str, callable] = {
 }
 
 
+IGNORED_STATE_KEYS_BY_COMPONENT: dict[str, set[str]] = {
+    # TorchScript's OuterSumProj keeps an EmbeddingBag-style offsets buffer,
+    # but the MLX port implements TemplateResType as a plain embedding plus
+    # explicit outer-sum, so there is no corresponding runtime state to load.
+    "feature_embedding": {
+        "feature_embeddings.TEMPLATES.TemplateResType.offsets",
+    },
+}
+
+
 def build_rename_map(component: str) -> dict[str, str]:
     builder = COMPONENT_BUILDERS.get(component)
     if builder is None:
         raise ValueError(f"Unknown component {component!r}. Valid: {sorted(COMPONENT_BUILDERS)}")
     return builder()
+
+
+def is_ignored_state_key(component: str, key: str) -> bool:
+    return key in IGNORED_STATE_KEYS_BY_COMPONENT.get(component, set())
 
 
 def build_full_rename_map() -> dict[str, str]:

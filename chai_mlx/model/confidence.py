@@ -15,6 +15,10 @@ class ConfidenceHead(nn.Module):
         self.cfg = cfg
         self.single_to_pair_proj = nn.Linear(cfg.hidden.token_single, 2 * cfg.hidden.token_pair, bias=False)
         self.atom_distance_bins_projection = nn.Linear(16, cfg.hidden.token_pair, bias=False)
+        self.atom_distance_v_bins = mx.array(
+            cfg.confidence.distance_bin_edges,
+            dtype=mx.float32,
+        )
         self.blocks = [
             PairformerBlock(
                 pair_dim=cfg.hidden.token_pair,
@@ -49,7 +53,7 @@ class ConfidenceHead(nn.Module):
 
         ref_coords = representative_atom_coords(coords, structure.token_reference_atom_index)
         dists = cdist(ref_coords)
-        dist_bins = one_hot_binned(dists, self.cfg.confidence.distance_bin_edges)
+        dist_bins = one_hot_binned(dists, self.atom_distance_v_bins)
         pair = pair + self.atom_distance_bins_projection(dist_bins)
 
         token_mask = structure.token_exists_mask.astype(mx.float32)

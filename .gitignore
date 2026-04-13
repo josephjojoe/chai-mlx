@@ -2,9 +2,7 @@ chai-lab/
 auxiliary/
 
 # Model weights (large binary files)
-weights/*.safetensors
-weights/*.index.json
-weights/config.json
+weights/
 
 # Python
 __pycache__/

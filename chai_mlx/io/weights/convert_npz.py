@@ -21,7 +21,12 @@ from typing import Iterable
 import numpy as np
 
 from chai_mlx.config import ChaiConfig
-from .name_map import build_rename_map, rename_state_dict, reshape_einsum_weight
+from .name_map import (
+    build_rename_map,
+    is_ignored_state_key,
+    rename_state_dict,
+    reshape_einsum_weight,
+)
 
 _COMPONENT_ORDER = [
     "feature_embedding",
@@ -68,6 +73,10 @@ def convert_npz_dir_to_safetensors(
         if not npz_path.exists():
             raise FileNotFoundError(f"Expected {npz_path}")
         raw = _load_npz(npz_path)
+        raw = {
+            key: value for key, value in raw.items()
+            if not is_ignored_state_key(comp, key)
+        }
         rmap = build_rename_map(comp)
         renamed = rename_state_dict(raw, rmap)
 
