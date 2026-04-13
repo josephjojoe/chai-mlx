@@ -86,15 +86,17 @@ final error. This is why bf16 and fp32 produce the same trunk error (see below).
 
 ### Practical impact
 
-Despite massive intermediate divergence, discrete predictions are preserved:
-- **Confidence argmax agreement**: 99.6–100%
-- **Diffusion module** (isolated): max error 4.7 abs
-- Probability distribution TVD: 0.13–0.45 on confidence heads
+Discrete predictions are preserved, but the diffusion ODE is not stable:
+- **Confidence argmax agreement**: 99.6–100% ✅
+- **Diffusion module** (isolated single step): max error 4.7 abs ✅
+- Probability distribution TVD: 0.13–0.45 on confidence heads ✅
+- **Diffusion loop** (200-step ODE): does not converge ❌
 
-The numerical parity gap **cannot be closed** by precision matching or
-algorithmic changes — it is a fundamental consequence of different compute
-backends on a chaotic architecture. Validation should be done at the
-**structural output level** (RMSD, GDT on predicted PDB structures).
+The isolated denoise error (~4.0 max) is small enough for one-shot predictions
+but compounds catastrophically over 200 sequential ODE steps. The numerical
+parity gap **cannot be closed** by precision matching or algorithmic changes —
+it is a fundamental consequence of different compute backends on a chaotic
+architecture.
 
 ---
 
@@ -202,14 +204,93 @@ doubles the maximum feasible sequence length on a given machine.
 
 ---
 
+## Structural validation: diffusion loop does not converge
+
+**The MLX port cannot currently produce valid protein structures.** Despite
+correct loop logic and faithful isolated components, the 200-step diffusion ODE
+diverges catastrophically due to per-step denoise errors that accumulate over
+the sampling trajectory.
+
+### Investigation summary
+
+We ran systematic experiments feeding **reference trunk outputs** (from the
+TorchScript model on MPS) into the MLX diffusion loop, eliminating trunk
+divergence as a variable:
+
+| Configuration | Final Cα spacing | Expected |
+|---------------|-----------------|----------|
+| Euler only, no gamma | 58.78 Å | ~3.8 Å |
+| Heun, no gamma | 59.36 Å | ~3.8 Å |
+| Euler + gamma | 87.41 Å | ~3.8 Å |
+| Heun + gamma (full) | 118.11 Å | ~3.8 Å |
+| FP32 weights, full config | 117.16 Å | ~3.8 Å |
+
+All configurations produce physically unrealistic structures (15–30× the
+expected Cα spacing).
+
+### Why the loop diverges
+
+Each denoise call introduces ~4.0 max error (0.93 mean) in the `pos_updates`
+tensor vs the TorchScript reference, even with float32 weights. At sigma=1261
+(first step), this causes the denoised prediction to have 2.89 Å Cα spacing in
+raw pos_updates, which after c_out=16 scaling gives ~46 Å instead of the
+correct ~3.8 Å.
+
+Step-by-step trace shows convergence toward ~22 Å std by step 101, but then
+re-divergence when stochastic noise injection activates (gamma > 0 at
+sigma < 80). Even without noise injection, the ODE trajectory drifts into an
+invalid region of structure space and cannot recover.
+
+The error source is the **diffusion transformer** — the same chaotic
+amplification pattern as the pairformer trunk:
+- Input to transformer: std ≈ 2.3
+- After transformer (before LN): std ≈ 57.7
+- After LN: std ≈ 0.87
+
+Small Metal-vs-MPS differences in the 25× intermediate amplification produce
+systematically wrong conditioning for the atom attention decoder, yielding
+pos_updates that are correlated (not random noise) and consistently place atoms
+too far apart.
+
+### Confirmed non-bugs
+
+- **Heun correction**: matches reference exactly (`atom_pos = atom_pos + ...`,
+  not `atom_pos_hat + ...`)
+- **Sigma schedule**: max diff 3.7e-4 between MLX and reference
+- **Gamma values**: identical
+- **Augmentation** (`center_random_augmentation`): quaternion, rotation, centering
+  all match
+- **Preconditioning** (c_in, c_skip, c_out): verified against TorchScript graph
+- **Weight loading**: all 343 diffusion module weights verified identical to
+  TorchScript state dict (max diff = 0)
+- **kv_indices**: MLX's stored indices match TorchScript's on-the-fly generation
+  (0 differences across 23,552 index values)
+
+### Consequence
+
+The MLX port is currently limited to:
+- Correct trunk representations (structurally faithful, numerically divergent)
+- Correct confidence predictions (argmax agreement 99.6–100%)
+- **Invalid structural predictions** from the diffusion module
+
+The diffusion loop requires higher numerical fidelity than the trunk or
+confidence head because it runs 200 sequential steps of an ODE where errors
+are correlated and compound, rather than producing a one-shot prediction.
+
 ## Path forward
 
 1. ~~Mixed-precision execution~~ — **DONE**
 2. ~~Precision-profile alignment~~ — **INVESTIGATED, no benefit, documented above**
-3. **End-to-end structure quality validation** — run inference on real FASTA
-   inputs and compare predicted PDB against reference (RMSD, GDT). The model
-   likely produces reasonable structures despite the intermediate divergence.
-4. **MSA depth** — MLX trims empty MSA rows (16384→1 for minimal FASTA). Minor
+3. ~~End-to-end structure quality validation~~ — **DONE, structures invalid (see above)**
+4. **Hybrid inference**: run the diffusion loop on PyTorch/MPS (200 denoise calls)
+   while using MLX for the trunk and confidence head. This would produce valid
+   structures at the cost of framework interop overhead.
+5. **Custom Metal kernels**: implement specific ops (matmul, softmax, attention)
+   with matching numerical behavior to PyTorch/MPS to reduce per-step error below
+   the ODE stability threshold.
+6. **Alternative sampler**: investigate ODE solvers with adaptive step sizes or
+   error correction that are robust to per-step numerical noise.
+7. **MSA depth** — MLX trims empty MSA rows (16384→1 for minimal FASTA). Minor
    contributor to trunk divergence.
 
 ## What is structurally verified
@@ -256,5 +337,6 @@ Full git history has the details for each fix.
 | `scripts/per_op_divergence.py` | Per-operation Metal-vs-MPS divergence breakdown |
 | `scripts/error_diagnostics.py` | Error distribution analysis (percentiles, TVD, KL) |
 | `scripts/memory_estimate.py` | Peak memory estimation at various sequence lengths |
+| `scripts/structural_validation.py` | End-to-end structure quality vs PDB ground truth |
 | `scripts/parity_check.py` | Per-component numerical agreement |
 | `examples/fasta_smoke.py` | Full pipeline dimension check |
