@@ -38,16 +38,26 @@ from chai_mlx.io.weights.load import load_safetensors
 from chai_mlx.utils import resolve_dtype
 
 
-def _cast_weights(model: nn.Module, dtype: mx.Dtype) -> None:
-    """Cast all model parameters to *dtype* in-place."""
-    from mlx.utils import tree_flatten
+def _upgrade_linears(module: nn.Module) -> None:
+    """Replace every ``nn.Linear`` with :class:`BF16Linear` in-place.
 
-    pairs = []
-    for k, v in tree_flatten(model.parameters()):
-        if isinstance(v, mx.array) and v.dtype != dtype:
-            pairs.append((k, v.astype(dtype)))
-    if pairs:
-        model.load_weights(pairs, strict=False)
+    Walks the module tree and swaps ``__class__`` so that each Linear
+    casts its input to bfloat16 before the matmul, matching the
+    TorchScript ``torch.to(x, 15)`` pattern.  Weights stay fp32.
+    """
+    from chai_mlx.nn.layers.common import BF16Linear
+
+    for key, child in module.children().items():
+        if isinstance(child, nn.Linear) and type(child) is nn.Linear:
+            child.__class__ = BF16Linear
+        elif isinstance(child, nn.Module):
+            _upgrade_linears(child)
+        elif isinstance(child, (list, tuple)):
+            for item in child:
+                if isinstance(item, nn.Linear) and type(item) is nn.Linear:
+                    item.__class__ = BF16Linear
+                elif isinstance(item, nn.Module):
+                    _upgrade_linears(item)
 
 
 @dataclass
@@ -141,7 +151,7 @@ class ChaiMLX(nn.Module):
 
         dtype = resolve_dtype(cfg)
         if dtype != mx.float32:
-            _cast_weights(model, dtype)
+            _upgrade_linears(model)
 
         return model
 
