@@ -442,7 +442,7 @@ def capture_denoise(
     s_cond = model.diffusion_module.diffusion_conditioning.with_sigma(cache.s_static, sigma)
     x = model.diffusion_module.structure_cond_to_token_structure_proj(trunk.single_structure)
     x = mx.broadcast_to(x[:, None, :, :], (coords.shape[0], num_samples, *x.shape[1:]))
-    enc_tokens, atom_repr = model.diffusion_module.atom_attention_encoder(
+    enc_tokens, atom_repr, encoder_pair = model.diffusion_module.atom_attention_encoder(
         cache.atom_cond,
         cache.atom_single_cond,
         cache.blocked_pair_base,
@@ -481,8 +481,9 @@ def capture_denoise(
         x,
         atom_repr,
         decoder_cond,
-        cache.blocked_pair_base,
+        encoder_pair,
         structure.atom_token_index,
+        structure.atom_exists_mask,
         structure.atom_kv_indices,
         structure.block_atom_pair_mask,
         use_kernel=use_kernel,

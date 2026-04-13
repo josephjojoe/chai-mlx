@@ -50,11 +50,6 @@ class DiffusionConditioning(nn.Module):
         self.single_ln = nn.LayerNorm(cfg.hidden.token_single, eps=cfg.layer_norm_eps)
 
     def prepare_static(self, trunk: TrunkOutputs) -> tuple[mx.array, mx.array]:
-        # The reference diffusion module concatenates the *structure-path*
-        # initial representations with trunk outputs — NOT the trunk-path
-        # initial representations.  See chai1.py static_diffusion_inputs:
-        #   token_pair_initial_repr  = token_pair_structure_input_feats
-        #   token_single_initial_repr = token_single_structure_input
         pair_cat = mx.concatenate([trunk.pair_trunk, trunk.pair_structure], axis=-1)
         z = self.token_pair_proj(self.token_pair_norm(pair_cat))
         z = z + self.pair_trans1(z)
@@ -62,13 +57,13 @@ class DiffusionConditioning(nn.Module):
         z_cond = self.pair_ln(z)
 
         single_cat = mx.concatenate([trunk.single_structure, trunk.single_trunk], axis=-1)
-        s = self.token_in_proj(self.token_in_norm(single_cat))
-        s = s + self.single_trans1(s)
-        return s, z_cond
+        s_proj = self.token_in_proj(self.token_in_norm(single_cat))
+        return s_proj, z_cond
 
-    def with_sigma(self, s_static: mx.array, sigma: mx.array) -> mx.array:
+    def with_sigma(self, s_proj: mx.array, sigma: mx.array) -> mx.array:
         sigma_embed = self.fourier_proj(self.fourier_proj_norm(self.fourier_embedding(sigma)))
-        s = s_static[:, None, :, :] + sigma_embed[:, :, None, :]
+        s = s_proj[:, None, :, :] + sigma_embed[:, :, None, :]
+        s = s + self.single_trans1(s)
         s = s + self.single_trans2(s)
         return self.single_ln(s)
 
@@ -92,9 +87,9 @@ class DiffusionTransformerBlock(nn.Module):
         )
 
     def __call__(self, x: mx.array, s_cond: mx.array, pair_bias: mx.array, *, use_kernel: bool = False) -> mx.array:
-        x = self.attn(x, s_cond, pair_bias=pair_bias, use_kernel=use_kernel)
-        x = self.transition(x, s_cond, use_kernel=use_kernel)
-        return x
+        attn_delta = self.attn.delta(x, s_cond, pair_bias=pair_bias, use_kernel=use_kernel)
+        trans_delta = self.transition.delta(x, s_cond, use_kernel=use_kernel)
+        return x + attn_delta + trans_delta
 
 
 class DiffusionTransformer(nn.Module):
@@ -153,10 +148,13 @@ class DiffusionModule(nn.Module):
             z_cond, pair_mask=structure.token_pair_mask
         )
         token_atom_pair = self.token_pair_to_atom_pair(self.token_pair_to_atom_pair_norm(z_cond))
+        batch_idx = mx.arange(structure.atom_token_index.shape[0])
+        q_token_idx = structure.atom_token_index[batch_idx[:, None, None], structure.atom_q_indices]
+        kv_token_idx = structure.atom_token_index[batch_idx[:, None, None], structure.atom_kv_indices]
         blocked_pair_base = gather_blocked_pair_values(
             token_atom_pair,
-            structure.atom_q_indices,
-            structure.atom_kv_indices,
+            q_token_idx,
+            kv_token_idx,
         )
         blocked_pair_base = blocked_pair_base + trunk.atom_pair_structure_input
 
@@ -203,7 +201,7 @@ class DiffusionModule(nn.Module):
 
         x = self.structure_cond_to_token_structure_proj(trunk.single_structure)
         x = mx.broadcast_to(x[:, None, :, :], (coords.shape[0], num_samples, *x.shape[1:]))
-        enc_tokens, atom_repr = self.atom_attention_encoder(
+        enc_tokens, atom_repr, encoder_pair = self.atom_attention_encoder(
             cache.atom_cond,
             cache.atom_single_cond,
             cache.blocked_pair_base,
@@ -229,7 +227,7 @@ class DiffusionModule(nn.Module):
             x,
             atom_repr,
             decoder_cond,
-            cache.blocked_pair_base,
+            encoder_pair,
             structure.atom_token_index,
             structure.atom_exists_mask,
             structure.atom_kv_indices,

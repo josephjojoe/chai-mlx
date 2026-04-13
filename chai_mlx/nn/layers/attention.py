@@ -87,7 +87,7 @@ class DiffusionSelfAttention(nn.Module):
             bias = bias + make_additive_mask(pair_mask)[:, None, :, :]
         return bias
 
-    def __call__(
+    def delta(
         self,
         x: mx.array,
         s_cond: mx.array,
@@ -95,6 +95,7 @@ class DiffusionSelfAttention(nn.Module):
         pair_bias: mx.array,
         use_kernel: bool = False,
     ) -> mx.array:
+        """Gated attention delta (no residual)."""
         x_norm = self.adaln(x, s_cond, use_kernel=use_kernel)
         q, k, v = chunk_last(self.to_qkv(x_norm), 3)
         q = split_heads(q, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
@@ -105,7 +106,17 @@ class DiffusionSelfAttention(nn.Module):
             q, k, v, scale=self.head_dim ** -0.5, mask=pair_bias
         )
         out = self.to_out(merge_heads(out.transpose(0, 2, 1, 3)))
-        return x + sigmoid(self.gate_proj(s_cond)) * out
+        return sigmoid(self.gate_proj(s_cond)) * out
+
+    def __call__(
+        self,
+        x: mx.array,
+        s_cond: mx.array,
+        *,
+        pair_bias: mx.array,
+        use_kernel: bool = False,
+    ) -> mx.array:
+        return x + self.delta(x, s_cond, pair_bias=pair_bias, use_kernel=use_kernel)
 
 
 class MSAPairWeightedAveraging(nn.Module):

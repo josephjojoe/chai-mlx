@@ -71,6 +71,12 @@ class ConditionedTransition(nn.Module):
         self.down = nn.Linear(expansion * dim, dim, bias=False)
         self.gate = nn.Linear(cond_dim, dim, bias=True)
 
+    def delta(self, x: mx.array, cond: mx.array, *, use_kernel: bool = False) -> mx.array:
+        """Gated transition delta (no residual)."""
+        y = self.adaln(x, cond, use_kernel=use_kernel)
+        y = self.down(self.swiglu(self.up(y), use_kernel=use_kernel))
+        return sigmoid(self.gate(cond)) * y
+
     def __call__(self, x: mx.array, cond: mx.array, *, use_kernel: bool = False) -> mx.array:
         y = self.adaln(x, cond, use_kernel=use_kernel)
         y = self.down(self.swiglu(self.up(y), use_kernel=use_kernel))
