@@ -234,7 +234,7 @@ dropped:
 | `feature_embeddings.TOKEN_PAIR.TokenDistanceRestraint.radii` | Learned RBF radii for distance restraint | `(6,)` |
 | `feature_embeddings.TOKEN_PAIR.TokenPairPocketRestraint.radii` | Learned RBF radii for pocket restraint | `(6,)` |
 
-The `convert_to_safetensors.py` script's `rename_state_dict` would place these
+The `convert_npz.py` script's `rename_state_dict` would place these
 under `__unmapped__.*` and log a warning, but they'd never reach the model.
 
 **Required fix:** Add these 3 parameters to the port's model (either in

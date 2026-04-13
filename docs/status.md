@@ -89,7 +89,7 @@ bring their own encoded tensors, and is verified bit-identical to the raw path.
 - **Unused import in `diffusion.py`**: Removed unused `make_additive_mask` import.
 - **`parity_check.py` attribute name bug**: `TEMPLATES.lower()` gave `templates_proj` but the actual attribute is `template_proj`. Fixed with an explicit name mapping dict.
 - **`bond_adjacency` dual-sourcing**: Documented `FeatureContext.bond_adjacency` as canonical, `StructureInputs.bond_adjacency` as legacy fallback.
-- **README layout**: Removed reference to nonexistent `blocked_local_attention.py`, added missing files (`convert_to_safetensors.py`, `name_map.py`, `validate.py`, `parity_check.py`).
+- **README layout**: Removed reference to nonexistent `blocked_local_attention.py`, added missing files (`convert_npz.py`, `name_map.py`, `validate.py`, `parity_check.py`).
 
 ## Architectural fixes (second audit round)
 
@@ -109,7 +109,7 @@ bring their own encoded tensors, and is verified bit-identical to the raw path.
 
 ## Recommended path to productionize
 
-1. Export and load the real weights via `chai-mlx-export-torchscript` or `python scripts/convert_weights.py`.
+1. Export and load the real weights via `chai-mlx-export-torchscript` and `chai-mlx-convert-torchscript`.
 2. Run `python scripts/parity_check.py` to verify per-component numerical agreement.
 3. Dump intermediate tensors from the reference implementation.
 4. Validate one component at a time:

@@ -62,7 +62,6 @@ examples/
   diffusion_benchmark.py # diffusion loop timing harness
   fasta_smoke.py        # FASTA -> feature embedding smoke script
 scripts/
-  convert_weights.py     # memory-aware TorchScript -> safetensors conversion
   parity_check.py       # TorchScript vs MLX parity harness
 docs/
   README.md              # docs map
@@ -88,8 +87,8 @@ The repo-level `weights/` directory is intended for local model artifacts during
 - Run the FASTA path: `python examples/fasta_smoke.py --fasta path/to/input.fasta`
 - Run TorchScript/MLX parity checks: `python scripts/parity_check.py --torchscript-dir ... --safetensors-dir ...`
 - Export TorchScript weights to NPZ: `chai-mlx-export-torchscript src.pt out.npz`
+- Convert `.pt` shards directly to safetensors: `chai-mlx-convert-torchscript --pt-dir path/to/pt --out-dir weights/`
 - Convert NPZ weights to safetensors: `chai-mlx-convert-npz npz_dir weights/`
-- Convert `.pt` shards directly with the memory-aware helper: `python scripts/convert_weights.py --pt-dir path/to/pt --out-dir weights`
 
 ## Notes
 

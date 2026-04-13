@@ -3,7 +3,7 @@
 Usage::
 
     # Convert a directory of NPZ files (one per TorchScript component)
-    python -m chai_mlx.weights.convert_to_safetensors npz_dir/ output_dir/
+    python -m chai_mlx.io.weights.convert_npz npz_dir/ output_dir/
 
 The output directory will contain:
   - ``model.safetensors`` (or sharded files with an index)

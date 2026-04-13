@@ -26,7 +26,8 @@ convert = [
 
 [project.scripts]
 chai-mlx-export-torchscript = "chai_mlx.io.weights.export_torchscript:main"
-chai-mlx-convert-npz = "chai_mlx.io.weights.convert_to_safetensors:main"
+chai-mlx-convert-torchscript = "chai_mlx.io.weights.convert_torchscript:main"
+chai-mlx-convert-npz = "chai_mlx.io.weights.convert_npz:main"
 
 [tool.setuptools.packages.find]
 include = ["chai_mlx*"]
