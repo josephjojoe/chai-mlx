@@ -35,17 +35,36 @@ comes from **compute backend differences** — MLX's Metal GPU kernels and
 PyTorch's MPS kernels produce slightly different floating-point results for the
 same mathematical operation.
 
-### Sources of Metal-vs-MPS per-operation disagreement
+### Per-operation divergence breakdown (`scripts/per_op_divergence.py`)
 
-| Source | Mechanism |
-|--------|-----------|
-| Matmul tile/reduction order | `Σ(a_k × b_k)` over k=256 uses different partial-sum trees in Metal vs MPS. Different summation order → different fp32 rounding. |
-| LayerNorm reductions | Mean/variance computed with different partial-sum groupings |
-| Softmax denominator | `Σ exp(x_j)` accumulated in different order |
-| Einsum decomposition | Triangle multiplication contractions decomposed differently |
+Elementary operations tested with identical bf16 inputs on Metal vs MPS:
 
-Each of these contributes ~1–2 ULP of fp32 error per operation. Individually
-negligible; catastrophic after chaotic amplification.
+| Operation | Max error | Notes |
+|-----------|-----------|-------|
+| Einsum (bikd,bjkd→bijd) | 0.0 | Perfect agreement — no reduction axis |
+| Sigmoid | 0.0 | Exact match |
+| Softmax (fp32) | 3.0e-8 | Near-perfect |
+| LayerNorm (fp32) | 4.8e-7 | Near-perfect |
+| SDPA (fp32) | 4.5e-7 | Near-perfect |
+| SiLU (fp32) | 2.4e-7 | Near-perfect |
+| **Matmul (bf16 × bf16)** | **2.0e-3** | **Summation order divergence** |
+| Matmul (bf16 × fp32) | 8.3e-7 | 1000× better than bf16×bf16 |
+
+The bf16 matmul is the dominant seed. Tracing through a real pairformer block
+with model weights shows how it cascades:
+
+| Step | Max error | Mechanism |
+|------|-----------|-----------|
+| LayerNorm | 2.0e-3 | bf16 matmul in internal reduction |
+| Linear (up proj) | 1.6e-2 | bf16 matmul on diverged normalized input |
+| SwiGLU | 0.25 | Nonlinearity amplifies linear error |
+| Linear (down proj) | 1.0 | Another matmul on amplified errors |
+| Triangle mult (full) | 0.25 | Multiple einsum contractions + sigmoid gates |
+| Re-synced SDPA | 0.25 | Even with identical q/k/v, bf16 pair bias causes divergence |
+
+Single-block Lyapunov test: a 1e-3 input perturbation amplifies to 6.3e-2
+mean / 3.5 max — an **862× amplification factor per block**. Over 48 blocks
+this guarantees full saturation regardless of seed magnitude.
 
 ### The pairformer stack is a chaotic system
 
@@ -162,6 +181,27 @@ numerical benefit.
 
 ---
 
+## Memory usage: bf16 vs fp32
+
+BF16 is strictly better — identical numerical parity with the reference, half
+the memory, higher throughput on Apple Silicon. Peak estimates for batch=1,
+5 diffusion samples (`scripts/memory_estimate.py`):
+
+| Tokens | Atoms | BF16 peak | FP32 peak | BF16 on 16 GB? | FP32 on 16 GB? |
+|--------|-------|-----------|-----------|----------------|----------------|
+| 256 | 5,888 | 1.1 GB | 2.1 GB | Yes | Yes |
+| 384 | 8,832 | 1.5 GB | 3.0 GB | Yes | Yes |
+| 512 | 11,776 | 2.1 GB | 4.2 GB | Yes | Yes |
+| 768 | 17,664 | 3.8 GB | 7.5 GB | Yes | Yes |
+| 1024 | 23,552 | 6.1 GB | 12.3 GB | Yes | Tight |
+| 1536 | 35,328 | 12.9 GB | 25.8 GB | Tight | No |
+| 2048 | 47,104 | 22.3 GB | 44.7 GB | No | No |
+
+The pair tensor `[B, N, N, 256]` dominates — O(N²) scaling. BF16 roughly
+doubles the maximum feasible sequence length on a given machine.
+
+---
+
 ## Path forward
 
 1. ~~Mixed-precision execution~~ — **DONE**
@@ -213,5 +253,8 @@ Full git history has the details for each fix.
 | `scripts/chai_lab_reference_dump.py` | Generate FASTA-backed reference artifacts |
 | `scripts/stage_isolation_parity.py` | Feed reference tensors at stage boundaries |
 | `scripts/weight_loading_e2e.py` | Convert → strict load → smoke forward |
+| `scripts/per_op_divergence.py` | Per-operation Metal-vs-MPS divergence breakdown |
+| `scripts/error_diagnostics.py` | Error distribution analysis (percentiles, TVD, KL) |
+| `scripts/memory_estimate.py` | Peak memory estimation at various sequence lengths |
 | `scripts/parity_check.py` | Per-component numerical agreement |
 | `examples/fasta_smoke.py` | Full pipeline dimension check |
