@@ -125,6 +125,7 @@ Per-op trace through the 16-block diffusion transformer (block 0 → 15):
 | Match TorchScript precision (bf16 act × fp32 weight) | No change | Same tiling-order divergence regardless of weight precision |
 | Pure fp32 (weights + activations) | No change | All precision changes are invisible — the error is structural |
 | Feed MPS reference trunk → MLX diffusion | Still broken (58–118 Å) | Diffusion module's own Metal divergence is independently fatal |
+| MLX trunk → MPS diffusion (cache analysis) | z_cond 50% rel. error, s_static 11%, pair_biases max 5–22 | Trunk chaotic divergence corrupts conditioning tensors too heavily |
 | Different ODE solvers (Euler, Heun) | No improvement | Error is per-evaluation bias, not discretization error |
 | Stochastic noise injection (gamma > 0) | Worse (87→118 Å) | Per-step error too large for stochastic correction |
 
@@ -157,22 +158,54 @@ it to the next ODE step.
 
 ### 1. Hybrid inference — MPS diffusion loop
 
-**Priority: highest. Only proven path to valid structures.**
+**Priority: downgraded after conditioning divergence measurement.**
 
 Run the trunk and confidence head in MLX, serialize the `DiffusionCache`,
 run the 200-step ODE on PyTorch/MPS. The MPS reference produces correct
 structures (3.82 Å Cα spacing on 1L2Y).
 
-**Open question**: whether MPS diffusion can tolerate the
-numerically-divergent MLX trunk outputs as continuous conditioning.
-Confidence argmax agreement (99.6–100%) is measured on a classifier head,
-which is robust to distributional-but-not-trajectorial error. The
-diffusion module consumes trunk outputs as continuous conditioning (pair
-bias into SDPA, single embeddings), which is a harsher test.
+**Resolved**: the L2 distance measurement on cache conditioning tensors
+shows that the trunk's chaotic divergence is **not sufficiently attenuated**
+by the cache projection. The diffusion conditioning tensors derived from
+MLX trunk outputs vs MPS reference trunk outputs (1L2Y, 256 tokens,
+1 recycle) diverge as follows:
 
-**Next experiment**: measure L2 distance between MLX and MPS trunk outputs
-specifically on the tensors that become diffusion conditioning (`s_static`,
-`z_cond`, `pair_biases`), not on the final representations in aggregate.
+| Tensor | L2 | RMS | max | rel. RMS |
+|--------|-----|-----|-----|----------|
+| `single_trunk` (raw) | 6.15e3 | 19.6 | 456 | 0.264 |
+| `pair_trunk` (raw) | 2.13e5 | 52.0 | 1056 | 1.024 |
+| `s_static` | 3.81e2 | 1.21 | 17.0 | 0.111 |
+| `z_cond` | 2.31e3 | 0.563 | 6.83 | 0.497 |
+| `blocked_pair_base` | 2.98e3 | 0.858 | 3.02 | 0.457 |
+| `atom_cond` | 0.059 | 6.8e-5 | 0.016 | 0.000 |
+| `atom_single_cond` | 87.3 | 0.101 | 0.315 | 0.100 |
+| `pair_biases` (16 blocks) | 89–317 | 0.087–0.309 | 5.0–21.8 | ~0 (mask-dominated ref) |
+
+Key findings:
+
+- **`z_cond`** has 50% relative RMS error — the pair conditioning is half
+  noise. The projection attenuates the raw trunk pair divergence (102% →
+  50%) but not enough.
+- **`s_static`** has 11% relative RMS error — the projection attenuates
+  trunk single divergence (26% → 11%) but 11% is still significant.
+- **`pair_biases`** have max errors of 5–22 in attention logit space.
+  Their relative RMS appears near zero only because the ref RMS (~9950)
+  is dominated by the additive -inf attention mask. The absolute errors
+  are large enough to redirect attention.
+- **`atom_cond`** is essentially unaffected (derived from structure
+  inputs, not trunk). `atom_single_cond` picks up 10% error from
+  trunk single via gather.
+- `pair_structure` and `single_structure` have near-zero error (they
+  come from embeddings, not the trunk).
+
+**Conclusion**: the hybrid approach (MLX trunk → MPS diffusion) is
+unlikely to produce valid structures. The conditioning tensors that feed
+the diffusion ODE — especially `z_cond` (50% error) and the per-block
+pair biases (up to 22 max error) — are too corrupted by the trunk's
+chaotic divergence. Even MPS's correct diffusion math cannot compensate
+for conditioning inputs that are this far from the trained distribution.
+
+Script: `scripts/cache_conditioning_divergence.py`.
 
 ### 2. Custom Metal matmul kernel matching MPS reduction order
 

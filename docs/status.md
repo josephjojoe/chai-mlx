@@ -64,6 +64,7 @@ precision.  Full git history has details.
 | `scripts/stage_isolation_parity.py` | Reference tensors at stage boundaries |
 | `scripts/per_op_divergence.py` | Per-operation Metal-vs-MPS divergence |
 | `scripts/diffusion_diagnostics.py` | Lyapunov sweep, per-op trace, hybrid test |
+| `scripts/cache_conditioning_divergence.py` | Trunk divergence propagation into diffusion cache |
 | `scripts/structural_validation.py` | End-to-end structure quality vs PDB |
 | `scripts/memory_estimate.py` | Peak memory at various sequence lengths |
 | `examples/fasta_smoke.py` | Full pipeline dimension check |
