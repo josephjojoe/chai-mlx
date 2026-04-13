@@ -1,9 +1,28 @@
 from __future__ import annotations
 
 import math
-from typing import Iterable, Sequence
+from typing import TYPE_CHECKING, Iterable, Sequence
 
 import mlx.core as mx
+
+if TYPE_CHECKING:
+    from chai_mlx.config import ChaiConfig
+
+
+_DTYPE_MAP = {
+    "bfloat16": mx.bfloat16,
+    "float16": mx.float16,
+    "float32": mx.float32,
+}
+
+
+def resolve_dtype(cfg_or_str: "ChaiConfig | str") -> mx.Dtype:
+    """Resolve a config or string dtype name to an ``mx.Dtype``."""
+    name = cfg_or_str if isinstance(cfg_or_str, str) else cfg_or_str.compute_dtype
+    try:
+        return _DTYPE_MAP[name]
+    except KeyError:
+        raise ValueError(f"Unknown compute_dtype {name!r}; expected one of {list(_DTYPE_MAP)}")
 
 
 def ensure_fp32(x: mx.array) -> mx.array:
@@ -42,12 +61,17 @@ def masked_mean(
     return num / den
 
 
-def make_additive_mask(mask: mx.array, masked_value: float = -10000.0) -> mx.array:
+def make_additive_mask(
+    mask: mx.array,
+    masked_value: float = -10000.0,
+    dtype: mx.Dtype | None = None,
+) -> mx.array:
     bool_mask = mask.astype(mx.bool_) if mask.dtype != mx.bool_ else mask
+    dt = dtype if dtype is not None else mx.float32
     return mx.where(
         bool_mask,
-        mx.zeros(mask.shape, dtype=mx.float32),
-        mx.full(mask.shape, masked_value, dtype=mx.float32),
+        mx.zeros(mask.shape, dtype=dt),
+        mx.full(mask.shape, masked_value, dtype=dt),
     )
 
 

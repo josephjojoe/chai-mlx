@@ -35,6 +35,19 @@ from chai_mlx.data.types import (
     TrunkOutputs,
 )
 from chai_mlx.io.weights.load import load_safetensors
+from chai_mlx.utils import resolve_dtype
+
+
+def _cast_weights(model: nn.Module, dtype: mx.Dtype) -> None:
+    """Cast all model parameters to *dtype* in-place."""
+    from mlx.utils import tree_flatten
+
+    pairs = []
+    for k, v in tree_flatten(model.parameters()):
+        if isinstance(v, mx.array) and v.dtype != dtype:
+            pairs.append((k, v.astype(dtype)))
+    if pairs:
+        model.load_weights(pairs, strict=False)
 
 
 @dataclass
@@ -63,15 +76,22 @@ class ChaiMLX(nn.Module):
         path_or_repo: str | Path,
         *,
         strict: bool = True,
+        compute_dtype: str | None = None,
     ) -> "ChaiMLX":
         """Load a pretrained model from a local directory or HuggingFace repo.
 
         The directory should contain ``config.json`` and either
         ``model.safetensors`` or sharded safetensors with an index file.
 
-        For HuggingFace repos, use ``mlx.utils`` or ``huggingface_hub`` to
-        download first, then pass the local path.
+        Parameters
+        ----------
+        compute_dtype : str, optional
+            Override the config's ``compute_dtype``.  Pass ``"float32"`` to
+            disable mixed precision, or ``"bfloat16"`` (the default in
+            :class:`ChaiConfig`) for half-precision inference.
         """
+        from dataclasses import fields as dc_fields
+
         path = Path(path_or_repo)
         if not path.is_dir():
             try:
@@ -111,8 +131,18 @@ class ChaiMLX(nn.Module):
         else:
             cfg = ChaiConfig()
 
+        if compute_dtype is not None:
+            cfg_dict = {f.name: getattr(cfg, f.name) for f in dc_fields(cfg)}
+            cfg_dict["compute_dtype"] = compute_dtype
+            cfg = ChaiConfig(**cfg_dict)
+
         model = cls(cfg)
         load_safetensors(model, path, strict=strict)
+
+        dtype = resolve_dtype(cfg)
+        if dtype != mx.float32:
+            _cast_weights(model, dtype)
+
         return model
 
     def featurize(self, inputs: FeatureContext | InputBundle | dict) -> FeatureContext:

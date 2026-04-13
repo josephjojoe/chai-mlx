@@ -5,7 +5,7 @@ import math
 import mlx.core as mx
 import mlx.nn as nn
 
-from chai_mlx.nn.layers.common import AdaLayerNorm
+from chai_mlx.nn.layers.common import AdaLayerNorm, FP32LayerNorm
 from chai_mlx.utils import chunk_last, make_additive_mask, merge_heads, sigmoid, split_heads
 
 
@@ -20,8 +20,8 @@ class AttentionPairBias(nn.Module):
         eps: float = 1e-5,
     ) -> None:
         super().__init__()
-        self.single_norm = nn.LayerNorm(single_dim, eps=eps)
-        self.pair_norm = nn.LayerNorm(pair_dim, eps=eps)
+        self.single_norm = FP32LayerNorm(single_dim, eps=eps)
+        self.pair_norm = FP32LayerNorm(pair_dim, eps=eps)
         self.pair_linear = nn.Linear(pair_dim, num_heads, bias=False)
         self.input2qkvg = nn.Linear(single_dim, 4 * num_heads * head_dim, bias=False)
         self.output_proj = nn.Linear(num_heads * head_dim, single_dim, bias=False)
@@ -32,7 +32,7 @@ class AttentionPairBias(nn.Module):
     def _bias(self, pair: mx.array, pair_mask: mx.array | None) -> mx.array:
         bias = self.pair_linear(self.pair_norm(pair)).transpose(0, 3, 1, 2)
         if pair_mask is not None:
-            bias = bias + make_additive_mask(pair_mask)[:, None, :, :]
+            bias = bias + make_additive_mask(pair_mask, dtype=bias.dtype)[:, None, :, :]
         return bias
 
     def __call__(
@@ -72,7 +72,7 @@ class DiffusionSelfAttention(nn.Module):
     ) -> None:
         super().__init__()
         self.adaln = AdaLayerNorm(dim, cond_dim, eps=eps)
-        self.pair_norm = nn.LayerNorm(pair_dim, eps=eps)
+        self.pair_norm = FP32LayerNorm(pair_dim, eps=eps)
         self.pair_linear = nn.Linear(pair_dim, num_heads, bias=False)
         self.to_qkv = nn.Linear(dim, 3 * num_heads * head_dim, bias=False)
         self.to_out = nn.Linear(num_heads * head_dim, dim, bias=False)
@@ -84,7 +84,7 @@ class DiffusionSelfAttention(nn.Module):
     def pair_bias(self, z_cond: mx.array, pair_mask: mx.array | None = None) -> mx.array:
         bias = self.pair_linear(self.pair_norm(z_cond)).transpose(0, 3, 1, 2)
         if pair_mask is not None:
-            bias = bias + make_additive_mask(pair_mask)[:, None, :, :]
+            bias = bias + make_additive_mask(pair_mask, dtype=bias.dtype)[:, None, :, :]
         return bias
 
     def delta(
@@ -122,9 +122,9 @@ class DiffusionSelfAttention(nn.Module):
 class MSAPairWeightedAveraging(nn.Module):
     def __init__(self, msa_dim: int, pair_dim: int, num_heads: int = 8, value_dim: int = 32, eps: float = 1e-5) -> None:
         super().__init__()
-        self.layernorm_msa = nn.LayerNorm(msa_dim, eps=eps)
+        self.layernorm_msa = FP32LayerNorm(msa_dim, eps=eps)
         self.linear_msa2vg = nn.Linear(msa_dim, num_heads * 2 * value_dim, bias=False)
-        self.layernorm_pair = nn.LayerNorm(pair_dim, eps=eps)
+        self.layernorm_pair = FP32LayerNorm(pair_dim, eps=eps)
         self.linear_pair = nn.Linear(pair_dim, num_heads, bias=False)
         self.linear_out_no_bias = nn.Linear(num_heads * value_dim, msa_dim, bias=False)
         self.num_heads = num_heads
@@ -133,8 +133,8 @@ class MSAPairWeightedAveraging(nn.Module):
     def __call__(self, msa: mx.array, pair: mx.array, token_pair_mask: mx.array | None = None) -> mx.array:
         pair_logits = self.linear_pair(self.layernorm_pair(pair)).transpose(0, 3, 1, 2)
         if token_pair_mask is not None:
-            pair_logits = pair_logits + make_additive_mask(token_pair_mask)[:, None, :, :]
-        weights = mx.softmax(pair_logits.astype(mx.float32), axis=-1)
+            pair_logits = pair_logits + make_additive_mask(token_pair_mask, dtype=pair_logits.dtype)[:, None, :, :]
+        weights = mx.softmax(pair_logits.astype(mx.float32), axis=-1).astype(pair_logits.dtype)
 
         vg = self.linear_msa2vg(self.layernorm_msa(msa))
         v, g = chunk_last(vg, 2)

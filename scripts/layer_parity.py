@@ -77,7 +77,8 @@ def _mx_array(x: np.ndarray) -> mx.array:
 
 def _record(store: dict[str, np.ndarray], key: str, value: mx.array) -> None:
     mx.eval(value)
-    store[key] = np.array(value, copy=False)
+    v = value.astype(mx.float32) if value.dtype == mx.bfloat16 else value
+    store[key] = np.array(v, copy=False)
 
 
 def _record_dataclass(store: dict[str, np.ndarray], prefix: str, value) -> None:

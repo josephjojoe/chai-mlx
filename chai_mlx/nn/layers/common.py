@@ -10,12 +10,26 @@ from chai_mlx.nn.kernels.elementwise import fused_adaln_full, fused_gated_residu
 from chai_mlx.utils import chunk_last, sigmoid, silu
 
 
+class FP32LayerNorm(nn.LayerNorm):
+    """LayerNorm that always computes reductions in float32.
+
+    Subclasses ``nn.LayerNorm`` so parameter names (``weight``, ``bias``)
+    are unchanged, preserving safetensors compatibility.  When the model
+    runs in float32 the casts are no-ops.
+    """
+
+    def __call__(self, x: mx.array) -> mx.array:
+        orig_dtype = x.dtype
+        y = super().__call__(x.astype(mx.float32))
+        return y.astype(orig_dtype)
+
+
 class AdaLayerNorm(nn.Module):
     _ADALN_EPS: float = 0.1
 
     def __init__(self, dim: int, cond_dim: int, eps: float = 1e-5) -> None:
         super().__init__()
-        self.norm = nn.LayerNorm(dim, eps=self._ADALN_EPS, affine=False)
+        self.norm = FP32LayerNorm(dim, eps=self._ADALN_EPS, affine=False)
         self.to_scale_shift = nn.Linear(cond_dim, 2 * dim, bias=False)
 
     def __call__(self, x: mx.array, cond: mx.array, *, use_kernel: bool = False) -> mx.array:
@@ -46,7 +60,7 @@ class Transition(nn.Module):
         eps: float = 1e-5,
     ) -> None:
         super().__init__()
-        self.norm = nn.LayerNorm(dim, eps=eps)
+        self.norm = FP32LayerNorm(dim, eps=eps)
         self.up = nn.Linear(dim, 2 * expansion * dim, bias=False)
         self.swiglu = SwiGLU()
         self.down = nn.Linear(expansion * dim, dim, bias=bias_out)

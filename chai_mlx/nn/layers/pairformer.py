@@ -72,7 +72,7 @@ class PairformerBlock(nn.Module):
                 precomputed_bias=precomputed_single_pair_bias,
             )
             if single_mask is not None:
-                attn_delta = attn_delta * single_mask[..., None]
+                attn_delta = attn_delta * single_mask.astype(attn_delta.dtype)[..., None]
             s = s + attn_delta
             s = s + self.transition_single(s)
         return z, s

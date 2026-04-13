@@ -4,6 +4,7 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from chai_mlx.config import ChaiConfig
+from chai_mlx.nn.layers.common import FP32LayerNorm
 from chai_mlx.nn.layers.pairformer import PairformerBlock
 from chai_mlx.data.types import ConfidenceOutputs, TrunkOutputs
 from chai_mlx.utils import cdist, expand_plddt_to_atoms, one_hot_binned, representative_atom_coords
@@ -32,8 +33,8 @@ class ConfidenceHead(nn.Module):
             )
             for _ in range(cfg.confidence.num_blocks)
         ]
-        self.single_output_norm = nn.LayerNorm(cfg.hidden.token_single, eps=cfg.layer_norm_eps, affine=False)
-        self.pair_output_norm = nn.LayerNorm(cfg.hidden.token_pair, eps=cfg.layer_norm_eps, affine=False)
+        self.single_output_norm = FP32LayerNorm(cfg.hidden.token_single, eps=cfg.layer_norm_eps, affine=False)
+        self.pair_output_norm = FP32LayerNorm(cfg.hidden.token_pair, eps=cfg.layer_norm_eps, affine=False)
         self.plddt_projection = nn.Linear(
             cfg.hidden.token_single,
             cfg.confidence.plddt_atom_positions * cfg.confidence.plddt_bins,
@@ -54,9 +55,9 @@ class ConfidenceHead(nn.Module):
         ref_coords = representative_atom_coords(coords, structure.token_reference_atom_index)
         dists = cdist(ref_coords)
         dist_bins = one_hot_binned(dists, self.atom_distance_v_bins)
-        pair = pair + self.atom_distance_bins_projection(dist_bins)
+        pair = pair + self.atom_distance_bins_projection(dist_bins).astype(pair.dtype)
 
-        token_mask = structure.token_exists_mask.astype(mx.float32)
+        token_mask = structure.token_exists_mask.astype(pair.dtype)
 
         s, z = single_trunk, pair
         for block in self.blocks:

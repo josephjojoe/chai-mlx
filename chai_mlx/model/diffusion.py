@@ -10,7 +10,7 @@ import mlx.nn as nn
 from chai_mlx.config import ChaiConfig
 from chai_mlx.nn.layers.attention import DiffusionSelfAttention
 from chai_mlx.nn.layers.atom_attention import DiffusionAtomAttentionDecoder, DiffusionAtomAttentionEncoder
-from chai_mlx.nn.layers.common import ConditionedTransition, Transition
+from chai_mlx.nn.layers.common import ConditionedTransition, FP32LayerNorm, Transition
 from chai_mlx.data.types import DiffusionCache, StructureInputs, TrunkOutputs
 from chai_mlx.utils import (
     center_random_augmentation,
@@ -34,20 +34,20 @@ class FourierEmbedding(nn.Module):
 class DiffusionConditioning(nn.Module):
     def __init__(self, cfg: ChaiConfig) -> None:
         super().__init__()
-        self.token_pair_norm = nn.LayerNorm(2 * cfg.hidden.token_pair, eps=cfg.layer_norm_eps)
+        self.token_pair_norm = FP32LayerNorm(2 * cfg.hidden.token_pair, eps=cfg.layer_norm_eps)
         self.token_pair_proj = nn.Linear(2 * cfg.hidden.token_pair, cfg.hidden.token_pair, bias=False)
         self.pair_trans1 = Transition(cfg.hidden.token_pair, expansion=2, eps=cfg.layer_norm_eps)
         self.pair_trans2 = Transition(cfg.hidden.token_pair, expansion=2, eps=cfg.layer_norm_eps)
-        self.pair_ln = nn.LayerNorm(cfg.hidden.token_pair, eps=cfg.layer_norm_eps)
+        self.pair_ln = FP32LayerNorm(cfg.hidden.token_pair, eps=cfg.layer_norm_eps)
 
-        self.token_in_norm = nn.LayerNorm(2 * cfg.hidden.token_single, eps=cfg.layer_norm_eps)
+        self.token_in_norm = FP32LayerNorm(2 * cfg.hidden.token_single, eps=cfg.layer_norm_eps)
         self.token_in_proj = nn.Linear(2 * cfg.hidden.token_single, cfg.hidden.token_single, bias=False)
         self.single_trans1 = Transition(cfg.hidden.token_single, expansion=2, eps=cfg.layer_norm_eps)
         self.single_trans2 = Transition(cfg.hidden.token_single, expansion=2, eps=cfg.layer_norm_eps)
         self.fourier_embedding = FourierEmbedding(dim=256)
-        self.fourier_proj_norm = nn.LayerNorm(256, eps=cfg.layer_norm_eps)
+        self.fourier_proj_norm = FP32LayerNorm(256, eps=cfg.layer_norm_eps)
         self.fourier_proj = nn.Linear(256, cfg.hidden.token_single, bias=False)
-        self.single_ln = nn.LayerNorm(cfg.hidden.token_single, eps=cfg.layer_norm_eps)
+        self.single_ln = FP32LayerNorm(cfg.hidden.token_single, eps=cfg.layer_norm_eps)
 
     def prepare_static(self, trunk: TrunkOutputs) -> tuple[mx.array, mx.array]:
         pair_cat = mx.concatenate([trunk.pair_trunk, trunk.pair_structure], axis=-1)
@@ -62,6 +62,7 @@ class DiffusionConditioning(nn.Module):
 
     def with_sigma(self, s_proj: mx.array, sigma: mx.array) -> mx.array:
         sigma_embed = self.fourier_proj(self.fourier_proj_norm(self.fourier_embedding(sigma)))
+        sigma_embed = sigma_embed.astype(s_proj.dtype)
         s = s_proj[:, None, :, :] + sigma_embed[:, :, None, :]
         s = s + self.single_trans1(s)
         s = s + self.single_trans2(s)
@@ -119,7 +120,7 @@ class DiffusionModule(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.diffusion_conditioning = DiffusionConditioning(cfg)
-        self.token_pair_to_atom_pair_norm = nn.LayerNorm(cfg.hidden.token_pair, eps=cfg.layer_norm_eps)
+        self.token_pair_to_atom_pair_norm = FP32LayerNorm(cfg.hidden.token_pair, eps=cfg.layer_norm_eps)
         self.token_pair_to_atom_pair = nn.Linear(cfg.hidden.token_pair, cfg.hidden.atom_pair, bias=False)
         self.atom_attention_encoder = DiffusionAtomAttentionEncoder(
             cfg.hidden.atom_single,
@@ -138,8 +139,8 @@ class DiffusionModule(nn.Module):
         self.structure_cond_to_token_structure_proj = nn.Linear(
             cfg.hidden.token_single, cfg.hidden.diffusion, bias=False
         )
-        self.post_attn_layernorm = nn.LayerNorm(cfg.hidden.diffusion, eps=cfg.layer_norm_eps)
-        self.post_atom_cond_layernorm = nn.LayerNorm(cfg.hidden.atom_single, eps=cfg.layer_norm_eps)
+        self.post_attn_layernorm = FP32LayerNorm(cfg.hidden.diffusion, eps=cfg.layer_norm_eps)
+        self.post_atom_cond_layernorm = FP32LayerNorm(cfg.hidden.atom_single, eps=cfg.layer_norm_eps)
 
     def prepare_cache(self, trunk: TrunkOutputs) -> DiffusionCache:
         structure = trunk.structure_inputs

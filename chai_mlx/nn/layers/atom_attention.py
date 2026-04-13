@@ -11,7 +11,7 @@ from chai_mlx.utils import (
     segment_mean,
     split_heads,
 )
-from .common import AdaLayerNorm, ConditionedTransition, ResidualMLP
+from .common import AdaLayerNorm, ConditionedTransition, FP32LayerNorm, ResidualMLP
 
 
 class PairUpdateBlock(nn.Module):
@@ -60,7 +60,7 @@ class LocalAttentionPairBiasBlock(nn.Module):
         v = gather_blocked_atom_values(v_all, kv_idx).transpose(0, 1, 3, 2, 4)
 
         additive_bias = additive_bias.transpose(0, 1, 4, 2, 3)
-        additive_bias = additive_bias + make_additive_mask(block_mask)[:, :, None, :, :]
+        additive_bias = additive_bias + make_additive_mask(block_mask, dtype=additive_bias.dtype)[:, :, None, :, :]
 
         q = q + self.q_bias[None, None, :, None, :]
         q_flat = q.reshape(b * num_blocks, self.num_heads, 32, self.head_dim)
@@ -101,7 +101,7 @@ class LocalAttentionPairBiasBlock(nn.Module):
         k = gather_blocked_atom_values(k_all, kv_idx).transpose(0, 1, 3, 2, 4)
         v = gather_blocked_atom_values(v_all, kv_idx).transpose(0, 1, 3, 2, 4)
         additive_bias = additive_bias.transpose(0, 1, 4, 2, 3)
-        additive_bias = additive_bias + make_additive_mask(block_mask)[:, :, None, :, :]
+        additive_bias = additive_bias + make_additive_mask(block_mask, dtype=additive_bias.dtype)[:, :, None, :, :]
         q = q + self.q_bias[None, None, :, None, :]
         q_flat = q.reshape(b * num_blocks, self.num_heads, 32, self.head_dim)
         k_flat = k.reshape(b * num_blocks, self.num_heads, 128, self.head_dim)
@@ -119,7 +119,7 @@ class LocalAttentionPairBiasBlock(nn.Module):
 class LocalAtomTransformer(nn.Module):
     def __init__(self, dim: int, pair_dim: int, cond_dim: int, num_blocks: int, num_heads: int, head_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
-        self.pair_norm = nn.LayerNorm(pair_dim, eps=eps)
+        self.pair_norm = FP32LayerNorm(pair_dim, eps=eps)
         self.blocked_pairs2blocked_bias = nn.Linear(pair_dim, num_blocks * num_heads, bias=False)
         self.attn_blocks = [
             LocalAttentionPairBiasBlock(dim, cond_dim, num_heads, head_dim, eps=eps)
@@ -159,7 +159,7 @@ class TokenInputAtomEncoder(nn.Module):
     def __init__(self, atom_dim: int, pair_dim: int, token_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
         self.to_atom_cond = nn.Linear(atom_dim, atom_dim, bias=False)
-        self.cond_layer_norm = nn.LayerNorm(atom_dim, eps=eps, affine=False)
+        self.cond_layer_norm = FP32LayerNorm(atom_dim, eps=eps, affine=False)
         self.pair_update_block = PairUpdateBlock(atom_dim, pair_dim, eps=eps)
         self.atom_transformer = LocalAtomTransformer(
             atom_dim,
@@ -218,9 +218,9 @@ class DiffusionAtomAttentionEncoder(nn.Module):
     def __init__(self, atom_dim: int, pair_dim: int, token_dim: int, diffusion_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
         self.to_atom_cond = nn.Linear(atom_dim, atom_dim, bias=False)
-        self.token_to_atom_single_norm = nn.LayerNorm(token_dim, eps=eps)
+        self.token_to_atom_single_norm = FP32LayerNorm(token_dim, eps=eps)
         self.token_to_atom_single = nn.Linear(token_dim, atom_dim, bias=False)
-        self.cond_layer_norm = nn.LayerNorm(atom_dim, eps=eps, affine=False)
+        self.cond_layer_norm = FP32LayerNorm(atom_dim, eps=eps, affine=False)
         self.prev_pos_embed = nn.Linear(3, atom_dim, bias=False)
         self.pair_update_block = PairUpdateBlock(atom_dim, pair_dim, eps=eps)
         self.atom_transformer = LocalAtomTransformer(
@@ -273,9 +273,10 @@ class DiffusionAtomAttentionEncoder(nn.Module):
         atom_init = mx.broadcast_to(
             atom_cond_raw[:, None, :, :], (b, ds, n_atoms, atom_cond_raw.shape[-1])
         ).reshape(b * ds, n_atoms, atom_cond_raw.shape[-1])
-        atom_single = atom_init + self.prev_pos_embed(
-            coords.reshape(b * ds, coords.shape[-2], 3)
+        pos_embed = self.prev_pos_embed(
+            coords.reshape(b * ds, coords.shape[-2], 3).astype(mx.float32)
         )
+        atom_single = atom_init + pos_embed.astype(atom_init.dtype)
 
         cond = mx.broadcast_to(
             atom_single_cond[:, None, :, :], (b, ds, n_atoms, atom_single_cond.shape[-1])
@@ -325,7 +326,7 @@ class DiffusionAtomAttentionDecoder(nn.Module):
             head_dim=32,
             eps=eps,
         )
-        self.output_norm = nn.LayerNorm(atom_dim, eps=eps)
+        self.output_norm = FP32LayerNorm(atom_dim, eps=eps)
         self.to_pos_updates = nn.Linear(atom_dim, 3, bias=False)
 
     def __call__(

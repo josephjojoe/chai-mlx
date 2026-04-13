@@ -39,6 +39,7 @@ from chai_mlx.data.types import (
     StructureInputs,
     TrunkOutputs,
 )
+from chai_mlx.utils import resolve_dtype
 from layer_parity import (
     _mx_array,
     _npz_dict,
@@ -55,30 +56,32 @@ from layer_parity import (
 # Reconstruction helpers
 # ---------------------------------------------------------------------------
 
-def _ref(ref: dict[str, np.ndarray], key: str) -> mx.array:
-    return mx.array(ref[key])
+def _ref(ref: dict[str, np.ndarray], key: str, dtype: mx.Dtype = mx.float32) -> mx.array:
+    arr = mx.array(ref[key])
+    return arr.astype(dtype) if arr.dtype != dtype else arr
 
 
 def reconstruct_embedding_outputs(
     ref: dict[str, np.ndarray],
     structure: StructureInputs,
+    dtype: mx.Dtype = mx.float32,
 ) -> EmbeddingOutputs:
     """Build ``EmbeddingOutputs`` from TorchScript reference tensors."""
     p = "embedding.outputs"
     return EmbeddingOutputs(
-        token_single_input=_ref(ref, f"{p}.token_single_input"),
-        token_pair_input=_ref(ref, f"{p}.token_pair_input"),
-        token_pair_structure_input=_ref(ref, f"{p}.token_pair_structure_input"),
-        atom_single_input=_ref(ref, f"{p}.atom_single_input"),
-        atom_single_structure_input=_ref(ref, f"{p}.atom_single_structure_input"),
-        atom_pair_input=_ref(ref, f"{p}.atom_pair_input"),
-        atom_pair_structure_input=_ref(ref, f"{p}.atom_pair_structure_input"),
-        msa_input=_ref(ref, f"{p}.msa_input"),
-        template_input=_ref(ref, f"{p}.template_input"),
-        single_initial=_ref(ref, f"{p}.single_initial"),
-        single_structure=_ref(ref, f"{p}.single_structure"),
-        pair_initial=_ref(ref, f"{p}.pair_initial"),
-        pair_structure=_ref(ref, f"{p}.pair_structure"),
+        token_single_input=_ref(ref, f"{p}.token_single_input", dtype),
+        token_pair_input=_ref(ref, f"{p}.token_pair_input", dtype),
+        token_pair_structure_input=_ref(ref, f"{p}.token_pair_structure_input", dtype),
+        atom_single_input=_ref(ref, f"{p}.atom_single_input", dtype),
+        atom_single_structure_input=_ref(ref, f"{p}.atom_single_structure_input", dtype),
+        atom_pair_input=_ref(ref, f"{p}.atom_pair_input", dtype),
+        atom_pair_structure_input=_ref(ref, f"{p}.atom_pair_structure_input", dtype),
+        msa_input=_ref(ref, f"{p}.msa_input", dtype),
+        template_input=_ref(ref, f"{p}.template_input", dtype),
+        single_initial=_ref(ref, f"{p}.single_initial", dtype),
+        single_structure=_ref(ref, f"{p}.single_structure", dtype),
+        pair_initial=_ref(ref, f"{p}.pair_initial", dtype),
+        pair_structure=_ref(ref, f"{p}.pair_structure", dtype),
         structure_inputs=structure,
     )
 
@@ -86,20 +89,21 @@ def reconstruct_embedding_outputs(
 def reconstruct_trunk_outputs(
     ref: dict[str, np.ndarray],
     structure: StructureInputs,
+    dtype: mx.Dtype = mx.float32,
 ) -> TrunkOutputs:
     """Build ``TrunkOutputs`` from TorchScript reference tensors."""
     p = "trunk.outputs"
     return TrunkOutputs(
-        single_initial=_ref(ref, f"{p}.single_initial"),
-        single_trunk=_ref(ref, f"{p}.single_trunk"),
-        single_structure=_ref(ref, f"{p}.single_structure"),
-        pair_initial=_ref(ref, f"{p}.pair_initial"),
-        pair_trunk=_ref(ref, f"{p}.pair_trunk"),
-        pair_structure=_ref(ref, f"{p}.pair_structure"),
-        atom_single_structure_input=_ref(ref, f"{p}.atom_single_structure_input"),
-        atom_pair_structure_input=_ref(ref, f"{p}.atom_pair_structure_input"),
-        msa_input=_ref(ref, f"{p}.msa_input"),
-        template_input=_ref(ref, f"{p}.template_input"),
+        single_initial=_ref(ref, f"{p}.single_initial", dtype),
+        single_trunk=_ref(ref, f"{p}.single_trunk", dtype),
+        single_structure=_ref(ref, f"{p}.single_structure", dtype),
+        pair_initial=_ref(ref, f"{p}.pair_initial", dtype),
+        pair_trunk=_ref(ref, f"{p}.pair_trunk", dtype),
+        pair_structure=_ref(ref, f"{p}.pair_structure", dtype),
+        atom_single_structure_input=_ref(ref, f"{p}.atom_single_structure_input", dtype),
+        atom_pair_structure_input=_ref(ref, f"{p}.atom_pair_structure_input", dtype),
+        msa_input=_ref(ref, f"{p}.msa_input", dtype),
+        template_input=_ref(ref, f"{p}.template_input", dtype),
         structure_inputs=structure,
     )
 
@@ -195,9 +199,10 @@ def run_trunk_isolation(
     print("\n" + "=" * 60)
     print("TRUNK ISOLATION TEST")
     print("=" * 60)
-    print("Feeding TorchScript embedding outputs -> MLX trunk")
+    dtype = resolve_dtype(model.cfg)
+    print(f"Feeding TorchScript embedding outputs -> MLX trunk (dtype={dtype})")
 
-    ref_emb = reconstruct_embedding_outputs(ref, structure)
+    ref_emb = reconstruct_embedding_outputs(ref, structure, dtype=dtype)
     trunk_tensors: dict[str, np.ndarray] = {}
     trunk_out = capture_trunk(
         model, ref_emb, recycles=recycles, tensors=trunk_tensors,
@@ -245,9 +250,10 @@ def run_diffusion_isolation(
     print("\n" + "=" * 60)
     print("DIFFUSION ISOLATION TEST")
     print("=" * 60)
-    print("Feeding TorchScript trunk outputs -> MLX diffusion")
+    dtype = resolve_dtype(model.cfg)
+    print(f"Feeding TorchScript trunk outputs -> MLX diffusion (dtype={dtype})")
 
-    ref_trunk = reconstruct_trunk_outputs(ref, structure)
+    ref_trunk = reconstruct_trunk_outputs(ref, structure, dtype=dtype)
 
     cache_tensors: dict[str, np.ndarray] = {}
     cache = capture_cache(model, ref_trunk, tensors=cache_tensors)
@@ -303,9 +309,10 @@ def run_confidence_isolation(
     print("\n" + "=" * 60)
     print("CONFIDENCE ISOLATION TEST")
     print("=" * 60)
-    print("Feeding TorchScript trunk outputs -> MLX confidence head")
+    dtype = resolve_dtype(model.cfg)
+    print(f"Feeding TorchScript trunk outputs -> MLX confidence head (dtype={dtype})")
 
-    ref_trunk = reconstruct_trunk_outputs(ref, structure)
+    ref_trunk = reconstruct_trunk_outputs(ref, structure, dtype=dtype)
 
     conf_tensors: dict[str, np.ndarray] = {}
     capture_confidence(model, ref_trunk, coords, tensors=conf_tensors)

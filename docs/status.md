@@ -1,15 +1,16 @@
 # Port status
 
-Authoritative status page for `chai_mlx`. Last updated after the diffusion
-module parity push (April 2026).
+Authoritative status page for `chai_mlx`. Last updated after the bf16
+mixed-precision implementation (April 2026).
 
 ## Current state
 
-The port is **structurally complete**. Every module has been traced against the
-TorchScript graph dumps in `findings/graphs/`, and all identified structural
-bugs have been fixed. The model loads real weights, runs end-to-end on real
-FASTA inputs, and every stage is individually faithful when tested in isolation
-with reference inputs.
+The port is **structurally complete** and runs in **bfloat16 mixed precision**,
+matching the TorchScript reference's precision profile. Every module has been
+traced against the TorchScript graph dumps in `findings/graphs/`, and all
+identified structural bugs have been fixed. The model loads real weights, runs
+end-to-end on real FASTA inputs, and every stage is individually faithful when
+tested in isolation with reference inputs.
 
 ### Isolation parity (each module fed TorchScript reference inputs)
 
@@ -17,42 +18,78 @@ with reference inputs.
 |--------|--------|-------|
 | Feature embedding | 0.3–0.5% rel | Precision-limited; all encoding paths verified |
 | Token embedder | max 0.05 abs on `single_initial` | 5 structural bugs fixed + parallel residual |
-| Diffusion module | **2.0% rel** on `denoise.output` | Conditioning, transformer, encoder, decoder all verified |
-| Confidence head | 13–59% rel on logits | Structurally correct; error from pairformer amplification |
-| Trunk (pairformer) | max=1069 on `pair_trunk` | Structurally correct; 48-block precision amplification |
+| Diffusion module | max 8.4 abs on `denoise.output` | Conditioning, transformer, encoder, decoder all verified |
+| Confidence head | max 2.9–8.4 abs on logits; argmax agreement 99.6–100% | Structurally correct; error from pairformer amplification |
+| Trunk (pairformer) | max≈1060 on `pair_trunk` | Structurally correct; chaotic amplification (see below) |
 
 ### End-to-end (full MLX pipeline)
 
-When running the full pipeline, the trunk's precision amplification cascades
+When running the full pipeline, the trunk's chaotic amplification cascades
 downstream. This is not a structural bug — each pairformer block is
-individually faithful, but tiny float32 vs bfloat16 differences compound
-exponentially across 48 sequential blocks.
+individually faithful, but tiny per-operation differences between Metal and
+PyTorch compound exponentially across 48 sequential blocks.
 
-## Known numerical gap
+## Root cause: chaotic amplification, not precision mismatch
 
-TorchScript runs most activations in **bfloat16** (7-bit mantissa), casting to
-float32 only for sensitive operations (e.g. `prev_pos_embed`, LayerNorms). The
-MLX port runs everything in **float32** (23-bit mantissa). The results aren't
-wrong — they're computed at higher precision — but the intermediate values
-diverge from the reference after deep sequential processing.
+**The trunk error is NOT caused by fp32 vs bf16 precision differences.** This
+was empirically confirmed by running the MLX trunk in both bf16 and fp32 against
+the same PyTorch bf16 reference:
 
-This affects:
-- **Trunk**: 48 pairformer blocks amplify ~0.5% embedding error to max=1069
-- **Confidence head**: 4 pairformer blocks amplify to 13–59% on logits
-- **Diffusion** (in full pipeline): inherits trunk divergence as input
+| Comparison | pair max error |
+|---|---|
+| MLX bf16 vs PyTorch reference | 1060 |
+| MLX fp32 vs PyTorch reference | 1069 |
+| MLX bf16 vs MLX fp32 | **36** |
 
-In isolation (feeding reference trunk outputs), the diffusion module achieves
-2.0% relative error, confirming the module itself is faithful.
+Precision accounts for ~3% of the total error. The remaining ~97% comes from
+**compute backend differences** — MLX's Metal GPU kernels and PyTorch's
+CPU/MPS kernels produce slightly different floating-point results for the same
+operation due to different matmul reduction ordering, different kernel
+implementations, etc.
+
+### The pairformer stack is a chaotic system
+
+A sensitivity analysis perturbing the input by 1 bf16 LSB (7.8e-3) shows:
+
+| Blocks | Pair amplification | Single amplification |
+|--------|-------------------|---------------------|
+| 1 | ~1,200x | ~6,100x |
+| 4 (confidence head) | ~61,000x | ~37,000x |
+| 48 (trunk) | ~102,000x | ~81,000x |
+
+Any per-operation difference (even a single bit of rounding) gets amplified
+by ~100,000x through the full trunk. This is an inherent property of the
+48-block sequential residual architecture, not a bug.
+
+### Practical impact
+
+Despite massive intermediate divergence, discrete predictions are preserved:
+- **Confidence argmax agreement**: 99.6–100%
+- **Diffusion module** (isolated): max error 8.4 abs
+- Probability distribution TVD: 0.13–0.45 on confidence heads
+
+The numerical parity gap **cannot be closed** by precision matching or
+algorithmic changes — it is a fundamental consequence of different compute
+backends on a chaotic architecture. Validation must be done at the **structural
+output level** (RMSD, GDT on predicted PDB structures).
+
+## Mixed precision (bf16) implementation
+
+The MLX port now matches TorchScript's precision profile:
+- **Weights and activations**: bfloat16 (`compute_dtype` field in `ChaiConfig`)
+- **FP32 islands**: LayerNorm reductions (`FP32LayerNorm`), softmax, pairwise
+  distance, `prev_pos_embed`, Fourier sigma embedding, Heun correction
+  arithmetic, distance binning (confidence head)
+- **Boundary casting**: Embedding outputs cast to `compute_dtype` at model entry;
+  masks cast to tensor dtype at multiplication sites
+- Weight casting happens in `from_pretrained` via `_cast_weights`
 
 ## Path forward
 
-1. **Mixed-precision execution** — run pairformer blocks in bf16 to match
-   TorchScript's precision profile. This is the single biggest improvement for
-   numerical parity. Sensitive ops (LayerNorms, softmax, distance computations)
-   stay in fp32.
+1. ~~Mixed-precision execution~~ — **DONE**
 2. **End-to-end structure quality validation** — run inference on real FASTA
    inputs and compare predicted PDB against reference (RMSD, GDT). The model
-   likely produces reasonable structures already despite the precision gap.
+   likely produces reasonable structures despite the intermediate divergence.
 3. **MSA depth** — MLX trims empty MSA rows (16384→1 for minimal FASTA). Minor
    contributor to trunk divergence.
 

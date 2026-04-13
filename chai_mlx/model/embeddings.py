@@ -6,7 +6,7 @@ import mlx.nn as nn
 from chai_mlx.config import ChaiConfig
 from chai_mlx.nn.layers.atom_attention import TokenInputAtomEncoder
 from chai_mlx.data.types import EmbeddingOutputs, FeatureContext, RawFeatures, StructureInputs
-from chai_mlx.utils import chunk_last
+from chai_mlx.utils import chunk_last, resolve_dtype
 
 
 # ── per-feature encoding specs ────────────────────────────────────────────
@@ -313,6 +313,7 @@ class InputEmbedder(nn.Module):
     def __init__(self, cfg: ChaiConfig) -> None:
         super().__init__()
         self.cfg = cfg
+        self._compute_dtype = resolve_dtype(cfg)
         self.feature_embedding = FeatureEmbedding(cfg)
         self.bond_projection = BondProjection(cfg)
         self.token_input = TokenInputEmbedding(cfg)
@@ -395,6 +396,10 @@ class InputEmbedder(nn.Module):
             bond_trunk, bond_structure = self.bond_projection(bond_adjacency)
             feats["token_pair_trunk"] = feats["token_pair_trunk"] + bond_trunk
             feats["token_pair_structure"] = feats["token_pair_structure"] + bond_structure
+
+        dt = self._compute_dtype
+        if dt != mx.float32:
+            feats = {k: v.astype(dt) for k, v in feats.items()}
 
         structure = ctx.structure_inputs
         single_initial, single_structure, pair_initial = self.token_input(

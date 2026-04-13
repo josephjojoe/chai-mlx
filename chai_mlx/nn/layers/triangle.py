@@ -3,17 +3,18 @@ from __future__ import annotations
 import mlx.core as mx
 import mlx.nn as nn
 
+from chai_mlx.nn.layers.common import FP32LayerNorm
 from chai_mlx.utils import make_additive_mask, merge_heads, sigmoid
 
 
 class TriangleMultiplication(nn.Module):
     def __init__(self, pair_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
-        self.layernorm_z_in = nn.LayerNorm(pair_dim, eps=eps)
+        self.layernorm_z_in = FP32LayerNorm(pair_dim, eps=eps)
         self.merged_linear_p = nn.Linear(pair_dim, 4 * pair_dim, bias=False)
         self.merged_linear_g = nn.Linear(pair_dim, 5 * pair_dim, bias=False)
-        self.layernorm_out = nn.LayerNorm(pair_dim, eps=eps, affine=False)
-        self.layernorm_in = nn.LayerNorm(pair_dim, eps=eps, affine=False)
+        self.layernorm_out = FP32LayerNorm(pair_dim, eps=eps, affine=False)
+        self.layernorm_in = FP32LayerNorm(pair_dim, eps=eps, affine=False)
         self.linear_z_out = nn.Linear(pair_dim, pair_dim, bias=False)
 
     _CHUNK_SIZE: int = 32
@@ -87,7 +88,7 @@ class TriangleAttention(nn.Module):
 
     def __init__(self, pair_dim: int, num_heads: int, head_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
-        self.pair_norm = nn.LayerNorm(pair_dim, eps=eps, affine=False)
+        self.pair_norm = FP32LayerNorm(pair_dim, eps=eps, affine=False)
         self.pair2b = nn.Linear(pair_dim, 2 * num_heads, bias=False)
         self.pair2qkvg1 = nn.Linear(pair_dim, 4 * num_heads * head_dim, bias=False)
         self.pair2qkvg2 = nn.Linear(pair_dim, 4 * num_heads * head_dim, bias=False)
@@ -136,7 +137,7 @@ class TriangleAttention(nn.Module):
             if row_mask_bool is not None:
                 pm_c = row_mask_bool[:, start:end]
                 attn_mask = (pm_c[:, :, :, None] & pm_c[:, :, None, :])
-                mask_c = mask_c + make_additive_mask(attn_mask.reshape(b * c, 1, n, n))
+                mask_c = mask_c + make_additive_mask(attn_mask.reshape(b * c, 1, n, n), dtype=mask_c.dtype)
             attn_c = mx.fast.scaled_dot_product_attention(
                 q_c, k_c, v_c, scale=D ** -0.5, mask=mask_c,
             )
@@ -200,7 +201,7 @@ class ConfidenceTriangleAttention(nn.Module):
 
     def __init__(self, pair_dim: int, num_heads: int, head_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
-        self.pair_norm = nn.LayerNorm(pair_dim, eps=eps)
+        self.pair_norm = FP32LayerNorm(pair_dim, eps=eps)
         qkvg_dim = 2 * 4 * num_heads * head_dim
         bias_dim = 2 * num_heads
         self.pair2qkvgb = nn.Linear(pair_dim, qkvg_dim + bias_dim, bias=False)
@@ -223,7 +224,7 @@ class ConfidenceTriangleAttention(nn.Module):
         bias = bias_proj.reshape(b, n, n, 2, H).transpose(0, 3, 4, 1, 2)
         if pair_mask is not None:
             pm = pair_mask.reshape(b, 1, 1, n, n)
-            bias = mx.where(pm, bias, -10000.0)
+            bias = mx.where(pm, bias, mx.array(-10000.0, dtype=bias.dtype))
         bias_s = bias[:, 0]
         bias_e = bias[:, 1]
         mx.eval(bias_s, bias_e)

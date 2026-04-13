@@ -5,7 +5,7 @@ import mlx.nn as nn
 
 from chai_mlx.config import ChaiConfig
 from chai_mlx.nn.layers.attention import MSAPairWeightedAveraging
-from chai_mlx.nn.layers.common import Transition
+from chai_mlx.nn.layers.common import FP32LayerNorm, Transition
 from chai_mlx.nn.layers.pairformer import PairformerBlock, PairformerStack
 from chai_mlx.data.types import EmbeddingOutputs, TrunkOutputs
 from chai_mlx.utils import masked_mean
@@ -14,7 +14,7 @@ from chai_mlx.utils import masked_mean
 class RecycleProjection(nn.Module):
     def __init__(self, dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
-        self.norm = nn.LayerNorm(dim, eps=eps)
+        self.norm = FP32LayerNorm(dim, eps=eps)
         self.proj = nn.Linear(dim, dim, bias=False)
 
     def __call__(self, x: mx.array) -> mx.array:
@@ -37,7 +37,7 @@ class TemplateEmbedder(nn.Module):
         tdim = cfg.hidden.template_pair
         # proj_in takes the pair representation (pair_dim == max_templates * tdim
         # by coincidence, both 256) and projects to template_pair dim.
-        self.proj_in_norm = nn.LayerNorm(cfg.hidden.token_pair, eps=cfg.layer_norm_eps)
+        self.proj_in_norm = FP32LayerNorm(cfg.hidden.token_pair, eps=cfg.layer_norm_eps)
         self.proj_in = nn.Linear(cfg.hidden.token_pair, tdim, bias=False)
         self.blocks = [
             PairformerBlock(
@@ -49,7 +49,7 @@ class TemplateEmbedder(nn.Module):
             )
             for _ in range(cfg.templates.num_blocks)
         ]
-        self.template_layernorm = nn.LayerNorm(tdim, eps=cfg.layer_norm_eps)
+        self.template_layernorm = FP32LayerNorm(tdim, eps=cfg.layer_norm_eps)
         self.proj_out = nn.Linear(tdim, cfg.hidden.token_pair, bias=False)
 
     def __call__(
@@ -88,9 +88,9 @@ class TemplateEmbedder(nn.Module):
         normed = self.template_layernorm(stacked)
 
         if combined_mask is not None:
-            normed = normed * combined_mask[..., None]
+            normed = normed * combined_mask.astype(normed.dtype)[..., None]
 
-        averaged = normed.sum(axis=1) / n_valid[:, None, None, None]
+        averaged = normed.sum(axis=1) / n_valid.astype(normed.dtype)[:, None, None, None]
         return pair + self.proj_out(nn.relu(averaged))
 
 
@@ -115,9 +115,9 @@ class OuterProductMean(nn.Module):
 
     def __init__(self, msa_dim: int, pair_dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
-        self.norm = nn.LayerNorm(msa_dim, eps=eps, affine=False)
+        self.norm = FP32LayerNorm(msa_dim, eps=eps, affine=False)
         self.weight_ab = mx.zeros((2, 8, 8, msa_dim), dtype=mx.float32)
-        self.ln_out = nn.LayerNorm(512, eps=eps)
+        self.ln_out = FP32LayerNorm(512, eps=eps)
         self.linear_out = nn.Linear(512, pair_dim, bias=True)
 
     def __call__(self, msa: mx.array, msa_mask: mx.array | None = None) -> mx.array:
