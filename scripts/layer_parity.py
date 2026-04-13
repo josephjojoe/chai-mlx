@@ -656,7 +656,10 @@ def main(argv: Iterable[str] | None = None) -> None:
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    model = ChaiMLX.from_pretrained(args.weights_dir, strict=True)
+    # strict=False: confidence_head.atom_distance_v_bins is a hardcoded
+    # config tensor (distance bin edges), not a learned weight.  It lives in
+    # the model but is absent from the safetensors index.
+    model = ChaiMLX.from_pretrained(args.weights_dir, strict=False)
     ctx, extras = load_feature_context(args.input_npz)
     actual = capture_model_tensors(
         model,
