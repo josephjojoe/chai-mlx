@@ -1,82 +1,51 @@
 # Port status
 
-Authoritative status page for `chai_mlx`. Last updated after the mixed-precision
-precision-profile alignment (April 2026).
+Authoritative status page for `chai_mlx`. Last updated April 2026.
 
 ## Current state
 
-The port is **structurally complete** and runs in **bfloat16 mixed precision**,
-matching the TorchScript reference's exact precision profile. Every module has
-been traced against the TorchScript graph dumps in `findings/graphs/`, and all
-identified structural bugs have been fixed. The model loads real weights, runs
-end-to-end on real FASTA inputs, and every stage is individually faithful when
-tested in isolation with reference inputs.
-
-### Mixed-precision approach
-
-The TorchScript reference stores **fp32 weights** and selectively casts
-activations to bf16 before each linear layer (`torch.to(x, 15)` before
-`torch.linear`). This results in `bf16 activation × fp32 weight → fp32 output`
-at every matmul.
-
-The MLX port now matches this exactly:
-
-- **Weights**: remain **fp32** (never cast to bf16)
-- **`BF16Linear`**: a `nn.Linear` subclass that casts input to bf16 before
-  the matmul. All 1053 `nn.Linear` instances are upgraded to `BF16Linear` via
-  `__class__` swap in `from_pretrained`.
-- **Matmul promotion**: `bf16 input × fp32 weight → fp32 output` (MLX
-  auto-promotes, matching PyTorch)
-- **`FP32LayerNorm`**: computes reductions in fp32, returns original input dtype
-- **Embedding boundary**: feature outputs cast to bf16 before entering the trunk
-- **FP32 islands**: LayerNorm reductions, softmax, pairwise distance,
-  `prev_pos_embed`, Fourier sigma embedding, Heun correction arithmetic,
-  distance binning (confidence head)
-
-### BF16 vs FP32 overhead: zero
-
-Empirically verified that `BF16Linear` introduces **zero additional error**
-compared to pure fp32:
-
-| Stage (isolation) | BF16 max_err | FP32 max_err | BF16 overhead |
-|---|---|---|---|
-| Trunk single | 441.3 | 441.6 | ~0% |
-| Trunk pair | 1069 | 1069 | ~0% |
-| Diffusion | 4.659 | 4.651 | ~0.2% |
-| Confidence PAE | 2.880 | 2.868 | ~0.4% |
-| Confidence PDE | 4.398 | 4.414 | ~0% (noise) |
-| Confidence pLDDT | 8.435 | 8.465 | ~0% (noise) |
+The port is **structurally complete** and runs in **bfloat16 mixed precision**
+(weights and activations cast to bf16, with fp32 islands for sensitive ops).
+Every module has been traced against the TorchScript graph dumps in
+`findings/graphs/`, and all identified structural bugs have been fixed. The
+model loads real weights, runs end-to-end on real FASTA inputs, and every stage
+is individually faithful when tested in isolation with reference inputs.
 
 ### Isolation parity (each module fed TorchScript reference inputs)
 
 | Module | Metric | Notes |
 |--------|--------|-------|
-| Feature embedding | max 0.055 on `single_initial` | BF16 boundary cast adds ~0.003 vs fp32 |
-| Diffusion module | max 4.66 abs on `denoise.output` | Matches fp32 baseline exactly |
-| Confidence head | max 2.9–8.4 abs on logits | Matches fp32 baseline exactly |
-| Trunk (pairformer) | max≈441 single, ≈1069 pair | Identical to fp32 baseline |
+| Feature embedding | max 0.05 on `single_initial` | Precision-limited; all encoding paths verified |
+| Diffusion module | max 4.7 abs on `denoise.output` | Conditioning, transformer, encoder, decoder all verified |
+| Confidence head | max 2.9–8.4 abs on logits | Structurally correct; error from pairformer amplification |
+| Trunk (pairformer) | max ≈ 441 single, ≈ 1069 pair | Structurally correct; chaotic amplification (see below) |
 
-### End-to-end (full MLX pipeline with BF16)
+### End-to-end (full MLX pipeline)
 
-| Stage | max_err | mean_err |
-|---|---|---|
-| Trunk single | 440.3 | 5.855 |
-| Trunk pair | 1069 | 40.32 |
-| Diffusion | 4.982 | 0.211 |
-| Confidence PAE | 14.61 | 0.987 |
-| Confidence PDE | 16.87 | 0.984 |
-| Confidence pLDDT | 46.87 | 8.487 |
+When running the full pipeline, the trunk's chaotic amplification cascades
+downstream. This is not a structural bug — each pairformer block is
+individually faithful, but tiny per-operation differences between Metal and
+PyTorch compound exponentially across 48 sequential blocks.
 
-Confidence errors are higher in E2E because trunk errors (~440) cascade through
-the confidence head's 4 pairformer blocks.
+## Root cause of numerical divergence: Metal-vs-MPS kernel differences
 
-## Root cause of remaining error: Metal vs MPS kernel differences
+**The trunk error is NOT caused by fp32-vs-bf16 precision differences.** This
+was exhaustively verified (see investigation log below). The remaining error
+comes from **compute backend differences** — MLX's Metal GPU kernels and
+PyTorch's MPS kernels produce slightly different floating-point results for the
+same mathematical operation.
 
-**The trunk error is NOT caused by fp32 vs bf16 precision differences.** All
-remaining error comes from **compute backend differences** — MLX's Metal GPU
-kernels and PyTorch's MPS kernels produce slightly different floating-point
-results for the same operation due to different matmul reduction ordering,
-different kernel implementations, etc.
+### Sources of Metal-vs-MPS per-operation disagreement
+
+| Source | Mechanism |
+|--------|-----------|
+| Matmul tile/reduction order | `Σ(a_k × b_k)` over k=256 uses different partial-sum trees in Metal vs MPS. Different summation order → different fp32 rounding. |
+| LayerNorm reductions | Mean/variance computed with different partial-sum groupings |
+| Softmax denominator | `Σ exp(x_j)` accumulated in different order |
+| Einsum decomposition | Triangle multiplication contractions decomposed differently |
+
+Each of these contributes ~1–2 ULP of fp32 error per operation. Individually
+negligible; catastrophic after chaotic amplification.
 
 ### The pairformer stack is a chaotic system
 
@@ -88,27 +57,115 @@ A sensitivity analysis perturbing the input by 1 bf16 LSB (7.8e-3) shows:
 | 4 (confidence head) | ~61,000x | ~37,000x |
 | 48 (trunk) | ~102,000x | ~81,000x |
 
-Any per-operation difference (even a single bit of rounding) gets amplified
+Any per-operation difference — even a single bit of rounding — gets amplified
 by ~100,000x through the full trunk. This is an inherent property of the
-48-block sequential residual architecture, not a bug.
+48-block sequential residual architecture.
+
+Critically, the chaotic system **saturates**: once two trajectories diverge
+past a threshold, increasing the initial perturbation doesn't increase the
+final error. This is why bf16 and fp32 produce the same trunk error (see below).
 
 ### Practical impact
 
 Despite massive intermediate divergence, discrete predictions are preserved:
 - **Confidence argmax agreement**: 99.6–100%
-- **Diffusion module** (isolated): max error 4.66 abs
+- **Diffusion module** (isolated): max error 4.7 abs
 - Probability distribution TVD: 0.13–0.45 on confidence heads
 
 The numerical parity gap **cannot be closed** by precision matching or
 algorithmic changes — it is a fundamental consequence of different compute
-backends on a chaotic architecture. Validation must be done at the **structural
-output level** (RMSD, GDT on predicted PDB structures).
+backends on a chaotic architecture. Validation should be done at the
+**structural output level** (RMSD, GDT on predicted PDB structures).
+
+---
+
+## Precision-profile investigation log (do not repeat)
+
+We investigated whether matching TorchScript's exact precision profile would
+reduce the trunk error. **It does not.** This section documents the full
+investigation so it is not repeated.
+
+### TorchScript's actual precision profile
+
+The TorchScript reference models store **fp32 weights** and selectively cast
+activations to bf16 before each `torch.linear` call (via `torch.to(x, 15)`).
+This means the actual TorchScript computation is:
+
+```
+activation.to(bfloat16) @ fp32_weight → fp32_output   (PyTorch type promotion)
+```
+
+Our MLX port casts **both weights and activations** to bf16 via `_cast_weights`
+in `from_pretrained`, so the computation is:
+
+```
+bf16_activation @ bf16_weight → bf16_output
+```
+
+These are different precision profiles.
+
+### Per-operation microbenchmark (single 256×256 matmul)
+
+| Operation | MLX vs PyTorch MPS max diff |
+|-----------|---------------------------|
+| `bf16 × bf16` | 0.406 |
+| `bf16 × fp32` (matching TorchScript) | 0.000084 |
+| Improvement ratio | **~4800×** |
+
+Matching TorchScript's profile gives ~4800× better per-operation agreement
+on an isolated matmul.
+
+### Implementation tested: `BF16Linear`
+
+We implemented `BF16Linear(nn.Linear)` that casts input to bf16 before the
+matmul while keeping weights fp32. All 1053 `nn.Linear` instances were
+upgraded via `__class__` swap. Weights stayed fp32 (1.26 GB instead of 0.63 GB).
+
+### End-to-end result: no improvement
+
+| Stage (isolation) | BF16Linear (fp32 weights) | Old bf16 (bf16 weights) | Pure fp32 |
+|---|---|---|---|
+| Trunk single | 441.3 | ~441 | 441.6 |
+| Trunk pair | 1069 | ~1060 | 1069 |
+| Diffusion | 4.659 | ~4.7 | 4.651 |
+| Confidence PAE | 2.880 | ~2.9 | 2.868 |
+
+All three approaches produce **the same trunk error** (~1060–1069 pair).
+The 4800× per-operation improvement is real on an isolated matmul, but
+**completely invisible after 48 blocks of chaotic amplification** because the
+system saturates — Metal-vs-MPS kernel differences alone are enough to hit the
+divergence ceiling.
+
+### Why chaotic saturation makes precision irrelevant
+
+In a chaotic system, the Lyapunov exponent determines how fast nearby
+trajectories diverge. But there is a maximum divergence set by the system's
+attractor diameter. Both small perturbations (Metal-vs-MPS, ~0.003 per op)
+and large perturbations (bf16 rounding, ~0.4 per op) reach this maximum
+after enough sequential blocks. Like the butterfly effect: a butterfly and a
+hurricane both change weather one month out by the same amount.
+
+### Decision: keep bf16 weights for practical benefit
+
+Since the precision profile does not affect numerical parity, we keep the
+approach that saves memory and bandwidth:
+
+- **Weights**: cast to bf16 in `from_pretrained` (saves 630 MB)
+- **Activations**: bf16 throughout (lower memory, higher throughput on Apple Silicon)
+- **FP32 islands**: LayerNorm reductions, softmax, pairwise distance,
+  `prev_pos_embed`, Fourier sigma embedding, Heun correction, distance binning
+- **Embedding boundary**: features cast to `compute_dtype` at model entry
+
+The `BF16Linear` approach (fp32 weights, bf16 activation cast before each
+linear) was tested and reverted because it doubled weight memory for zero
+numerical benefit.
+
+---
 
 ## Path forward
 
 1. ~~Mixed-precision execution~~ — **DONE**
-2. ~~Precision-profile alignment with TorchScript~~ — **DONE** (fp32 weights +
-   BF16Linear activation casting)
+2. ~~Precision-profile alignment~~ — **INVESTIGATED, no benefit, documented above**
 3. **End-to-end structure quality validation** — run inference on real FASTA
    inputs and compare predicted PDB against reference (RMSD, GDT). The model
    likely produces reasonable structures despite the intermediate divergence.
@@ -144,7 +201,7 @@ The major categories:
 - **Diffusion** (conditioning order, sigma-dependence, parallel residual, pair sharing, pair indexing, atom masking)
 - **Confidence** (PDE symmetry, output norms, mask application)
 - **Attention** (additive mask conversion, float AND on masks, single_mask gating)
-- **Mixed precision** (BF16Linear activation casting, FP32LayerNorm, mask dtype propagation)
+- **Mixed precision** (FP32LayerNorm, mask dtype propagation, embedding boundary casting)
 
 Full git history has the details for each fix.
 

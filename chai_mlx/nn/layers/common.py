@@ -10,19 +10,6 @@ from chai_mlx.nn.kernels.elementwise import fused_adaln_full, fused_gated_residu
 from chai_mlx.utils import chunk_last, sigmoid, silu
 
 
-class BF16Linear(nn.Linear):
-    """Linear that casts its input to bfloat16 before the matmul.
-
-    Matches TorchScript's ``torch.to(x, 15)`` before every
-    ``torch.linear`` call: the activation is rounded to bf16 while
-    the weight stays fp32, so the matmul promotes to fp32 output.
-    When the model runs in pure float32 this class is never used.
-    """
-
-    def __call__(self, x: mx.array) -> mx.array:
-        return super().__call__(x.astype(mx.bfloat16))
-
-
 class FP32LayerNorm(nn.LayerNorm):
     """LayerNorm that always computes reductions in float32.
 

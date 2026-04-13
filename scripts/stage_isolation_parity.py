@@ -250,9 +250,10 @@ def run_diffusion_isolation(
     print("\n" + "=" * 60)
     print("DIFFUSION ISOLATION TEST")
     print("=" * 60)
-    print("Feeding TorchScript trunk outputs -> MLX diffusion (fp32 trunk outputs)")
+    dtype = resolve_dtype(model.cfg)
+    print(f"Feeding TorchScript trunk outputs -> MLX diffusion (dtype={dtype})")
 
-    ref_trunk = reconstruct_trunk_outputs(ref, structure, dtype=mx.float32)
+    ref_trunk = reconstruct_trunk_outputs(ref, structure, dtype=dtype)
 
     cache_tensors: dict[str, np.ndarray] = {}
     cache = capture_cache(model, ref_trunk, tensors=cache_tensors)
@@ -308,9 +309,10 @@ def run_confidence_isolation(
     print("\n" + "=" * 60)
     print("CONFIDENCE ISOLATION TEST")
     print("=" * 60)
-    print("Feeding TorchScript trunk outputs -> MLX confidence head (fp32 trunk outputs)")
+    dtype = resolve_dtype(model.cfg)
+    print(f"Feeding TorchScript trunk outputs -> MLX confidence head (dtype={dtype})")
 
-    ref_trunk = reconstruct_trunk_outputs(ref, structure, dtype=mx.float32)
+    ref_trunk = reconstruct_trunk_outputs(ref, structure, dtype=dtype)
 
     conf_tensors: dict[str, np.ndarray] = {}
     capture_confidence(model, ref_trunk, coords, tensors=conf_tensors)
