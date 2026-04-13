@@ -231,6 +231,7 @@ class DiffusionModule(nn.Module):
             decoder_cond,
             cache.blocked_pair_base,
             structure.atom_token_index,
+            structure.atom_exists_mask,
             structure.atom_kv_indices,
             structure.block_atom_pair_mask,
             use_kernel=use_kernel,

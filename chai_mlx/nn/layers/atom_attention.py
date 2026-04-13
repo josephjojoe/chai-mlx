@@ -257,16 +257,17 @@ class DiffusionAtomAttentionEncoder(nn.Module):
         blocked_pair = mx.broadcast_to(blocked_pair_base[:, None, :, :, :, :], (b, ds, *blocked_pair_base.shape[1:])).reshape(b * ds, *blocked_pair_base.shape[1:])
         kv_atoms = gather_blocked_atom_values(atom_single, kv_idx_flat)
         pair = self.pair_update_block(q_atoms, kv_atoms, blocked_pair)
+        atom_mask_flat = mx.broadcast_to(atom_mask[:, None, :], (b, ds, atom_mask.shape[-1])).reshape(b * ds, -1)
         atom_repr = self.atom_transformer(
             atom_single,
             cond,
             pair,
             kv_idx_flat,
             block_mask_flat,
+            atom_mask=atom_mask_flat,
             use_kernel=use_kernel,
         )
         atom_token_index_flat = mx.broadcast_to(atom_token_index[:, None, :], (b, ds, atom_token_index.shape[-1])).reshape(b * ds, -1)
-        atom_mask_flat = mx.broadcast_to(atom_mask[:, None, :], (b, ds, atom_mask.shape[-1])).reshape(b * ds, -1)
         token_repr = segment_mean(
             mx.maximum(self.to_token_single(atom_repr), 0),
             atom_token_index_flat,
@@ -302,6 +303,7 @@ class DiffusionAtomAttentionDecoder(nn.Module):
         atom_cond: mx.array,
         blocked_pair_base: mx.array,
         atom_token_index: mx.array,
+        atom_mask: mx.array,
         kv_idx: mx.array,
         block_mask: mx.array,
         *,
@@ -318,12 +320,14 @@ class DiffusionAtomAttentionDecoder(nn.Module):
         kv_idx_flat = mx.broadcast_to(kv_idx[:, None, :, :], (b, ds, *kv_idx.shape[1:])).reshape(b * ds, *kv_idx.shape[1:])
         block_mask_flat = mx.broadcast_to(block_mask[:, None, :, :, :], (b, ds, *block_mask.shape[1:])).reshape(b * ds, *block_mask.shape[1:])
         blocked_pair = mx.broadcast_to(blocked_pair_base[:, None, :, :, :, :], (b, ds, *blocked_pair_base.shape[1:])).reshape(b * ds, *blocked_pair_base.shape[1:])
+        atom_mask_flat = mx.broadcast_to(atom_mask[:, None, :], (b, ds, atom_mask.shape[-1])).reshape(b * ds, -1)
         atom_repr = self.atom_transformer(
             atom_single,
             atom_cond_flat,
             blocked_pair,
             kv_idx_flat,
             block_mask_flat,
+            atom_mask=atom_mask_flat,
             use_kernel=use_kernel,
         )
         return self.to_pos_updates(self.output_norm(atom_repr)).reshape(b, ds, atom_repr.shape[1], 3)
