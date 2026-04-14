@@ -28,6 +28,7 @@ import argparse
 import gc
 import sys
 import tempfile
+import warnings
 import time
 from pathlib import Path
 
@@ -79,6 +80,11 @@ def extract_ca(coords_np, structure_inputs):
     mask = np.array(structure_inputs.atom_exists_mask.astype(mx.float32))[0]
     centre_idx = getattr(structure_inputs, "token_centre_atom_index", None)
     if centre_idx is None:
+        warnings.warn(
+            "structure_inputs.token_centre_atom_index missing; falling back to "
+            "token_reference_atom_index for Cα extraction. Regenerate the NPZ bundle.",
+            stacklevel=2,
+        )
         centre_idx = structure_inputs.token_reference_atom_index
     centre_idx = np.array(centre_idx)[0]
     tok_mask = np.array(structure_inputs.token_exists_mask.astype(mx.float32))[0]

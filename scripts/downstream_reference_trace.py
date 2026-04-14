@@ -19,6 +19,7 @@ import argparse
 import contextlib
 import math
 import sys
+import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -86,6 +87,11 @@ def _ca_median(coords: np.ndarray, structure: StructureInputs) -> float:
     atom_mask = np.array(structure.atom_exists_mask.astype(mx.float32))[0] > 0.5
     token_centre_atom_idx = getattr(structure, "token_centre_atom_index", None)
     if token_centre_atom_idx is None:
+        warnings.warn(
+            "structure.token_centre_atom_index missing; falling back to "
+            "token_reference_atom_index for Cα metric extraction. Regenerate the NPZ bundle.",
+            stacklevel=2,
+        )
         token_centre_atom_idx = structure.token_reference_atom_index
     token_centre_atom_idx = np.array(token_centre_atom_idx)[0]
     token_mask = np.array(structure.token_exists_mask.astype(mx.float32))[0] > 0.5

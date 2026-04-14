@@ -70,8 +70,8 @@ class TemplateEmbedder(nn.Module):
         else:
             combined_mask = None
 
-        if combined_mask is not None:
-            has_any = mx.any(combined_mask, axis=(-2, -1))  # (B, T)
+        if template_input_masks is not None:
+            has_any = mx.any(template_input_masks, axis=(-2, -1))  # (B, T)
             n_valid = mx.maximum(has_any.astype(mx.float32).sum(axis=1), 1.0)  # (B,)
         else:
             n_valid = mx.full((b,), float(t))

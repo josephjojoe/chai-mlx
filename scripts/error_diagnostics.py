@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import gc
 import sys
+import warnings
 from pathlib import Path
 
 import mlx.core as mx
@@ -213,9 +214,17 @@ def run_diffusion_diagnostics(
     print(f"    <2.0Å: {under_2}/{n} ({100*under_2/n:.1f}%)")
     print(f"    <5.0Å: {under_5}/{n} ({100*under_5/n:.1f}%)")
 
-    token_ref_idx = np.array(inp_data["structure_inputs.token_reference_atom_index"][0])  # (N,)
+    token_centre_idx = inp_data.get("structure_inputs.token_centre_atom_index")
+    if token_centre_idx is None:
+        warnings.warn(
+            "structure_inputs.token_centre_atom_index missing; falling back to "
+            "token_reference_atom_index for representative-atom error reporting.",
+            stacklevel=2,
+        )
+        token_centre_idx = inp_data["structure_inputs.token_reference_atom_index"]
+    token_centre_idx = np.array(token_centre_idx[0])  # (N,)
     token_mask = np.array(inp_data["structure_inputs.token_exists_mask"][0]) > 0.5
-    ca_indices = token_ref_idx[token_mask].astype(int)
+    ca_indices = token_centre_idx[token_mask].astype(int)
     ca_err = per_atom_err[ca_indices]
     print(f"\n  Representative atom (Cα-like) error (n={len(ca_err)}):")
     pcts_ca = [10, 25, 50, 75, 90, 95, 100]

@@ -336,25 +336,24 @@ def generate_granular_reference(
                 crop_size=model_size,
             )
 
-            hook_capture.remove_all()
-
-    # Save hook captures with standardised key names
-    if hook_capture.captured:
-        print(f"  Captured {len(hook_capture.captured)} hook tensors")
-        for hook_key, arr in hook_capture.captured.items():
-            match = re.search(r"blocks\.(\d+)", hook_key)
-            if match:
-                idx = int(match.group(1))
-                if hook_key.endswith(".0"):
-                    tensors[f"trunk.recycle_{num_trunk_recycles - 1}.pairformer.block_{idx}.pair"] = arr
-                elif hook_key.endswith(".1"):
-                    tensors[f"trunk.recycle_{num_trunk_recycles - 1}.pairformer.block_{idx}.single"] = arr
-                else:
-                    tensors[f"trunk.hook.{hook_key}"] = arr
+            if hook_capture.captured:
+                print(f"  Recycle {recycle_idx}: captured {len(hook_capture.captured)} hook tensors")
+                for hook_key, arr in hook_capture.captured.items():
+                    match = re.search(r"blocks\.(\d+)", hook_key)
+                    if match:
+                        idx = int(match.group(1))
+                        if hook_key.endswith(".0"):
+                            tensors[f"trunk.recycle_{recycle_idx}.pairformer.block_{idx}.pair"] = arr
+                        elif hook_key.endswith(".1"):
+                            tensors[f"trunk.recycle_{recycle_idx}.pairformer.block_{idx}.single"] = arr
+                        else:
+                            tensors[f"trunk.recycle_{recycle_idx}.hook.{hook_key}"] = arr
+                    else:
+                        tensors[f"trunk.recycle_{recycle_idx}.hook.{hook_key}"] = arr
             else:
-                tensors[f"trunk.hook.{hook_key}"] = arr
-    else:
-        print("  [INFO] No hook tensors captured (JIT hooks may not be supported)")
+                print(f"  [INFO] Recycle {recycle_idx}: no hook tensors captured")
+
+            hook_capture.remove_all()
 
     _record(tensors, "trunk.outputs.single_initial", token_single_initial_repr)
     _record(tensors, "trunk.outputs.single_trunk", token_single_trunk_repr)

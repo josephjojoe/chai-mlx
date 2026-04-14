@@ -35,15 +35,39 @@ from chai_mlx.data.types import (
     TrunkOutputs,
 )
 from chai_mlx.io.weights.load import load_safetensors
+from chai_mlx.nn.layers.common import FP32LayerNorm
 from chai_mlx.utils import resolve_dtype
+
+
+def _preserve_fp32_param_keys(model: nn.Module) -> set[str]:
+    """Parameter keys that should remain float32 in mixed-precision mode.
+
+    TorchScript keeps affine parameters for FP32 layer norms in float32 and
+    also uses float32 ``query_bias`` / ``out_scalers`` parameters without an
+    explicit cast to bf16 before applying them.
+    """
+    keep: set[str] = set()
+    for path, module in model.named_modules():
+        prefix = f"{path}." if path else ""
+        if isinstance(module, FP32LayerNorm):
+            for name in ("weight", "bias"):
+                if hasattr(module, name):
+                    keep.add(f"{prefix}{name}")
+        for name in ("query_bias", "out_scalers"):
+            if hasattr(module, name):
+                keep.add(f"{prefix}{name}")
+    return keep
 
 
 def _cast_weights(model: nn.Module, dtype: mx.Dtype) -> None:
     """Cast all model parameters to *dtype* in-place."""
     from mlx.utils import tree_flatten
 
+    preserve_fp32 = _preserve_fp32_param_keys(model)
     pairs = []
     for k, v in tree_flatten(model.parameters()):
+        if k in preserve_fp32:
+            continue
         if isinstance(v, mx.array) and v.dtype != dtype:
             pairs.append((k, v.astype(dtype)))
     if pairs:

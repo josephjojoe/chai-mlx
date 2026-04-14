@@ -26,6 +26,7 @@ import gc
 import sys
 import tempfile
 import urllib.request
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -211,6 +212,11 @@ def predict_mlx(
     atom_mask = np.array(si.atom_exists_mask.astype(mx.float32))[0]
     token_centre_atom_idx = getattr(si, "token_centre_atom_index", None)
     if token_centre_atom_idx is None:
+        warnings.warn(
+            "structure_inputs.token_centre_atom_index missing; falling back to "
+            "token_reference_atom_index for Cα extraction.",
+            stacklevel=2,
+        )
         token_centre_atom_idx = si.token_reference_atom_index
     token_centre_atom_idx = np.array(token_centre_atom_idx)[0]
     token_mask = np.array(si.token_exists_mask.astype(mx.float32))[0]
