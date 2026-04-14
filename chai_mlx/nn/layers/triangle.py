@@ -126,11 +126,11 @@ class TriangleAttention(nn.Module):
                 z_rows = z_ln[:, :, start:end].transpose(0, 2, 1, 3)
             else:
                 z_rows = z_ln[:, start:end]  # [b, c, n, pair_dim]
-            proj_c = proj_linear(z_rows).reshape(b, c, n, 4, H, D)
-            q_c = proj_c[:, :, :, 0].transpose(0, 1, 3, 2, 4).reshape(b * c, H, n, D)
-            k_c = proj_c[:, :, :, 1].transpose(0, 1, 3, 2, 4).reshape(b * c, H, n, D)
-            v_c = proj_c[:, :, :, 2].transpose(0, 1, 3, 2, 4).reshape(b * c, H, n, D)
-            gate_chunks.append(proj_c[:, :, :, 3])  # [b, c, n, H, D]
+            proj_c = proj_linear(z_rows).reshape(b, c, n, H, 4, D)
+            q_c = proj_c[..., 0, :].transpose(0, 1, 3, 2, 4).reshape(b * c, H, n, D)
+            k_c = proj_c[..., 1, :].transpose(0, 1, 3, 2, 4).reshape(b * c, H, n, D)
+            v_c = proj_c[..., 2, :].transpose(0, 1, 3, 2, 4).reshape(b * c, H, n, D)
+            gate_chunks.append(proj_c[..., 3, :])  # [b, c, n, H, D]
             mask_c = mx.broadcast_to(
                 bias_raw[:, None, :, :, :], (b, c, H, n, n)
             ).reshape(b * c, H, n, n)
@@ -148,8 +148,10 @@ class TriangleAttention(nn.Module):
         out = mx.concatenate(out_chunks, axis=1).transpose(0, 1, 3, 2, 4)
         g = mx.concatenate(gate_chunks, axis=1)
         result = out * sigmoid(g)
-        if transpose_pair:
-            result = result.transpose(0, 2, 1, 3, 4)
+        # TorchScript keeps the ending direction in transposed spatial order
+        # (col, row) so that at position (i, j) the concatenated output
+        # pairs starting_at_(i,j) with ending_at_(col=i, row=j).  Do NOT
+        # transpose back here.
         return result
 
     def __call__(self, z: mx.array, pair_mask: mx.array | None = None) -> mx.array:
@@ -260,8 +262,6 @@ class ConfidenceTriangleAttention(nn.Module):
             out = mx.concatenate(out_chunks, axis=1).transpose(0, 1, 3, 2, 4)
             g = mx.concatenate(gate_chunks, axis=1)
             result = out * sigmoid(g)
-            if transpose:
-                result = result.transpose(0, 2, 1, 3, 4)
             return result.reshape(b, n, n, H * D)
 
         out_s = _run_direction(w_start, bias_s, transpose=False)
