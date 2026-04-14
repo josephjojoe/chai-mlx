@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import warnings
 from dataclasses import fields
 from pathlib import Path
 from typing import Iterable
@@ -108,6 +109,13 @@ def load_feature_context(path: Path) -> tuple[FeatureContext, dict[str, mx.array
         raise ValueError(
             "Missing required structure_inputs keys in input NPZ: "
             + ", ".join(missing_structure)
+        )
+    if "token_centre_atom_index" not in structure_data:
+        warnings.warn(
+            "input NPZ is missing structure_inputs.token_centre_atom_index; "
+            "regenerate the bundle with the current chai_lab_reference_dump.py "
+            "for correct Cα metrics.",
+            RuntimeWarning,
         )
 
     raw_features = {

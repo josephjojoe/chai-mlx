@@ -42,6 +42,7 @@ def test_featurize_builds_feature_context_from_raw_dict(cfg) -> None:
             "atom_token_index": ctx.structure_inputs.atom_token_index,
             "atom_within_token_index": ctx.structure_inputs.atom_within_token_index,
             "token_reference_atom_index": ctx.structure_inputs.token_reference_atom_index,
+            "token_centre_atom_index": ctx.structure_inputs.token_centre_atom_index,
             "token_asym_id": ctx.structure_inputs.token_asym_id,
             "token_entity_id": ctx.structure_inputs.token_entity_id,
             "token_chain_id": ctx.structure_inputs.token_chain_id,
@@ -53,6 +54,8 @@ def test_featurize_builds_feature_context_from_raw_dict(cfg) -> None:
 
     assert isinstance(actual, FeatureContext)
     assert isinstance(actual.structure_inputs, StructureInputs)
+    assert actual.structure_inputs.token_centre_atom_index is not None
+    assert actual.structure_inputs.token_centre_atom_index.shape == ctx.structure_inputs.token_centre_atom_index.shape
 
 
 def test_featurize_accepts_input_bundle_raw_payload(cfg) -> None:

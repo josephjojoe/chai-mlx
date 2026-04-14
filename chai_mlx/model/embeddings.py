@@ -344,6 +344,7 @@ class InputEmbedder(nn.Module):
             atom_token_index=structure.atom_token_index,
             atom_within_token_index=structure.atom_within_token_index,
             token_reference_atom_index=structure.token_reference_atom_index,
+            token_centre_atom_index=structure.token_centre_atom_index,
             token_asym_id=structure.token_asym_id,
             token_entity_id=structure.token_entity_id,
             token_chain_id=structure.token_chain_id,

@@ -77,7 +77,10 @@ def _cast_module_weights(module, dtype):
 def extract_ca(coords_np, structure_inputs):
     """Extract Cα coords [N_residues, 3] from all-atom coords."""
     mask = np.array(structure_inputs.atom_exists_mask.astype(mx.float32))[0]
-    ref_idx = np.array(structure_inputs.token_reference_atom_index)[0]
+    centre_idx = getattr(structure_inputs, "token_centre_atom_index", None)
+    if centre_idx is None:
+        centre_idx = structure_inputs.token_reference_atom_index
+    centre_idx = np.array(centre_idx)[0]
     tok_mask = np.array(structure_inputs.token_exists_mask.astype(mx.float32))[0]
 
     n_tok = int(tok_mask.sum())
@@ -85,7 +88,7 @@ def extract_ca(coords_np, structure_inputs):
     for t in range(n_tok):
         if tok_mask[t] < 0.5:
             continue
-        ri = int(ref_idx[t])
+        ri = int(centre_idx[t])
         if 0 <= ri < len(coords_np) and mask[ri] > 0.5:
             ca.append(coords_np[ri])
     return np.array(ca, dtype=np.float64) if ca else np.zeros((0, 3))

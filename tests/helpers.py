@@ -19,6 +19,7 @@ def make_structure_inputs(
     atom_token_index = (mx.arange(n_atoms)[None, :] % n_tokens).astype(mx.int32)
     atom_within_token_index = mx.zeros((batch_size, n_atoms), dtype=mx.int32)
     token_reference_atom_index = (mx.arange(n_tokens)[None, :] % n_atoms).astype(mx.int32)
+    token_centre_atom_index = ((mx.arange(n_tokens)[None, :] + 1) % n_atoms).astype(mx.int32)
     token_pair_mask = token_exists[:, :, None] * token_exists[:, None, :]
     msa_mask = mx.ones((batch_size, msa_depth, n_tokens), dtype=mx.float32)
     template_input_masks = mx.ones(
@@ -32,6 +33,7 @@ def make_structure_inputs(
         atom_token_index=atom_token_index,
         atom_within_token_index=atom_within_token_index,
         token_reference_atom_index=token_reference_atom_index,
+        token_centre_atom_index=token_centre_atom_index,
         token_asym_id=mx.zeros((batch_size, n_tokens), dtype=mx.int32),
         token_entity_id=mx.zeros((batch_size, n_tokens), dtype=mx.int32),
         token_chain_id=mx.zeros((batch_size, n_tokens), dtype=mx.int32),

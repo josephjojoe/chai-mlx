@@ -200,6 +200,7 @@ def _batch_to_feature_context(
         atom_token_index=_mx(inputs["atom_token_index"].long()),
         atom_within_token_index=_mx(inputs["atom_within_token_index"].long()),
         token_reference_atom_index=_mx(inputs["token_ref_atom_index"].long()),
+        token_centre_atom_index=_mx(inputs["token_centre_atom_index"].long()),
         token_asym_id=_mx(inputs["token_asym_id"].long()),
         token_entity_id=_mx(inputs["token_entity_id"].long()),
         token_chain_id=_mx(inputs["token_asym_id"].long()),

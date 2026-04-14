@@ -24,6 +24,7 @@ class StructureInputs:
     token_entity_id: Array
     token_chain_id: Array
     token_is_polymer: Array
+    token_centre_atom_index: Array | None = None
     atom_ref_positions: Array | None = None
     atom_ref_space_uid: Array | None = None
     atom_coords: Array | None = None

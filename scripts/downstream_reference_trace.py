@@ -84,14 +84,17 @@ def _compare_stats(diff: np.ndarray) -> tuple[float, float, float]:
 
 def _ca_median(coords: np.ndarray, structure: StructureInputs) -> float:
     atom_mask = np.array(structure.atom_exists_mask.astype(mx.float32))[0] > 0.5
-    token_ref_atom_idx = np.array(structure.token_reference_atom_index)[0]
+    token_centre_atom_idx = getattr(structure, "token_centre_atom_index", None)
+    if token_centre_atom_idx is None:
+        token_centre_atom_idx = structure.token_reference_atom_index
+    token_centre_atom_idx = np.array(token_centre_atom_idx)[0]
     token_mask = np.array(structure.token_exists_mask.astype(mx.float32))[0] > 0.5
     sample = coords[0, 0]
     ca = []
     for token_idx in np.where(token_mask)[0]:
-        ref_atom = int(token_ref_atom_idx[token_idx])
-        if 0 <= ref_atom < len(sample) and atom_mask[ref_atom]:
-            ca.append(sample[ref_atom])
+        centre_atom = int(token_centre_atom_idx[token_idx])
+        if 0 <= centre_atom < len(sample) and atom_mask[centre_atom]:
+            ca.append(sample[centre_atom])
     ca = np.array(ca, dtype=np.float64)
     if len(ca) < 2:
         return float("nan")
@@ -213,7 +216,7 @@ def _compare_checkpoint_traces(
             f"{cmp_label}_mean={cmp_mean:9.4e}  {cmp_label}_p99={cmp_p99:9.4e}  "
             f"full_max={full_max:9.4e}{invalid_summary}  shape={ref.shape}"
         )
-        if first_jump is None and cmp_p99 >= jump_threshold:
+        if first_jump is None and not name.startswith("schedule.") and cmp_p99 >= jump_threshold:
             first_jump = (name, cmp_label, cmp_max, cmp_mean, cmp_p99)
     extra = sorted(set(mlx_trace) - set(torch_trace))
     if extra:

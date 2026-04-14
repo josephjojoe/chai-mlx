@@ -209,15 +209,17 @@ def predict_mlx(
     coords = np.array(result.coords.astype(mx.float32))[0, best_idx]  # [num_atoms, 3]
     si = result.embeddings.structure_inputs
     atom_mask = np.array(si.atom_exists_mask.astype(mx.float32))[0]
-    atom_token_idx = np.array(si.atom_token_index)[0]
-    token_ref_atom_idx = np.array(si.token_reference_atom_index)[0]
+    token_centre_atom_idx = getattr(si, "token_centre_atom_index", None)
+    if token_centre_atom_idx is None:
+        token_centre_atom_idx = si.token_reference_atom_index
+    token_centre_atom_idx = np.array(token_centre_atom_idx)[0]
     token_mask = np.array(si.token_exists_mask.astype(mx.float32))[0]
 
     del model, result
     gc.collect()
     mx.clear_cache()
 
-    return _extract_ca_coords(coords, atom_mask, atom_token_idx, token_ref_atom_idx, token_mask)
+    return _extract_ca_coords(coords, atom_mask, token_centre_atom_idx, token_mask)
 
 
 # ── Reference (MPS) prediction ──────────────────────────────────────────
@@ -300,22 +302,21 @@ def _extract_ca_from_cif(cif_path: Path) -> np.ndarray:
 def _extract_ca_coords(
     all_coords: np.ndarray,
     atom_mask: np.ndarray,
-    atom_token_idx: np.ndarray,
-    token_ref_atom_idx: np.ndarray,
+    token_centre_atom_idx: np.ndarray,
     token_mask: np.ndarray,
 ) -> np.ndarray:
     """Extract Cα-like coordinates from the internal atom representation.
 
-    For each valid token, the 'reference atom' (token_ref_atom_idx) is the Cα.
+    For polymer residues, the token centre atom is the Cα.
     """
     n_tokens = int(token_mask.sum())
     ca_coords = []
     for t in range(n_tokens):
         if token_mask[t] < 0.5:
             continue
-        ref_atom = int(token_ref_atom_idx[t])
-        if ref_atom >= 0 and ref_atom < len(all_coords) and atom_mask[ref_atom] > 0.5:
-            ca_coords.append(all_coords[ref_atom])
+        centre_atom = int(token_centre_atom_idx[t])
+        if centre_atom >= 0 and centre_atom < len(all_coords) and atom_mask[centre_atom] > 0.5:
+            ca_coords.append(all_coords[centre_atom])
 
     return np.array(ca_coords, dtype=np.float64)
 
