@@ -92,7 +92,6 @@ The commit subjects are blunt but informative. They are worth scanning before du
 ## Executive Summary
 
 - The MLX port is now structurally faithful: 0.125 Å Cα gap against Torch-MPS on 1L2Y.
-- For context: AF2/AF3-class models typically show 0.3–0.8 Å self-consistency across seeds, and bf16-vs-fp32 differences on the same backend land around 0.05–0.2 Å. The 0.125 Å gap is well within expected cross-backend precision.
 - The diffusion module is bit-for-bit exact when given correct trunk outputs.
 - Two critical structural bugs were found and fixed in `TriangleAttention`:
   1. QKVG reshape ordering: `[4, H, D]` vs `[H, 4, D]` — scrambled features across attention heads.
