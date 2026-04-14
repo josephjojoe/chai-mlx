@@ -37,7 +37,7 @@ In practice, the readable Python trunk source in `chai-lab` is not enough by its
   - exit
   - then run the Torch side
 - Any command that touches MLX/Metal or Torch/MPS should be treated as non-sandbox-safe work.
-- CPU fallback is usually not worth it for the heavy trunk/diffusion traces.
+- CPU fallback is usually not worth it for the heavy trunk/diffusion traces. It is extremely slow and will *not* work. MLX vs MPS!
 
 Practical memory advice that worked well here:
 
