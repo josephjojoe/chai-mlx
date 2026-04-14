@@ -205,7 +205,12 @@ def run_trunk_isolation(
     ref_emb = reconstruct_embedding_outputs(ref, structure, dtype=dtype)
     trunk_tensors: dict[str, np.ndarray] = {}
     trunk_out = capture_trunk(
-        model, ref_emb, recycles=recycles, tensors=trunk_tensors,
+        model,
+        ref_emb,
+        recycles=recycles,
+        tensors=trunk_tensors,
+        capture_detail="pairformer",
+        record_outputs=False,
     )
 
     failures = 0
@@ -345,11 +350,30 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--tol", type=float, default=0.1,
                         help="Max absolute error tolerance (default: 0.1)")
     parser.add_argument("--recycles", type=int, default=1)
+    parser.add_argument(
+        "--compute-dtype",
+        choices=("bfloat16", "float32"),
+        default=None,
+        help="Override MLX model compute dtype",
+    )
+    parser.add_argument(
+        "--mlx-device",
+        choices=("gpu", "cpu"),
+        default="gpu",
+        help="Run the MLX side on GPU or CPU",
+    )
     parser.add_argument("--verbose", action="store_true",
                         help="Show all per-block statistics instead of summary")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    model = ChaiMLX.from_pretrained(args.weights_dir, strict=False)
+    mx.set_default_device(mx.Device(getattr(mx.DeviceType, args.mlx_device), 0))
+    print(f"Using MLX device: {mx.default_device()}")
+
+    model = ChaiMLX.from_pretrained(
+        args.weights_dir,
+        strict=False,
+        compute_dtype=args.compute_dtype,
+    )
     ctx, extras = load_feature_context(args.input_npz)
     ref = _npz_dict(args.reference_npz)
     structure = ctx.structure_inputs

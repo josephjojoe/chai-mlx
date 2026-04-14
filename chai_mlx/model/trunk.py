@@ -117,34 +117,36 @@ class OuterProductMean(nn.Module):
         super().__init__()
         self.norm = FP32LayerNorm(msa_dim, eps=eps, affine=False)
         self.weight_ab = mx.zeros((2, 8, 8, msa_dim), dtype=mx.float32)
-        self.ln_out = FP32LayerNorm(512, eps=eps)
+        self.ln_out = FP32LayerNorm(512, eps=0.1)
         self.linear_out = nn.Linear(512, pair_dim, bias=True)
+        self.chunk_size = 4096
 
     def __call__(self, msa: mx.array, msa_mask: mx.array | None = None) -> mx.array:
         x = self.norm(msa)
-        proj = mx.einsum("bmnc,defc->bmndef", x, self.weight_ab)
+        op: mx.array | None = None
+        proj_dtype = self.weight_ab.dtype
 
-        if msa_mask is not None:
-            m = msa_mask.astype(x.dtype)[..., None, None, None]
-            proj = proj * m
+        # TorchScript chunks the MSA depth axis into 4096-row slices, masks each
+        # chunk, casts the chunk to bf16, and accumulates the outer products
+        # across chunks before the final layer norm + projection.
+        for start in range(0, int(x.shape[1]), self.chunk_size):
+            x_chunk = x[:, start : start + self.chunk_size]
+            if msa_mask is not None:
+                x_chunk = x_chunk * msa_mask[:, start : start + self.chunk_size].astype(x.dtype)[..., None]
+            if x_chunk.dtype != proj_dtype:
+                x_chunk = x_chunk.astype(proj_dtype)
 
-        a_proj = proj[:, :, :, 0, :, :]  # [b, m, n, 8_group, 8_inner_a]
-        b_proj = proj[:, :, :, 1, :, :]  # [b, m, n, 8_group, 8_inner_b]
+            proj = mx.einsum("bmnc,defc->bmndef", x_chunk, self.weight_ab)
+            a_proj = proj[:, :, :, 0, :, :]  # [b, m, n, 8_group, 8_inner_a]
+            b_proj = proj[:, :, :, 1, :, :]  # [b, m, n, 8_group, 8_inner_b]
 
-        # Contract depth (m), share group dim (g), keep both inner dims (e, f)
-        # → [b, n_i, n_j, 8_group, 8_inner_a, 8_inner_b] = 512 per (i,j)
-        op = mx.einsum("bmige,bmjgf->bijgef", a_proj, b_proj)
+            # Contract depth (m), share group dim (g), keep both inner dims (e, f)
+            # → [b, n_i, n_j, 8_group, 8_inner_a, 8_inner_b] = 512 per (i,j)
+            op_chunk = mx.einsum("bmige,bmjgf->bijgef", a_proj, b_proj)
+            op = op_chunk if op is None else op + op_chunk
 
-        if msa_mask is not None:
-            pair_count = mx.einsum(
-                "bmi,bmj->bij",
-                msa_mask.astype(x.dtype),
-                msa_mask.astype(x.dtype),
-            )
-            denom = mx.maximum(pair_count[..., None, None, None], 1.0)
-            op = op / denom
-        else:
-            op = op / float(msa.shape[1])
+        if op is None:
+            raise ValueError("outer-product-mean requires a non-empty MSA depth axis")
 
         op = op.reshape(op.shape[0], op.shape[1], op.shape[2], 512)
         return self.linear_out(self.ln_out(op))
@@ -208,8 +210,7 @@ class MSAModule(nn.Module):
     ) -> mx.array:
         msa = msa_input
         if msa.shape[1] > 0:
-            first = msa[:, :1] + self.linear_s2m(single)[:, None, :, :]
-            msa = mx.concatenate([first, msa[:, 1:]], axis=1)
+            msa = msa + self.linear_s2m(single)[:, None, :, :]
 
         # TorchScript ordering (trunk_toplevel_code.txt):
         #   i=0..2: OPM → msa_transition → pair_weighted_avg → tri_mult ‖ pair_transition → tri_attn
@@ -221,7 +222,12 @@ class MSAModule(nn.Module):
             pair = pair + self.outer_product_mean[i](msa, msa_mask=msa_mask)
             if i < len(self.msa_transition):
                 msa = msa + self.msa_transition[i](msa)
-                msa = msa + self.msa_pair_weighted_averaging[i](msa, pair, token_pair_mask=token_pair_mask)
+                msa = msa + self.msa_pair_weighted_averaging[i](
+                    msa,
+                    pair,
+                    token_pair_mask=token_pair_mask,
+                    msa_mask=msa_mask,
+                )
                 mx.eval(msa)
             pair_transition_out = self.pair_transition[i](pair)
             mx.eval(pair_transition_out)

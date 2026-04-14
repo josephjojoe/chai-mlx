@@ -4,6 +4,7 @@ import math
 from typing import TYPE_CHECKING, Iterable, Sequence
 
 import mlx.core as mx
+import mlx.nn as nn
 
 if TYPE_CHECKING:
     from chai_mlx.config import ChaiConfig
@@ -171,11 +172,11 @@ def expectation_from_logits(logits: mx.array, max_value: float) -> mx.array:
 
 
 def sigmoid(x: mx.array) -> mx.array:
-    return 1.0 / (1.0 + mx.exp(-x))
+    return mx.sigmoid(x)
 
 
 def silu(x: mx.array) -> mx.array:
-    return x * sigmoid(x)
+    return nn.silu(x)
 
 
 def normalize_quaternion(q: mx.array, eps: float = 1e-8) -> mx.array:

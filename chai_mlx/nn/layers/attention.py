@@ -130,18 +130,37 @@ class MSAPairWeightedAveraging(nn.Module):
         self.linear_out_no_bias = nn.Linear(num_heads * value_dim, msa_dim, bias=False)
         self.num_heads = num_heads
         self.value_dim = value_dim
+        self.chunk_size = 8192
 
-    def __call__(self, msa: mx.array, pair: mx.array, token_pair_mask: mx.array | None = None) -> mx.array:
-        pair_logits = self.linear_pair(self.layernorm_pair(pair)).transpose(0, 3, 1, 2)
+    def __call__(
+        self,
+        msa: mx.array,
+        pair: mx.array,
+        token_pair_mask: mx.array | None = None,
+        msa_mask: mx.array | None = None,
+    ) -> mx.array:
+        pair_norm = self.layernorm_pair(pair)
+        if pair_norm.dtype != self.linear_pair.weight.dtype:
+            pair_norm = pair_norm.astype(self.linear_pair.weight.dtype)
+        pair_logits = self.linear_pair(pair_norm).transpose(0, 3, 1, 2)
         if token_pair_mask is not None:
             pair_logits = pair_logits + make_additive_mask(token_pair_mask, dtype=pair_logits.dtype)[:, None, :, :]
         weights = mx.softmax(pair_logits.astype(mx.float32), axis=-1).astype(pair_logits.dtype)
 
-        vg = self.linear_msa2vg(self.layernorm_msa(msa))
-        v, g = chunk_last(vg, 2)
-        v = split_heads(v, self.num_heads, self.value_dim).transpose(0, 1, 3, 2, 4)
-        g = split_heads(g, self.num_heads, self.value_dim).transpose(0, 1, 3, 2, 4)
-        out = mx.einsum("bhij,bmhjd->bmhid", weights, v)
-        out = out * sigmoid(g)
-        out = out.transpose(0, 1, 3, 2, 4)
-        return self.linear_out_no_bias(merge_heads(out))
+        out_chunks: list[mx.array] = []
+        for start in range(0, int(msa.shape[1]), self.chunk_size):
+            msa_chunk = msa[:, start : start + self.chunk_size]
+            msa_norm = self.layernorm_msa(msa_chunk)
+            if msa_norm.dtype != self.linear_msa2vg.weight.dtype:
+                msa_norm = msa_norm.astype(self.linear_msa2vg.weight.dtype)
+            vg = self.linear_msa2vg(msa_norm)
+            v, g = chunk_last(vg, 2)
+            v = split_heads(v, self.num_heads, self.value_dim).transpose(0, 1, 3, 2, 4)
+            g = split_heads(g, self.num_heads, self.value_dim).transpose(0, 1, 3, 2, 4)
+            if msa_mask is not None:
+                v = v * msa_mask[:, start : start + self.chunk_size].astype(v.dtype)[:, :, None, :, None]
+            out = mx.einsum("bhij,bmhjd->bmhid", weights, v)
+            out = out * sigmoid(g)
+            out = out.transpose(0, 1, 3, 2, 4)
+            out_chunks.append(self.linear_out_no_bias(merge_heads(out)))
+        return mx.concatenate(out_chunks, axis=1)

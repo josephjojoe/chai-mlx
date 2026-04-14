@@ -225,8 +225,7 @@ def _capture_msa_module(
 ) -> mx.array:
     msa = msa_input
     if msa.shape[1] > 0:
-        first = msa[:, :1] + module.linear_s2m(single)[:, None, :, :]
-        msa = mx.concatenate([first, msa[:, 1:]], axis=1)
+        msa = msa + module.linear_s2m(single)[:, None, :, :]
     _record(tensors, f"{prefix}.msa_input", msa)
 
     for i in range(len(module.outer_product_mean)):
@@ -236,7 +235,10 @@ def _capture_msa_module(
             msa = msa + module.msa_transition[i](msa)
             _record(tensors, f"{prefix}.iter_{i}.msa_after_transition", msa)
             msa = msa + module.msa_pair_weighted_averaging[i](
-                msa, pair, token_pair_mask=token_pair_mask
+                msa,
+                pair,
+                token_pair_mask=token_pair_mask,
+                msa_mask=msa_mask,
             )
             _record(tensors, f"{prefix}.iter_{i}.msa_after_pair_weight", msa)
         pair_transition_out = module.pair_transition[i](pair)
@@ -257,14 +259,20 @@ def _capture_pairformer_stack(
     single_mask: mx.array | None,
     tensors: dict[str, np.ndarray],
     prefix: str,
+    block_start: int | None = None,
+    block_end: int | None = None,
+    stop_after_block: int | None = None,
 ) -> tuple[mx.array, mx.array]:
     s = single
     z = pair
     for i, block in enumerate(stack.blocks):
         z, s = block(z, s, pair_mask=pair_mask, single_mask=single_mask)
         assert s is not None
-        _record(tensors, f"{prefix}.block_{i}.pair", z)
-        _record(tensors, f"{prefix}.block_{i}.single", s)
+        if (block_start is None or i >= block_start) and (block_end is None or i <= block_end):
+            _record(tensors, f"{prefix}.block_{i}.pair", z)
+            _record(tensors, f"{prefix}.block_{i}.single", s)
+        if stop_after_block is not None and i >= stop_after_block:
+            break
     return s, z
 
 
@@ -330,6 +338,12 @@ def capture_trunk(
     *,
     recycles: int,
     tensors: dict[str, np.ndarray],
+    capture_detail: str = "full",
+    capture_pre_pairformer: bool = False,
+    pairformer_block_start: int | None = None,
+    pairformer_block_end: int | None = None,
+    stop_after_pairformer_block: int | None = None,
+    record_outputs: bool = True,
 ) -> TrunkOutputs:
     single_init = emb.single_initial
     pair_init = emb.pair_initial
@@ -344,27 +358,51 @@ def capture_trunk(
     for recycle_idx in range(recycles):
         single = single_init + model.trunk_module.token_single_recycle_proj(prev_single)
         pair = pair_init + model.trunk_module.token_pair_recycle_proj(prev_pair)
-        _record(tensors, f"trunk.recycle_{recycle_idx}.single_after_recycle", single)
-        _record(tensors, f"trunk.recycle_{recycle_idx}.pair_after_recycle", pair)
-        pair = _capture_template_embedder(
-            model.trunk_module.template_embedder,
-            pair,
-            emb.template_input,
-            template_input_masks=template_input_masks,
-            token_pair_mask=token_pair_mask,
-            tensors=tensors,
-            prefix=f"trunk.recycle_{recycle_idx}.template",
-        )
-        pair = _capture_msa_module(
-            model.trunk_module.msa_module,
-            single,
-            pair,
-            emb.msa_input,
-            token_pair_mask=token_pair_mask,
-            msa_mask=msa_mask,
-            tensors=tensors,
-            prefix=f"trunk.recycle_{recycle_idx}.msa",
-        )
+        if capture_detail == "full":
+            _record(tensors, f"trunk.recycle_{recycle_idx}.single_after_recycle", single)
+            _record(tensors, f"trunk.recycle_{recycle_idx}.pair_after_recycle", pair)
+            pair = _capture_template_embedder(
+                model.trunk_module.template_embedder,
+                pair,
+                emb.template_input,
+                template_input_masks=template_input_masks,
+                token_pair_mask=token_pair_mask,
+                tensors=tensors,
+                prefix=f"trunk.recycle_{recycle_idx}.template",
+            )
+            pair = _capture_msa_module(
+                model.trunk_module.msa_module,
+                single,
+                pair,
+                emb.msa_input,
+                token_pair_mask=token_pair_mask,
+                msa_mask=msa_mask,
+                tensors=tensors,
+                prefix=f"trunk.recycle_{recycle_idx}.msa",
+            )
+        elif capture_detail == "pairformer":
+            if capture_pre_pairformer:
+                _record(tensors, f"trunk.recycle_{recycle_idx}.single_after_recycle", single)
+                _record(tensors, f"trunk.recycle_{recycle_idx}.pair_after_recycle", pair)
+            pair = model.trunk_module.template_embedder(
+                pair,
+                emb.template_input,
+                template_input_masks=template_input_masks,
+                token_pair_mask=token_pair_mask,
+            )
+            if capture_pre_pairformer:
+                _record(tensors, f"trunk.recycle_{recycle_idx}.pair_after_template", pair)
+            pair = model.trunk_module.msa_module(
+                single,
+                pair,
+                emb.msa_input,
+                token_pair_mask=token_pair_mask,
+                msa_mask=msa_mask,
+            )
+            if capture_pre_pairformer:
+                _record(tensors, f"trunk.recycle_{recycle_idx}.pair_after_msa", pair)
+        else:
+            raise ValueError(f"unknown capture_detail: {capture_detail}")
         single, pair = _capture_pairformer_stack(
             model.trunk_module.pairformer_stack,
             single,
@@ -373,6 +411,9 @@ def capture_trunk(
             single_mask=token_single_mask,
             tensors=tensors,
             prefix=f"trunk.recycle_{recycle_idx}.pairformer",
+            block_start=pairformer_block_start,
+            block_end=pairformer_block_end,
+            stop_after_block=stop_after_pairformer_block,
         )
         prev_single, prev_pair = single, pair
 
@@ -389,7 +430,8 @@ def capture_trunk(
         template_input=emb.template_input,
         structure_inputs=emb.structure_inputs,
     )
-    _record_dataclass(tensors, "trunk.outputs", out)
+    if record_outputs:
+        _record_dataclass(tensors, "trunk.outputs", out)
     return out
 
 

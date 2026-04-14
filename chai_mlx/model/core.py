@@ -74,6 +74,62 @@ def _cast_weights(model: nn.Module, dtype: mx.Dtype) -> None:
         model.load_weights(pairs, strict=False)
 
 
+def load_pretrained_config(
+    path_or_repo: str | Path,
+    *,
+    compute_dtype: str | None = None,
+) -> tuple[Path, ChaiConfig]:
+    """Resolve a pretrained model path and load its config."""
+    from dataclasses import fields as dc_fields
+
+    path = Path(path_or_repo)
+    if not path.is_dir():
+        try:
+            from huggingface_hub import snapshot_download
+
+            path = Path(snapshot_download(str(path_or_repo)))
+        except ImportError:
+            raise ValueError(
+                f"{path_or_repo} is not a local directory and "
+                "huggingface_hub is not installed for remote download"
+            )
+
+    config_path = path / "config.json"
+    if config_path.exists():
+        with open(config_path) as f:
+            raw = json.load(f)
+        _NESTED = {
+            "feature_dims": FeatureDims,
+            "hidden": HiddenDims,
+            "atom_blocks": AtomBlockConfig,
+            "pairformer": PairformerConfig,
+            "diffusion": DiffusionConfig,
+            "templates": TemplateConfig,
+            "msa": MSAConfig,
+            "confidence": ConfidenceConfig,
+        }
+        if "supported_token_sizes" in raw and isinstance(raw["supported_token_sizes"], list):
+            raw["supported_token_sizes"] = tuple(raw["supported_token_sizes"])
+        for key, cls_ in _NESTED.items():
+            if key in raw and isinstance(raw[key], dict):
+                v = raw[key]
+                if "distance_bin_edges" in v and isinstance(v["distance_bin_edges"], list):
+                    v["distance_bin_edges"] = tuple(v["distance_bin_edges"])
+                if "supported_token_sizes" in v and isinstance(v["supported_token_sizes"], list):
+                    v["supported_token_sizes"] = tuple(v["supported_token_sizes"])
+                raw[key] = cls_(**v)
+        cfg = ChaiConfig(**raw)
+    else:
+        cfg = ChaiConfig()
+
+    if compute_dtype is not None:
+        cfg_dict = {f.name: getattr(cfg, f.name) for f in dc_fields(cfg)}
+        cfg_dict["compute_dtype"] = compute_dtype
+        cfg = ChaiConfig(**cfg_dict)
+
+    return path, cfg
+
+
 @dataclass
 class FoldOutputs:
     context: FeatureContext
@@ -114,51 +170,7 @@ class ChaiMLX(nn.Module):
             disable mixed precision, or ``"bfloat16"`` (the default in
             :class:`ChaiConfig`) for half-precision inference.
         """
-        from dataclasses import fields as dc_fields
-
-        path = Path(path_or_repo)
-        if not path.is_dir():
-            try:
-                from huggingface_hub import snapshot_download
-                path = Path(snapshot_download(str(path_or_repo)))
-            except ImportError:
-                raise ValueError(
-                    f"{path_or_repo} is not a local directory and "
-                    "huggingface_hub is not installed for remote download"
-                )
-
-        config_path = path / "config.json"
-        if config_path.exists():
-            with open(config_path) as f:
-                raw = json.load(f)
-            _NESTED = {
-                "feature_dims": FeatureDims,
-                "hidden": HiddenDims,
-                "atom_blocks": AtomBlockConfig,
-                "pairformer": PairformerConfig,
-                "diffusion": DiffusionConfig,
-                "templates": TemplateConfig,
-                "msa": MSAConfig,
-                "confidence": ConfidenceConfig,
-            }
-            if "supported_token_sizes" in raw and isinstance(raw["supported_token_sizes"], list):
-                raw["supported_token_sizes"] = tuple(raw["supported_token_sizes"])
-            for key, cls_ in _NESTED.items():
-                if key in raw and isinstance(raw[key], dict):
-                    v = raw[key]
-                    if "distance_bin_edges" in v and isinstance(v["distance_bin_edges"], list):
-                        v["distance_bin_edges"] = tuple(v["distance_bin_edges"])
-                    if "supported_token_sizes" in v and isinstance(v["supported_token_sizes"], list):
-                        v["supported_token_sizes"] = tuple(v["supported_token_sizes"])
-                    raw[key] = cls_(**v)
-            cfg = ChaiConfig(**raw)
-        else:
-            cfg = ChaiConfig()
-
-        if compute_dtype is not None:
-            cfg_dict = {f.name: getattr(cfg, f.name) for f in dc_fields(cfg)}
-            cfg_dict["compute_dtype"] = compute_dtype
-            cfg = ChaiConfig(**cfg_dict)
+        path, cfg = load_pretrained_config(path_or_repo, compute_dtype=compute_dtype)
 
         model = cls(cfg)
         load_safetensors(model, path, strict=strict)

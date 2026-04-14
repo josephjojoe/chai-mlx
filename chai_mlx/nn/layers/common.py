@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import mlx.core as mx
@@ -64,9 +65,28 @@ class Transition(nn.Module):
         self.up = nn.Linear(dim, 2 * expansion * dim, bias=False)
         self.swiglu = SwiGLU()
         self.down = nn.Linear(expansion * dim, dim, bias=bias_out)
+        self.chunk_budget = 1 << 30
+
+    def _n_chunks(self, x: mx.array) -> int:
+        out_features = int(self.up.weight.shape[0])
+        in_features = max(int(self.up.weight.shape[1]), 1)
+        ratio = max(out_features // in_features, 1)
+        est = math.prod(int(dim) for dim in x.shape) * ratio
+        return max(1, est // self.chunk_budget)
 
     def __call__(self, x: mx.array, *, use_kernel: bool = False) -> mx.array:
-        return self.down(self.swiglu(self.up(self.norm(x)), use_kernel=use_kernel))
+        n_chunks = min(self._n_chunks(x), max(int(x.shape[-2]), 1))
+        if n_chunks <= 1:
+            return self.down(self.swiglu(self.up(self.norm(x)), use_kernel=use_kernel))
+
+        chunk_size = math.ceil(int(x.shape[-2]) / n_chunks)
+        out_chunks: list[mx.array] = []
+        for start in range(0, int(x.shape[-2]), chunk_size):
+            x_chunk = x[..., start : start + chunk_size, :]
+            out_chunks.append(
+                self.down(self.swiglu(self.up(self.norm(x_chunk)), use_kernel=use_kernel))
+            )
+        return mx.concatenate(out_chunks, axis=-2)
 
 
 class ConditionedTransition(nn.Module):

@@ -56,7 +56,12 @@ def _to_numpy(tensor) -> np.ndarray:
     return np.asarray(tensor)
 
 
-def _save_ctx_npz(path: Path, ctx: FeatureContext, coords: np.ndarray, sigma: np.ndarray) -> None:
+def _save_ctx_npz(
+    path: Path,
+    ctx: FeatureContext,
+    coords: np.ndarray | None,
+    sigma: np.ndarray | None,
+) -> None:
     payload: dict[str, np.ndarray] = {
         "token_features": _to_numpy(ctx.token_features),
         "token_pair_features": _to_numpy(ctx.token_pair_features),
@@ -64,9 +69,11 @@ def _save_ctx_npz(path: Path, ctx: FeatureContext, coords: np.ndarray, sigma: np
         "atom_pair_features": _to_numpy(ctx.atom_pair_features),
         "msa_features": _to_numpy(ctx.msa_features),
         "template_features": _to_numpy(ctx.template_features),
-        "coords": coords.astype(np.float32),
-        "sigma": sigma.astype(np.float32),
     }
+    if coords is not None:
+        payload["coords"] = coords.astype(np.float32)
+    if sigma is not None:
+        payload["sigma"] = sigma.astype(np.float32)
     if ctx.bond_adjacency is not None:
         payload["bond_adjacency"] = _to_numpy(ctx.bond_adjacency)
     if ctx.raw_features is not None:
@@ -144,6 +151,7 @@ def generate_reference_dump(
     sigma_value: float,
     seed: int,
     device: str,
+    skip_downstream: bool,
 ) -> None:
     set_seed([seed])
     device = torch.device(device)
@@ -351,65 +359,72 @@ def generate_reference_dump(
     _record(tensors, "trunk.outputs.msa_input", msa_input_feats)
     _record(tensors, "trunk.outputs.template_input", template_input_feats)
 
-    print("[*] Running diffusion denoise")
-    static_diffusion_inputs = dict(
-        token_single_initial_repr=token_single_structure_input.float(),
-        token_pair_initial_repr=token_pair_structure_input_feats.float(),
-        token_single_trunk_repr=token_single_trunk_repr.float(),
-        token_pair_trunk_repr=token_pair_trunk_repr.float(),
-        atom_single_input_feats=atom_single_structure_input_feats.float(),
-        atom_block_pair_input_feats=block_atom_pair_structure_input_feats.float(),
-        atom_single_mask=atom_single_mask,
-        atom_block_pair_mask=block_atom_pair_mask,
-        token_single_mask=token_single_mask,
-        block_indices_h=block_indices_h,
-        block_indices_w=block_indices_w,
-        atom_token_indices=atom_token_indices,
-    )
-    static_diffusion_inputs = move_data_to_device(static_diffusion_inputs, device=device)
-
-    batch_size = 1
-    num_atoms = atom_single_mask.shape[1]
-    coords = torch.randn(batch_size, 1, num_atoms, 3, device=device)
-    sigma = torch.full((batch_size, 1), float(sigma_value), device=device)
-    with _component_moved_to("diffusion_module.pt", device=device) as diffusion_module:
-        denoised_pos = diffusion_module.forward(
-            atom_noised_coords=coords.float(),
-            noise_sigma=sigma.float(),
-            crop_size=model_size,
-            **static_diffusion_inputs,
-        )
-    denoised_for_compare = (
-        denoised_pos[:, None] if denoised_pos.ndim == 3 else denoised_pos
-    )
-    _record(tensors, "denoise.output", denoised_for_compare)
-
-    print("[*] Running confidence head")
-    with _component_moved_to("confidence_head.pt", device=device) as confidence_head:
-        pae_logits, pde_logits, plddt_logits = confidence_head.forward(
-            move_to_device=device,
-            token_single_input_repr=token_single_initial_repr,
-            token_single_trunk_repr=token_single_trunk_repr,
-            token_pair_trunk_repr=token_pair_trunk_repr,
-            token_single_mask=token_single_mask,
+    coords_np: np.ndarray | None = None
+    sigma_np: np.ndarray | None = None
+    if skip_downstream:
+        print("[*] Skipping diffusion and confidence stages")
+    else:
+        print("[*] Running diffusion denoise")
+        static_diffusion_inputs = dict(
+            token_single_initial_repr=token_single_structure_input.float(),
+            token_pair_initial_repr=token_pair_structure_input_feats.float(),
+            token_single_trunk_repr=token_single_trunk_repr.float(),
+            token_pair_trunk_repr=token_pair_trunk_repr.float(),
+            atom_single_input_feats=atom_single_structure_input_feats.float(),
+            atom_block_pair_input_feats=block_atom_pair_structure_input_feats.float(),
             atom_single_mask=atom_single_mask,
-            atom_coords=denoised_for_compare[:, 0],
-            token_reference_atom_index=token_reference_atom_index,
-            atom_token_index=atom_token_indices,
-            atom_within_token_index=atom_within_token_index,
-            crop_size=model_size,
+            atom_block_pair_mask=block_atom_pair_mask,
+            token_single_mask=token_single_mask,
+            block_indices_h=block_indices_h,
+            block_indices_w=block_indices_w,
+            atom_token_indices=atom_token_indices,
         )
-    _record(tensors, "confidence.outputs.pae_logits", pae_logits)
-    _record(tensors, "confidence.outputs.pde_logits", pde_logits)
-    _record(tensors, "confidence.outputs.plddt_logits", plddt_logits)
+        static_diffusion_inputs = move_data_to_device(static_diffusion_inputs, device=device)
+
+        batch_size = 1
+        num_atoms = atom_single_mask.shape[1]
+        coords = torch.randn(batch_size, 1, num_atoms, 3, device=device)
+        sigma = torch.full((batch_size, 1), float(sigma_value), device=device)
+        with _component_moved_to("diffusion_module.pt", device=device) as diffusion_module:
+            denoised_pos = diffusion_module.forward(
+                atom_noised_coords=coords.float(),
+                noise_sigma=sigma.float(),
+                crop_size=model_size,
+                **static_diffusion_inputs,
+            )
+        denoised_for_compare = (
+            denoised_pos[:, None] if denoised_pos.ndim == 3 else denoised_pos
+        )
+        _record(tensors, "denoise.output", denoised_for_compare)
+
+        print("[*] Running confidence head")
+        with _component_moved_to("confidence_head.pt", device=device) as confidence_head:
+            pae_logits, pde_logits, plddt_logits = confidence_head.forward(
+                move_to_device=device,
+                token_single_input_repr=token_single_initial_repr,
+                token_single_trunk_repr=token_single_trunk_repr,
+                token_pair_trunk_repr=token_pair_trunk_repr,
+                token_single_mask=token_single_mask,
+                atom_single_mask=atom_single_mask,
+                atom_coords=denoised_for_compare[:, 0],
+                token_reference_atom_index=token_reference_atom_index,
+                atom_token_index=atom_token_indices,
+                atom_within_token_index=atom_within_token_index,
+                crop_size=model_size,
+            )
+        _record(tensors, "confidence.outputs.pae_logits", pae_logits)
+        _record(tensors, "confidence.outputs.pde_logits", pde_logits)
+        _record(tensors, "confidence.outputs.plddt_logits", plddt_logits)
+        coords_np = _to_numpy(coords)
+        sigma_np = _to_numpy(sigma)
 
     input_npz.parent.mkdir(parents=True, exist_ok=True)
     reference_npz.parent.mkdir(parents=True, exist_ok=True)
     _save_ctx_npz(
         input_npz,
         public_ctx,
-        coords=_to_numpy(coords),
-        sigma=_to_numpy(sigma),
+        coords=coords_np,
+        sigma=sigma_np,
     )
     np.savez_compressed(reference_npz, **tensors)
 
@@ -424,6 +439,11 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--num-trunk-recycles", type=int, default=1)
     parser.add_argument("--sigma", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--skip-downstream",
+        action="store_true",
+        help="Stop after trunk outputs and omit coords/sigma from input NPZ",
+    )
     parser.add_argument(
         "--device",
         type=str,
@@ -443,6 +463,7 @@ def main(argv: Iterable[str] | None = None) -> None:
             sigma_value=args.sigma,
             seed=args.seed,
             device=args.device,
+            skip_downstream=args.skip_downstream,
         )
         print(f"[*] Wrote input NPZ to {args.input_npz}")
         print(f"[*] Wrote reference NPZ to {args.reference_npz}")
