@@ -64,6 +64,9 @@ examples/
 scripts/
   parity_check.py       # per-component TorchScript vs MLX parity harness
   chai_lab_reference_dump.py # FASTA-backed reference dump generator from chai-lab
+  bisect_denoise.py     # top-level denoise bisect + zero-input diagnostic
+  deep_denoise_trace.py # deep manual checkpoint trace for denoise internals
+  diffusion_diagnostics.py # diffusion-specific experiments and ODE spacing checks
   layer_parity.py       # dump-based intermediate tensor parity harness
   weight_loading_e2e.py # convert/load/smoke validation against real weights
 docs/
@@ -91,7 +94,11 @@ The repo-level `weights/` directory is intended for local model artifacts during
 - Run TorchScript/MLX parity checks: `python scripts/parity_check.py --torchscript-dir ... --safetensors-dir ...`
 - Generate FASTA-backed reference inputs/tensors from `chai-lab`: `python scripts/chai_lab_reference_dump.py --input-npz ... --reference-npz ...`
 - Run dump-based layer parity checks: `python scripts/layer_parity.py --weights-dir weights/ --input-npz ... --reference-npz ...`
+- Bisect one denoise call and run the zero-input diagnostic: `python scripts/bisect_denoise.py --weights-dir weights/ --input-npz ... --reference-npz ...`
+- Run the deep denoise checkpoint trace: `python scripts/deep_denoise_trace.py --weights-dir weights/ --input-npz ... --reference-npz ...`
+- Run diffusion-specific diagnostics and full-loop spacing checks: `python scripts/diffusion_diagnostics.py --weights-dir weights/ --experiment perop|lyapunov|hybrid|all`
 - Run convert/load/smoke validation on real TorchScript artifacts: `python scripts/weight_loading_e2e.py --torchscript-dir ...`
+- Run the targeted denoise dataflow regression test: `pytest -q tests/test_diffusion.py`
 - Export TorchScript weights to NPZ: `chai-mlx-export-torchscript src.pt out.npz`
 - Convert `.pt` shards directly to safetensors: `chai-mlx-convert-torchscript --pt-dir path/to/pt --out-dir weights/`
 - Convert NPZ weights to safetensors: `chai-mlx-convert-npz npz_dir weights/`
@@ -100,4 +107,6 @@ The repo-level `weights/` directory is intended for local model artifacts during
 
 - The MLX neural core is separate from the upstream bioinformatics frontend. `featurize_fasta(...)` delegates to `chai_lab` rather than reimplementing that stack.
 - The repo is organized so `examples/` stays user-facing while `scripts/` holds contributor tooling such as parity and weight-conversion helpers.
+- `bisect_denoise.py` and `layer_parity.py` are the closest mirrors of the actual MLX runtime path for denoise debugging.
+- `deep_denoise_trace.py` is a manual replay harness for checkpoint localization. If it disagrees with direct top-level wrapper parity, treat the wrapper parity result as authoritative and fix the trace harness before drawing conclusions.
 - The authoritative status page is [`docs/status.md`](docs/status.md).

@@ -18,6 +18,12 @@ Usage::
         [--experiment lyapunov|perop|hybrid|all]
 
 Requires: mlx, torch, chai_mlx, chai-lab/ (for hybrid test)
+
+This file mixes a few historical debugging experiments. It is useful for
+characterizing diffusion behavior and full-loop structure quality, but it is
+not the primary acceptance harness for TorchScript parity. For that, prefer
+direct wrapper comparisons plus the dump-based captures in ``layer_parity.py``
+or ``bisect_denoise.py``.
 """
 
 from __future__ import annotations
@@ -280,9 +286,8 @@ def diffusion_perop_trace(model, cache, coords, sigma, n_atoms: int) -> dict:
 
     trunk = cache.trunk_outputs
     structure = cache.structure_inputs
-    x = dm.structure_cond_to_token_structure_proj(trunk.single_structure)
     num_samples = coords.shape[1]
-    x = mx.broadcast_to(x[:, None, :, :], (coords.shape[0], num_samples, *x.shape[1:]))
+    x = dm.structure_cond_to_token_structure_proj(s_cond)
     enc_tokens, atom_repr, encoder_pair = dm.atom_attention_encoder(
         cache.atom_cond, cache.atom_single_cond, cache.blocked_pair_base,
         structure.atom_token_index, structure.atom_exists_mask, scaled_coords,

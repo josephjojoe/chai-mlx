@@ -14,6 +14,11 @@ Usage::
     python scripts/bisect_denoise.py --weights-dir weights/ \
         --input-npz /tmp/chai_mlx_input.npz \
         --reference-npz /tmp/chai_mlx_reference.npz
+
+This script is intended to mirror the actual top-level MLX denoise path as
+closely as practical. In particular, the token-conditioning projection follows
+the TorchScript wrapper and projects the sigma-conditioned single representation
+(`s_cond`), not `trunk.single_structure`.
 """
 
 from __future__ import annotations
@@ -62,7 +67,13 @@ def mlx_denoise_capture(
     coords: mx.array,
     sigma: mx.array,
 ) -> dict[str, np.ndarray]:
-    """Run MLX denoise, capturing intermediates at every stage."""
+    """Run MLX denoise, capturing coarse top-level intermediates.
+
+    The capture intentionally follows ``DiffusionModule.denoise`` rather than a
+    synthetic decomposition so this is a good first-line sanity check when the
+    question is "what did the real runtime do?" rather than "which exact leaf
+    op diverged?".
+    """
     cap: dict[str, np.ndarray] = {}
     dm = model.diffusion_module
     trunk = cache.trunk_outputs
@@ -87,8 +98,7 @@ def mlx_denoise_capture(
     mx.eval(s_cond)
     cap["s_cond"] = _mx_to_np(s_cond)
 
-    x = dm.structure_cond_to_token_structure_proj(trunk.single_structure)
-    x = mx.broadcast_to(x[:, None, :, :], (coords.shape[0], num_samples, *x.shape[1:]))
+    x = dm.structure_cond_to_token_structure_proj(s_cond)
     mx.eval(x)
     cap["token_structure_proj"] = _mx_to_np(x)
 

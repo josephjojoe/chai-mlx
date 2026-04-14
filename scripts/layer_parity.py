@@ -17,6 +17,10 @@ The input NPZ should contain precomputed feature tensors using keys like:
 
 When ``--reference-npz`` is omitted, this script can still write the MLX
 capture to ``--write-mlx-dump`` for later comparison.
+
+For diffusion captures, this script follows the same top-level denoise dataflow
+as the runtime module, including the sigma-conditioned token-structure
+projection path.
 """
 
 from __future__ import annotations
@@ -441,8 +445,7 @@ def capture_denoise(
     num_samples = coords.shape[1]
     scaled_coords = coords * c_in[:, :, None, None]
     s_cond = model.diffusion_module.diffusion_conditioning.with_sigma(cache.s_static, sigma)
-    x = model.diffusion_module.structure_cond_to_token_structure_proj(trunk.single_structure)
-    x = mx.broadcast_to(x[:, None, :, :], (coords.shape[0], num_samples, *x.shape[1:]))
+    x = model.diffusion_module.structure_cond_to_token_structure_proj(s_cond)
     enc_tokens, atom_repr, encoder_pair = model.diffusion_module.atom_attention_encoder(
         cache.atom_cond,
         cache.atom_single_cond,

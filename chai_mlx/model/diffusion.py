@@ -200,8 +200,8 @@ class DiffusionModule(nn.Module):
         scaled_coords = coords * c_in[:, :, None, None]
         s_cond = self.diffusion_conditioning.with_sigma(cache.s_static, sigma)
 
-        x = self.structure_cond_to_token_structure_proj(trunk.single_structure)
-        x = mx.broadcast_to(x[:, None, :, :], (coords.shape[0], num_samples, *x.shape[1:]))
+        # TorchScript feeds the sigma-conditioned single representation here.
+        x = self.structure_cond_to_token_structure_proj(s_cond)
         enc_tokens, atom_repr, encoder_pair = self.atom_attention_encoder(
             cache.atom_cond,
             cache.atom_single_cond,
