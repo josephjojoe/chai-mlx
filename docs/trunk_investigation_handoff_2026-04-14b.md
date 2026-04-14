@@ -438,44 +438,40 @@ End-to-end CIF reference:
 
 ## Recommended Next Steps
 
-The port is structurally faithful. There are no known structural bugs. An fp32 diagnostic showed the remaining ~0.1 Å gap is the irreducible cross-backend difference (MLX-Metal vs Torch-MPS), not bf16 precision drift. The remaining work is verification — confirming the gap is stable and representative across seeds, targets, and recycle counts.
+The port is structurally faithful. There are no known structural bugs. An fp32 diagnostic confirmed the remaining ~0.1 Å gap is the irreducible cross-backend difference (MLX-Metal vs Torch-MPS), not bf16 precision drift — fp32 shows essentially the same gap. This means:
 
-### Priority 1: Multi-seed stability on 1L2Y
+- The trunk pairformer cannot be improved further from user code. The gap comes from below — different Metal kernel implementations of matmul, softmax, layernorm, etc.
+- The bf16 contribution is only ~0.02 Å on top of the fp32 baseline.
+- There are no hidden bugs being masked by bf16 noise (fp32 would have revealed them).
 
-Run the seed sweep across 8–16 seeds (not just seed 42) and confirm the gap is the median/typical gap, not the lucky-seed gap. If one seed is at 0.05 Å and another at 0.4 Å, the mean might be fine but the variance tells you something still interacts with sampling noise.
+The remaining work is confirming the port generalizes beyond 1L2Y.
 
-```bash
-python3 scripts/cif_seed_sweep.py \
-  --weights-dir weights \
-  --work-dir /tmp/chai_mlx_runs/seed_sweep_multi \
-  --seeds 0 1 2 3 42 100 123 255 500 1000 2000 4000 \
-  --num-steps 200 --recycles 3 \
-  --mlx-dtypes bfloat16
-```
+### Priority 1: Larger target validation (50–100 residues)
 
-### Priority 2: Larger target validation (50–100 residues)
-
-1L2Y is a 20-residue mini-protein (trp-cage). A longer sequence exercises the trunk's recycle dynamics and triangle ops harder (the `n×n` pair tensor gets much larger, and the triangle attention/multiplication operate on more positions). If the gap stays in the 0.1–0.3 Å range on a larger target, the port is done. If it blows up to several Å, there is another bug that 1L2Y was too small to expose.
+This is now the most important next step. 1L2Y is a 20-residue mini-protein (trp-cage) — it barely exercises the `n×n` pair tensor. A longer sequence will stress the trunk's recycle dynamics and triangle ops much harder. If the gap stays in the 0.1–0.3 Å range on a larger target, the port is done. If it blows up to several Å, there is a bug that 1L2Y was too small to expose.
 
 Suggested targets: any single-chain protein in the 50–100 residue range with mixed secondary structure.
 
-### Priority 3: Multimer / ligand target (if available)
+### Priority 2: Multimer / ligand target (if available)
 
-Pair representation handling for cross-chain and ligand contacts goes through code paths that monomer mini-proteins barely touch. If the test set has a multimer or anything with a ligand, running one of those is a good stress test.
+Pair representation handling for cross-chain and ligand contacts goes through code paths that monomer mini-proteins barely touch. If the test set has a multimer or anything with a ligand, running one of those is a good stress test for cross-chain pair representation, ligand featurization, and any code paths that are simply never hit by a 20-residue monomer.
 
-### Priority 4: Recycle stability
+### Priority 3: Confidence head end-to-end comparison
 
-Run the trunk for 1, 2, 3, and 5 recycles and confirm the structural gap doesn't grow with recycle count. If errors damp (gap stays ~0.125 Å regardless), the trunk is well-behaved. If they amplify, there is a feedback path that is slightly off — possibly in the recycle layernorm or the `linear_no_bias` projections that feed pair/single back into the next iteration.
+The stage isolation test showed moderate pLDDT/PAE errors (max ~2.7–4.5 in logits). Structural Cα agreement at 0.1 Å is necessary but not sufficient — confidence outputs are a separate head and can be subtly wrong even when coordinates look fine. Compare predicted pLDDT distributions and PAE matrices on a few targets between MLX and chai-lab. This matters for any downstream use of confidence scores (e.g., filtering predictions, ranking models).
 
-### Priority 5: Confidence head end-to-end comparison
+**Current gap**: The `cif_seed_sweep.py` script passes `bfactors=None` when writing MLX CIFs, so pLDDT is not stored. The sweep script also does not compute or save ptm/iptm/aggregate scores on the MLX side. To do this comparison, either:
+- modify `cif_seed_sweep.py` to run the MLX confidence head and save scores/pLDDT alongside the CIF, or
+- write a targeted script that loads trunk outputs and runs only the confidence head on both sides.
 
-The stage isolation test showed moderate pLDDT/PAE errors (max ~2.7–4.5 in logits). Structural Cα agreement at 0.125 Å is necessary but not sufficient — confidence outputs are a separate head and can be subtly wrong even when coordinates look fine. Compare predicted pLDDT distributions and PAE matrices on a few targets between MLX and chai-lab.
+The stage isolation logit-level comparison (feeding exact trunk outputs into MLX confidence head) is the closest we have, but it doesn't capture the end-to-end effect of trunk drift on confidence outputs.
 
-### Lower-priority follow-ups
+### Deprioritized (no longer needed)
 
-6. **Triangle multiplication audit** — `TriangleMultiplication` has architecturally similar fused gated projections, left/right symmetry, and output gating. Two structural bugs were found in `TriangleAttention`, and although the end-to-end number is good, a bug in triangle multiplication could be partially masked by sampling and recycle averaging. A targeted exact-input probe (feeding identical pair inputs, comparing MLX vs Torch output) is a quick check.
-
-7. **Re-probe `msa_transition[0]`** — The 0.0625 max error was real, but it was measured while the MLX trunk had a permutation bug that dwarfed it. Now that triangle attention is fixed, one more exact-input probe on `msa_transition[0]` would confirm whether the number is unchanged (bf16 floor, ignore it) or dropped (the fix elsewhere helped indirectly).
+- **Multi-seed stability on 1L2Y** — The fp32 diagnostic already ran 3 seeds and showed consistent gaps (0.088–0.126 Å, std=0.016). The variance is small. Running 12 more seeds on the same tiny protein adds little signal.
+- **Recycle stability** — The fp32 result shows the gap is not accumulation-driven, so recycle count is unlikely to matter. Not worth a dedicated experiment unless a larger-target test shows unexpected behavior.
+- **Triangle multiplication audit** — With fp32 confirming no hidden bugs, a targeted probe is low-value. If a larger-target test fails, revisit.
+- **Re-probe `msa_transition[0]`** — The 0.0625 max error is the cross-backend floor. fp32 confirmed this class of error is not fixable from user code.
 
 ## Useful Commands
 
@@ -508,12 +504,12 @@ python3 scripts/pair_path_probe.py \
   --compute-dtype bfloat16
 ```
 
-Multi-seed sweep:
+Seed sweep on a new target (replace FASTA path):
 ```bash
 python3 scripts/cif_seed_sweep.py \
   --weights-dir weights \
-  --work-dir /tmp/chai_mlx_runs/seed_sweep_multi \
-  --seeds 0 1 2 3 42 100 123 255 500 1000 2000 4000 \
+  --work-dir /tmp/chai_mlx_runs/seed_sweep_new_target \
+  --seeds 0 42 123 \
   --num-steps 200 --recycles 3 --mlx-dtypes bfloat16
 ```
 
