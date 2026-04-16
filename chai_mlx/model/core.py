@@ -132,9 +132,18 @@ def load_pretrained_config(
 
 @dataclass
 class FoldOutputs:
+    """Debug fold outputs with full intermediate tensors."""
     context: FeatureContext
     embeddings: EmbeddingOutputs
     trunk: TrunkOutputs
+    coords: mx.array
+    confidence: ConfidenceOutputs
+    ranking: RankingOutputs
+
+
+@dataclass
+class InferenceOutputs:
+    """Production fold outputs (final tensors only)."""
     coords: mx.array
     confidence: ConfidenceOutputs
     ranking: RankingOutputs
@@ -247,7 +256,86 @@ class ChaiMLX(nn.Module):
             raise ValueError("structure must be provided when confidence outputs do not carry it")
         return self.ranker(conf, coords, structure)
 
-    def fold(
+    @staticmethod
+    def _without_raw_features(ctx: FeatureContext) -> FeatureContext:
+        """Return a FeatureContext view that drops heavy raw feature tensors.
+
+        Keeping ``raw_features`` alive after ``embed_inputs`` can retain a large
+        amount of memory (especially token-pair/template feature blocks).  This
+        helper preserves all fields needed by later stages while clearing only
+        the no-longer-needed raw feature dict.
+        """
+        if ctx.raw_features is None:
+            return ctx
+        return FeatureContext(
+            token_features=ctx.token_features,
+            token_pair_features=ctx.token_pair_features,
+            atom_features=ctx.atom_features,
+            atom_pair_features=ctx.atom_pair_features,
+            msa_features=ctx.msa_features,
+            template_features=ctx.template_features,
+            structure_inputs=ctx.structure_inputs,
+            bond_adjacency=ctx.bond_adjacency,
+            raw_features=None,
+        )
+
+    def run_inference(
+        self,
+        inputs: FeatureContext | InputBundle | dict,
+        *,
+        recycles: int = 3,
+        num_samples: int = 5,
+        num_steps: int | None = None,
+        use_kernel: bool = False,
+    ) -> InferenceOutputs:
+        """Run production inference (no intermediate retention)."""
+        ctx = self.featurize(inputs)
+        emb = self.embed_inputs(ctx, use_kernel=use_kernel)
+        # Raw features are only needed during embedding.
+        ctx = self._without_raw_features(ctx)
+        structure = ctx.structure_inputs
+        batch_size = emb.token_single_input.shape[0]
+        del ctx
+        mx.clear_cache()
+
+        trunk_out = self.trunk(emb, recycles=recycles)
+        cache = self.prepare_diffusion_cache(trunk_out)
+        mx.eval(cache.s_static, cache.z_cond, cache.blocked_pair_base,
+                cache.atom_cond, cache.atom_single_cond, *cache.pair_biases)
+        del emb
+        mx.clear_cache()
+
+        coords = self.init_noise(batch_size, num_samples, structure)
+        for step_idx, (sigma_curr, sigma_next, gamma) in enumerate(self.schedule(num_steps=num_steps), start=1):
+            coords = self.diffusion_step(
+                cache,
+                coords,
+                sigma_curr,
+                sigma_next,
+                gamma,
+                use_kernel=use_kernel,
+            )
+            mx.eval(coords)
+            if step_idx % 16 == 0:
+                mx.clear_cache()
+        mx.clear_cache()
+
+        conf_full = self.confidence(trunk_out, coords)
+        rank = self.ranker(conf_full, coords, structure)
+        conf = ConfidenceOutputs(
+            pae_logits=conf_full.pae_logits,
+            pde_logits=conf_full.pde_logits,
+            plddt_logits=conf_full.plddt_logits,
+        )
+        del conf_full, trunk_out, cache
+        mx.clear_cache()
+        return InferenceOutputs(
+            coords=coords,
+            confidence=conf,
+            ranking=rank,
+        )
+
+    def run_inference_debug(
         self,
         inputs: FeatureContext | InputBundle | dict,
         *,
@@ -256,6 +344,7 @@ class ChaiMLX(nn.Module):
         num_steps: int | None = None,
         use_kernel: bool = False,
     ) -> FoldOutputs:
+        """Run debug inference and return full intermediate tensors."""
         ctx = self.featurize(inputs)
         emb = self.embed_inputs(ctx, use_kernel=use_kernel)
         trunk_out = self.trunk(emb, recycles=recycles)

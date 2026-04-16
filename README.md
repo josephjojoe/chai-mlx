@@ -31,20 +31,11 @@ ctx = featurize(inputs)
 # or:
 # ctx = featurize_fasta("input.fasta", output_dir="./out")
 
-emb = model.embed_inputs(ctx)
-trunk = model.trunk(emb, recycles=3)
-cache = model.prepare_diffusion_cache(trunk)
+# Production inference API (does not retain intermediates):
+result = model.run_inference(ctx, recycles=3, num_samples=1, num_steps=200)
 
-coords = model.init_noise(
-    batch_size=emb.token_single_input.shape[0],
-    num_samples=1,
-    structure=emb.structure_inputs,
-)
-for sigma_curr, sigma_next, gamma in model.schedule(num_steps=200):
-    coords = model.diffusion_step(cache, coords, sigma_curr, sigma_next, gamma)
-
-confidence = model.confidence(trunk, coords)
-ranking = model.rank_outputs(confidence, coords, emb.structure_inputs)
+# Debug API (returns full context/embedding/trunk intermediates):
+debug_result = model.run_inference_debug(ctx, recycles=3, num_samples=1, num_steps=200)
 ```
 
 ## Repository layout
@@ -89,6 +80,7 @@ The repo-level `weights/` directory is intended for local model artifacts during
 ## Common workflows
 
 - Smoke test the package: `python examples/basic_inference.py`
+- Run end-to-end FASTA inference: `python scripts/inference.py --weights-dir weights/ --fasta path/to/input.fasta`
 - Benchmark the diffusion loop: `python examples/diffusion_benchmark.py`
 - Run the FASTA path: `python examples/fasta_smoke.py --fasta path/to/input.fasta`
 - Run TorchScript/MLX parity checks: `python scripts/parity_check.py --torchscript-dir ... --safetensors-dir ...`

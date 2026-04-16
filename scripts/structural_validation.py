@@ -199,8 +199,10 @@ def predict_mlx(
         use_templates_server=False,
     )
 
-    print(f"    Running fold (samples={num_samples}, steps={num_steps})...")
-    result = model.fold(ctx, recycles=3, num_samples=num_samples, num_steps=num_steps)
+    print(f"    Running inference (samples={num_samples}, steps={num_steps})...")
+    result = model.run_inference(
+        ctx, recycles=3, num_samples=num_samples, num_steps=num_steps
+    )
 
     # Pick best sample by aggregate score
     scores = np.array(result.ranking.aggregate_score.astype(mx.float32)).ravel()
@@ -208,7 +210,7 @@ def predict_mlx(
     print(f"    Best sample: {best_idx} (score={float(scores[best_idx]):.4f})")
 
     coords = np.array(result.coords.astype(mx.float32))[0, best_idx]  # [num_atoms, 3]
-    si = result.embeddings.structure_inputs
+    si = ctx.structure_inputs
     atom_mask = np.array(si.atom_exists_mask.astype(mx.float32))[0]
     token_centre_atom_idx = getattr(si, "token_centre_atom_index", None)
     if token_centre_atom_idx is None:

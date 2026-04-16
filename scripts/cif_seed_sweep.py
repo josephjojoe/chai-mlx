@@ -118,7 +118,9 @@ def _run_mlx(
     num_steps: int,
 ) -> RunResult:
     mx.random.seed(seed)
-    result = model.fold(ctx, recycles=recycles, num_samples=1, num_steps=num_steps)
+    result = model.run_inference(
+        ctx, recycles=recycles, num_samples=1, num_steps=num_steps
+    )
     coords = np.array(result.coords.astype(mx.float32))[0, 0]
     cif_path = output_dir / "pred.model_idx_0.cif"
     save_to_cif(

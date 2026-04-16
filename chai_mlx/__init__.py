@@ -11,12 +11,13 @@ from chai_mlx.data import (
     featurize,
     featurize_fasta,
 )
-from chai_mlx.model import ChaiMLX, FoldOutputs
+from chai_mlx.model import ChaiMLX, FoldOutputs, InferenceOutputs
 
 __all__ = [
     "ChaiMLX",
     "ChaiConfig",
     "FoldOutputs",
+    "InferenceOutputs",
     "featurize",
     "featurize_fasta",
     "ConfidenceOutputs",
