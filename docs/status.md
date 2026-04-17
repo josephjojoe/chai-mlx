@@ -1,8 +1,12 @@
-# Trunk Investigation Handoff
+# Port status
 
-Date: 2026-04-14
-
-This document is the comprehensive and self-contained record of the Chai-1 MLX port investigation. End-to-end Cα spacing on 1L2Y is within 0.1 Å of the Torch-MPS reference, and kernel-level analysis shows the remaining gap comes from different fused-kernel rounding in bf16 sigmoid/silu between MLX and MPS — not from algorithmic differences (all ops are bit-identical in fp32).
+Last substantive update: 2026-04-14 (+ ranker parity fix 2026-04-17). This is
+the canonical record of the Chai-1 MLX port's current state and was previously
+titled "Trunk Investigation Handoff". End-to-end Cα spacing on 1L2Y is within
+0.1 Å of the Torch-MPS reference, and kernel-level analysis shows the
+remaining gap comes from different fused-kernel rounding in bf16 sigmoid/silu
+between MLX and MPS — not from algorithmic differences (all ops are
+bit-identical in fp32).
 
 Importantly, **the reference is Torch/MPS, not CUDA**. Nobody runs Chai-1 on MPS in production; everyone uses CUDA. We have no data on how MLX compares to CUDA. The 0.1 Å gap is specific to the MLX-vs-MPS comparison and may not be representative of the MLX-vs-CUDA gap.
 
@@ -89,7 +93,7 @@ git show --stat --summary 0bc4490
 
 The commit subjects are blunt but informative. They are worth scanning before duplicating old work.
 
-**Note**: The triangle attention fixes (QKVG reshape + ending-direction transpose) are currently uncommitted changes to `chai_mlx/nn/layers/triangle.py`. They should be committed.
+**Note**: The triangle attention fixes (QKVG reshape + ending-direction transpose) were committed in `b9e97f2` on 2026-04-14.
 
 ## Executive Summary
 
@@ -407,15 +411,11 @@ Completed:
 
 ## Files Changed (All Sessions Combined)
 
-### Committed (in `5201bd6`)
+### Committed
 
-- [chai_mlx/nn/layers/common.py](/Users/josephjojoe/Documents/Projects/chai-mlx/chai_mlx/nn/layers/common.py) — transition chunking
-- [chai_mlx/utils.py](/Users/josephjojoe/Documents/Projects/chai-mlx/chai_mlx/utils.py) — native sigmoid/silu
-- [tests/test_trunk.py](/Users/josephjojoe/Documents/Projects/chai-mlx/tests/test_trunk.py) — regression tests
-
-### Uncommitted
-
-- [chai_mlx/nn/layers/triangle.py](/Users/josephjojoe/Documents/Projects/chai-mlx/chai_mlx/nn/layers/triangle.py) — QKVG reshape + ending-direction transpose (both bugs)
+- `5201bd6` — [chai_mlx/nn/layers/common.py](/Users/josephjojoe/Documents/Projects/chai-mlx/chai_mlx/nn/layers/common.py) (transition chunking), [chai_mlx/utils.py](/Users/josephjojoe/Documents/Projects/chai-mlx/chai_mlx/utils.py) (native sigmoid/silu), [tests/test_trunk.py](/Users/josephjojoe/Documents/Projects/chai-mlx/tests/test_trunk.py) (regression tests)
+- `b9e97f2` — [chai_mlx/nn/layers/triangle.py](/Users/josephjojoe/Documents/Projects/chai-mlx/chai_mlx/nn/layers/triangle.py) (QKVG reshape + ending-direction transpose)
+- `6ff327b` — [chai_mlx/model/ranking.py](/Users/josephjojoe/Documents/Projects/chai-mlx/chai_mlx/model/ranking.py) + [chai_mlx/data/types.py](/Users/josephjojoe/Documents/Projects/chai-mlx/chai_mlx/data/types.py) + [chai_mlx/data/featurize.py](/Users/josephjojoe/Documents/Projects/chai-mlx/chai_mlx/data/featurize.py) + [tests/test_ranking.py](/Users/josephjojoe/Documents/Projects/chai-mlx/tests/test_ranking.py) (full port of `chai_lab.ranking.rank` — logits-space pTM/ipTM, valid-frame mask, dense clash matrix, per-chain pLDDT, parity tests)
 
 ### Diagnostic scripts created during investigation
 
