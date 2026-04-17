@@ -35,6 +35,10 @@ class StructureInputs:
     reference_coords: Array | None = None
     msa_mask: Array | None = None
     template_input_masks: Array | None = None
+    token_residue_index: Array | None = None
+    token_entity_type: Array | None = None
+    token_backbone_frame_mask: Array | None = None
+    token_backbone_frame_index: Array | None = None
 
 
 RawFeatures = dict[str, Array]
@@ -129,6 +133,32 @@ class ConfidenceOutputs:
 
 @dataclass
 class RankingOutputs:
+    """Ranking outputs matching chai-lab's ``SampleRanking``.
+
+    Scalar scores (``ptm``, ``iptm``, ``aggregate_score``,
+    ``has_inter_chain_clashes``, ``total_clashes``,
+    ``total_inter_chain_clashes``) are computed from the full PAE logit
+    distribution via per-bin TM weighting (not from ``E[PAE]``), matching
+    :func:`chai_lab.ranking.rank.rank` exactly up to MLX numerical noise.
+
+    Fields:
+
+    - ``plddt``, ``pae``, ``pde``: per-input expectation scalars/arrays kept
+      for legacy compatibility with earlier MLX callers.
+    - ``ptm``, ``iptm``: complex pTM / interface pTM (chai-lab semantics).
+    - ``per_chain_ptm``: pTM for each chain in the complex, shape ``[..., c]``.
+    - ``per_chain_pair_iptm``: per-chain-pair ipTM, shape ``[..., c, c]``.
+    - ``per_atom_plddt``, ``per_chain_plddt``, ``complex_plddt``: plddt
+      scores (complex, per-chain, per-atom) computed from logits.
+    - ``chain_chain_clashes``: integer ``[..., c, c]`` matrix of inter-chain
+      clashes (off-diagonal); diagonal entries are intra-chain clashes.
+    - ``total_clashes``, ``total_inter_chain_clashes``: summed counts.
+    - ``has_inter_chain_clashes``: boolean flag using the reference's
+      ``max_clashes=100`` / ``max_clash_ratio=0.5`` / polymer-only policy.
+    - ``asym_ids``: sorted unique asym ids used to index the per-chain arrays.
+    - ``aggregate_score``: ``0.2*ptm + 0.8*iptm - 100*has_inter_chain_clashes``.
+    """
+
     plddt: Array
     pae: Array
     pde: Array
@@ -136,3 +166,12 @@ class RankingOutputs:
     iptm: Array
     has_inter_chain_clashes: Array
     aggregate_score: Array
+    per_chain_ptm: Array | None = None
+    per_chain_pair_iptm: Array | None = None
+    complex_plddt: Array | None = None
+    per_chain_plddt: Array | None = None
+    per_atom_plddt: Array | None = None
+    chain_chain_clashes: Array | None = None
+    total_clashes: Array | None = None
+    total_inter_chain_clashes: Array | None = None
+    asym_ids: Array | None = None

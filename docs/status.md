@@ -48,6 +48,10 @@ Each module fed identical TorchScript reference inputs:
 - Template embedder: per-template processing, masked averaging, ReLU before proj_out
 - Featurization: one-hot widths, RBF, OUTERSUM, alphabetical concat order
 - Confidence head: PDE symmetrization, affine=False output norms
+- Ranking: full port of `chai_lab.ranking.rank` — logits-space pTM/ipTM,
+  single-atom frame validity, dense per-chain-pair clash matrix with the
+  `max_clashes=100` / `max_clash_ratio=0.5` / polymer-pair policy, and
+  per-chain/per-atom pLDDT. Parity exercised in `tests/test_ranking.py`.
 
 ## Historical fixes
 

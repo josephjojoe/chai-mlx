@@ -222,6 +222,10 @@ def _batch_to_feature_context(
                 inputs["template_mask"].float(),
             )
         ),
+        token_residue_index=_mx(inputs["token_residue_index"].long()),
+        token_entity_type=_mx(inputs["token_entity_type"].long()),
+        token_backbone_frame_mask=_mx(inputs["token_backbone_frame_mask"]),
+        token_backbone_frame_index=_mx(inputs["token_backbone_frame_index"].long()),
     )
 
     N = token_exists.shape[1]

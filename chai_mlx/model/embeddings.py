@@ -359,6 +359,10 @@ class InputEmbedder(nn.Module):
             reference_coords=structure.reference_coords,
             msa_mask=msa_mask[:, :target_depth],
             template_input_masks=structure.template_input_masks,
+            token_residue_index=structure.token_residue_index,
+            token_entity_type=structure.token_entity_type,
+            token_backbone_frame_mask=structure.token_backbone_frame_mask,
+            token_backbone_frame_index=structure.token_backbone_frame_index,
         )
 
         trimmed_raw = ctx.raw_features
