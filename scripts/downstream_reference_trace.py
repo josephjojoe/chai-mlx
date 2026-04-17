@@ -580,13 +580,13 @@ def _run_mlx_downstream(
     orig_denoise = dm.denoise
     current_step = {"value": 0, "captured": False}
 
-    def traced_denoise(cache_arg, coords, sigma, *, use_kernel: bool = False):
+    def traced_denoise(cache_arg, coords, sigma):
         if current_step["value"] == 1 and not current_step["captured"]:
             _record_mx(store, "sample.step_001.coords_before_denoise", coords)
             s_cond = dm.diffusion_conditioning.with_sigma(cache_arg.s_static, sigma.astype(mx.float32))
             _record_mx(store, "sample.step_001.s_cond", s_cond)
             current_step["captured"] = True
-        return orig_denoise(cache_arg, coords, sigma, use_kernel=use_kernel)
+        return orig_denoise(cache_arg, coords, sigma)
 
     dm.denoise = traced_denoise  # type: ignore[method-assign]
     try:

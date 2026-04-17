@@ -158,8 +158,8 @@ def run_diffusion_loop(
     orig_denoise = dm.denoise.__func__
     step_counter = [0]
 
-    def hooked_denoise(self, c, co, si, *, use_kernel=False):
-        out = orig_denoise(self, c, co, si, use_kernel=use_kernel)
+    def hooked_denoise(self, c, co, si):
+        out = orig_denoise(self, c, co, si)
         if denoise_hook is not None:
             mx.eval(out)
             out = denoise_hook(out, step_counter[0])

@@ -81,14 +81,11 @@ def bench_size(
     recycles: int,
     num_steps: int,
     num_samples: int,
-    *,
-    use_kernel: bool = False,
 ) -> dict:
     from tqdm import tqdm
 
     print(f"\n{'='*60}")
     print(f"  n_tokens = {n_tokens}  (pair tensor: {n_tokens}x{n_tokens})")
-    print(f"  use_kernel = {use_kernel}")
     print(f"{'='*60}")
 
     mx.random.seed(42)
@@ -96,11 +93,11 @@ def bench_size(
     ctx = featurize(raw)
     print("  featurize done")
 
-    timings: dict[str, float] = {"n_tokens": n_tokens, "use_kernel": use_kernel}
+    timings: dict[str, float] = {"n_tokens": n_tokens}
 
     # --- embed ---
     t0 = time.perf_counter()
-    emb = model.embed_inputs(ctx, use_kernel=use_kernel)
+    emb = model.embed_inputs(ctx)
     mx.eval(emb.single_initial, emb.pair_initial, emb.token_single_input)
     t_embed = time.perf_counter() - t0
     timings["embed_s"] = round(t_embed, 2)
@@ -147,7 +144,7 @@ def bench_size(
         schedule, desc=f"  diffusion (n={n_tokens})", unit="step", leave=True
     ):
         coords = model.diffusion_step(
-            cache, coords, sigma_curr, sigma_next, gamma, use_kernel=use_kernel,
+            cache, coords, sigma_curr, sigma_next, gamma,
         )
         mx.eval(coords)
     t_diff = time.perf_counter() - t0
@@ -187,12 +184,6 @@ def main():
     parser.add_argument("--num-steps", type=int, default=200)
     parser.add_argument("--num-samples", type=int, default=1)
     parser.add_argument(
-        "--use-kernel",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Enable the fused Metal kernel path in embed + diffusion",
-    )
-    parser.add_argument(
         "--out", type=Path, default=Path("/tmp/mlx_scaling_bench.json"),
         help="Output JSON path (default: /tmp/mlx_scaling_bench.json)",
     )
@@ -213,7 +204,6 @@ def main():
             recycles=args.recycles,
             num_steps=args.num_steps,
             num_samples=args.num_samples,
-            use_kernel=args.use_kernel,
         )
         result["dtype"] = args.dtype
         all_results.append(result)

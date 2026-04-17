@@ -29,7 +29,6 @@ chai_mlx/
   nn/
     __init__.py
     layers/
-    kernels/
   io/
     __init__.py
     weights/
@@ -54,5 +53,5 @@ flowchart TD
 - Start with `chai_mlx.__init__` for the public surface.
 - Read `chai_mlx.model.core` if you want the end-to-end folding flow.
 - Read `chai_mlx.data.featurize` and `chai_mlx.data.types` if you want to understand inputs.
-- Read `chai_mlx.nn.layers` and `chai_mlx.nn.kernels` only when you are working on model internals or performance work.
+- Read `chai_mlx.nn.layers` only when you are working on model internals or performance work.
 - Read `chai_mlx.io.weights` when you need to export or validate weights against upstream TorchScript artifacts.

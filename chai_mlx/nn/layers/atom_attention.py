@@ -45,12 +45,10 @@ class LocalAttentionPairBiasBlock(nn.Module):
         kv_idx: mx.array,
         additive_bias: mx.array,
         block_mask: mx.array,
-        *,
-        use_kernel: bool = False,
     ) -> mx.array:
         b, a, d = x.shape
         num_blocks = a // 32
-        x_norm = self.adaln(x, cond, use_kernel=use_kernel)
+        x_norm = self.adaln(x, cond)
         q_all, k_all, v_all = [
             split_heads(t, self.num_heads, self.head_dim) for t in mx.split(self.to_qkv(x_norm), 3, axis=-1)
         ]
@@ -87,13 +85,11 @@ class LocalAttentionPairBiasBlock(nn.Module):
         kv_idx: mx.array,
         additive_bias: mx.array,
         block_mask: mx.array,
-        *,
-        use_kernel: bool = False,
     ) -> mx.array:
         """Gated attention delta (no residual)."""
         b, a, d = x.shape
         num_blocks = a // 32
-        x_norm = self.adaln(x, cond, use_kernel=use_kernel)
+        x_norm = self.adaln(x, cond)
         q_all, k_all, v_all = [
             split_heads(t, self.num_heads, self.head_dim) for t in mx.split(self.to_qkv(x_norm), 3, axis=-1)
         ]
@@ -140,17 +136,14 @@ class LocalAtomTransformer(nn.Module):
         block_mask: mx.array,
         *,
         atom_mask: mx.array | None = None,
-        use_kernel: bool = False,
     ) -> mx.array:
         pair_bias = self.blocked_pairs2blocked_bias(self.pair_norm(pair))
         for i, (attn, ff) in enumerate(zip(self.attn_blocks, self.transitions)):
             if atom_mask is not None:
                 x = x * atom_mask[..., None].astype(x.dtype)
             bias_slice = pair_bias[..., i * self.num_heads : (i + 1) * self.num_heads]
-            attn_delta = attn.delta(
-                x, cond, kv_idx, bias_slice, block_mask, use_kernel=use_kernel,
-            )
-            trans_delta = ff.delta(x, cond, use_kernel=use_kernel)
+            attn_delta = attn.delta(x, cond, kv_idx, bias_slice, block_mask)
+            trans_delta = ff.delta(x, cond)
             x = x + attn_delta + trans_delta
         return x
 
@@ -182,7 +175,6 @@ class TokenInputAtomEncoder(nn.Module):
         block_mask: mx.array,
         *,
         num_tokens: int,
-        use_kernel: bool = False,
     ) -> mx.array:
         b, a, _ = atom_single_input.shape
         num_blocks = a // 32
@@ -198,7 +190,6 @@ class TokenInputAtomEncoder(nn.Module):
             kv_idx,
             block_mask,
             atom_mask=atom_mask,
-            use_kernel=use_kernel,
         )
         token_repr = mx.maximum(self.to_token_single(atom_repr), 0)
         return segment_mean(token_repr, atom_token_index, num_tokens, mask=atom_mask)
@@ -264,7 +255,6 @@ class DiffusionAtomAttentionEncoder(nn.Module):
         *,
         num_tokens: int,
         num_samples: int,
-        use_kernel: bool = False,
     ) -> tuple[mx.array, mx.array, mx.array]:
         b = atom_cond_raw.shape[0]
         ds = num_samples
@@ -297,7 +287,6 @@ class DiffusionAtomAttentionEncoder(nn.Module):
             kv_idx_flat,
             block_mask_flat,
             atom_mask=atom_mask_flat,
-            use_kernel=use_kernel,
         )
         atom_token_index_flat = mx.broadcast_to(atom_token_index[:, None, :], (b, ds, atom_token_index.shape[-1])).reshape(b * ds, -1)
         token_repr = segment_mean(
@@ -339,8 +328,6 @@ class DiffusionAtomAttentionDecoder(nn.Module):
         atom_mask: mx.array,
         kv_idx: mx.array,
         block_mask: mx.array,
-        *,
-        use_kernel: bool = False,
     ) -> mx.array:
         b, ds, n, _ = token_repr.shape
         atom_token_index_flat = mx.broadcast_to(atom_token_index[:, None, :], (b, ds, atom_token_index.shape[-1])).reshape(b * ds, -1)
@@ -360,6 +347,5 @@ class DiffusionAtomAttentionDecoder(nn.Module):
             kv_idx_flat,
             block_mask_flat,
             atom_mask=atom_mask_flat,
-            use_kernel=use_kernel,
         )
         return self.to_pos_updates(self.output_norm(atom_repr)).reshape(b, ds, atom_repr.shape[1], 3)

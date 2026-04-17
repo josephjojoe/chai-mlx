@@ -266,7 +266,7 @@ def run_diffusion_isolation(
     denoise_tensors: dict[str, np.ndarray] = {}
     capture_denoise(
         model, cache, coords, sigma,
-        use_kernel=False, tensors=denoise_tensors,
+        tensors=denoise_tensors,
     )
 
     failures = 0

@@ -7,7 +7,6 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from chai_mlx.config import ChaiConfig
-from chai_mlx.nn.kernels.elementwise import fused_adaln_full, fused_gated_residual, fused_swiglu_activation
 from chai_mlx.utils import chunk_last, sigmoid, silu
 
 
@@ -33,29 +32,13 @@ class AdaLayerNorm(nn.Module):
         self.norm = FP32LayerNorm(dim, eps=self._ADALN_EPS, affine=False)
         self.to_scale_shift = nn.Linear(cond_dim, 2 * dim, bias=False)
 
-    def __call__(self, x: mx.array, cond: mx.array, *, use_kernel: bool = False) -> mx.array:
+    def __call__(self, x: mx.array, cond: mx.array) -> mx.array:
         scale, shift = chunk_last(self.to_scale_shift(cond), 2)
-        if use_kernel:
-            # NOTE: the reference path below silently upcasts to float32 when
-            # the inputs are bfloat16, because the Python literal ``1.0`` in
-            # ``(1.0 + scale)`` promotes the expression to float32.  Several
-            # downstream consumers (in particular SDPA mask dtype) rely on
-            # this implicit promotion, so we match it here to keep the fused
-            # kernel a drop-in replacement.
-            out = fused_adaln_full(
-                x, None, None, scale, shift,
-                eps=self._ADALN_EPS,
-            )
-            if out.dtype != mx.float32:
-                out = out.astype(mx.float32)
-            return out
         return self.norm(x) * (1.0 + scale) + shift
 
 
 class SwiGLU(nn.Module):
-    def __call__(self, x: mx.array, *, use_kernel: bool = False) -> mx.array:
-        if use_kernel:
-            return fused_swiglu_activation(x)
+    def __call__(self, x: mx.array) -> mx.array:
         a, b = chunk_last(x, 2)
         return silu(a) * b
 
@@ -83,17 +66,17 @@ class Transition(nn.Module):
         est = math.prod(int(dim) for dim in x.shape) * ratio
         return max(1, est // self.chunk_budget)
 
-    def __call__(self, x: mx.array, *, use_kernel: bool = False) -> mx.array:
+    def __call__(self, x: mx.array) -> mx.array:
         n_chunks = min(self._n_chunks(x), max(int(x.shape[-2]), 1))
         if n_chunks <= 1:
-            return self.down(self.swiglu(self.up(self.norm(x)), use_kernel=use_kernel))
+            return self.down(self.swiglu(self.up(self.norm(x))))
 
         chunk_size = math.ceil(int(x.shape[-2]) / n_chunks)
         out_chunks: list[mx.array] = []
         for start in range(0, int(x.shape[-2]), chunk_size):
             x_chunk = x[..., start : start + chunk_size, :]
             out_chunks.append(
-                self.down(self.swiglu(self.up(self.norm(x_chunk)), use_kernel=use_kernel))
+                self.down(self.swiglu(self.up(self.norm(x_chunk))))
             )
         return mx.concatenate(out_chunks, axis=-2)
 
@@ -114,18 +97,16 @@ class ConditionedTransition(nn.Module):
         self.down = nn.Linear(expansion * dim, dim, bias=False)
         self.gate = nn.Linear(cond_dim, dim, bias=True)
 
-    def delta(self, x: mx.array, cond: mx.array, *, use_kernel: bool = False) -> mx.array:
+    def delta(self, x: mx.array, cond: mx.array) -> mx.array:
         """Gated transition delta (no residual)."""
-        y = self.adaln(x, cond, use_kernel=use_kernel)
-        y = self.down(self.swiglu(self.up(y), use_kernel=use_kernel))
+        y = self.adaln(x, cond)
+        y = self.down(self.swiglu(self.up(y)))
         return sigmoid(self.gate(cond)) * y
 
-    def __call__(self, x: mx.array, cond: mx.array, *, use_kernel: bool = False) -> mx.array:
-        y = self.adaln(x, cond, use_kernel=use_kernel)
-        y = self.down(self.swiglu(self.up(y), use_kernel=use_kernel))
+    def __call__(self, x: mx.array, cond: mx.array) -> mx.array:
+        y = self.adaln(x, cond)
+        y = self.down(self.swiglu(self.up(y)))
         gate = self.gate(cond)
-        if use_kernel:
-            return fused_gated_residual(x, y, gate)
         return x + sigmoid(gate) * y
 
 

@@ -87,9 +87,9 @@ class DiffusionTransformerBlock(nn.Module):
             eps=cfg.layer_norm_eps,
         )
 
-    def __call__(self, x: mx.array, s_cond: mx.array, pair_bias: mx.array, *, use_kernel: bool = False) -> mx.array:
-        attn_delta = self.attn.delta(x, s_cond, pair_bias=pair_bias, use_kernel=use_kernel)
-        trans_delta = self.transition.delta(x, s_cond, use_kernel=use_kernel)
+    def __call__(self, x: mx.array, s_cond: mx.array, pair_bias: mx.array) -> mx.array:
+        attn_delta = self.attn.delta(x, s_cond, pair_bias=pair_bias)
+        trans_delta = self.transition.delta(x, s_cond)
         return x + attn_delta + trans_delta
 
 
@@ -101,7 +101,7 @@ class DiffusionTransformer(nn.Module):
     def precompute_pair_biases(self, z_cond: mx.array, pair_mask: mx.array | None = None) -> tuple[mx.array, ...]:
         return tuple(block.attn.pair_bias(z_cond, pair_mask=pair_mask) for block in self.blocks)
 
-    def __call__(self, x: mx.array, s_cond: mx.array, pair_biases: tuple[mx.array, ...], *, use_kernel: bool = False) -> mx.array:
+    def __call__(self, x: mx.array, s_cond: mx.array, pair_biases: tuple[mx.array, ...]) -> mx.array:
         b, ds, n, d = x.shape
         out = x
         for block, pair_bias in zip(self.blocks, pair_biases):
@@ -110,7 +110,6 @@ class DiffusionTransformer(nn.Module):
                 out.reshape(b * ds, n, d),
                 s_cond.reshape(b * ds, n, s_cond.shape[-1]),
                 bias.reshape(b * ds, *pair_bias.shape[1:]),
-                use_kernel=use_kernel,
             ).reshape(b, ds, n, d)
         return out
 
@@ -184,8 +183,6 @@ class DiffusionModule(nn.Module):
         cache: DiffusionCache,
         coords: mx.array,
         sigma: mx.array,
-        *,
-        use_kernel: bool = False,
     ) -> mx.array:
         trunk = cache.trunk_outputs
         structure = cache.structure_inputs
@@ -213,10 +210,9 @@ class DiffusionModule(nn.Module):
             structure.block_atom_pair_mask,
             num_tokens=trunk.single_initial.shape[1],
             num_samples=num_samples,
-            use_kernel=use_kernel,
         )
         x = x + enc_tokens
-        x = self.diffusion_transformer(x, s_cond, cache.pair_biases, use_kernel=use_kernel)
+        x = self.diffusion_transformer(x, s_cond, cache.pair_biases)
         x = self.post_attn_layernorm(x)
         decoder_cond = self.post_atom_cond_layernorm(
             mx.broadcast_to(
@@ -233,7 +229,6 @@ class DiffusionModule(nn.Module):
             structure.atom_exists_mask,
             structure.atom_kv_indices,
             structure.block_atom_pair_mask,
-            use_kernel=use_kernel,
         )
         return c_skip[:, :, None, None] * coords + c_out[:, :, None, None] * pos_updates
 
@@ -273,8 +268,6 @@ class DiffusionModule(nn.Module):
         sigma_curr: mx.array | float,
         sigma_next: mx.array | float,
         gamma: mx.array | float,
-        *,
-        use_kernel: bool = False,
     ) -> mx.array:
         structure = cache.structure_inputs
         sigma_curr = mx.full((coords.shape[0], coords.shape[1]), float(sigma_curr), dtype=mx.float32)
@@ -295,15 +288,13 @@ class DiffusionModule(nn.Module):
         sigma_delta = mx.maximum(sigma_hat * sigma_hat - sigma_curr * sigma_curr, self.cfg.diffusion_sqrt_eps)
         coords_hat = coords_aug + noise * mx.sqrt(sigma_delta)[:, :, None, None]
 
-        denoised = self.denoise(cache, coords_hat, sigma_hat, use_kernel=use_kernel)
+        denoised = self.denoise(cache, coords_hat, sigma_hat)
         d_i = (coords_hat - denoised) / sigma_hat[:, :, None, None]
         coords_euler = coords_hat + (sigma_next - sigma_hat)[:, :, None, None] * d_i
 
         sigma_next_nonzero = bool(mx.any(sigma_next != 0).item())
         if self.cfg.diffusion.second_order and sigma_next_nonzero:
-            denoised_next = self.denoise(
-                cache, coords_euler, sigma_next, use_kernel=use_kernel
-            )
+            denoised_next = self.denoise(cache, coords_euler, sigma_next)
             d_i_prime = (coords_euler - denoised_next) / sigma_next[:, :, None, None]
             coords_euler = coords_euler + (sigma_next - sigma_hat)[:, :, None, None] * (d_i_prime + d_i) / 2.0
         return coords_euler

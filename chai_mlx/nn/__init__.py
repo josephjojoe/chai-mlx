@@ -1,4 +1,3 @@
-from chai_mlx.nn.kernels import fused_adaln, fused_adaln_full, fused_gated_residual, fused_swiglu_activation
 from chai_mlx.nn.layers import (
     AdaLayerNorm,
     AttentionPairBias,
@@ -27,8 +26,4 @@ __all__ = [
     "Transition",
     "TriangleAttention",
     "TriangleMultiplication",
-    "fused_adaln",
-    "fused_adaln_full",
-    "fused_gated_residual",
-    "fused_swiglu_activation",
 ]

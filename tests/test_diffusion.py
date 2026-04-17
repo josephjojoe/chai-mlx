@@ -54,7 +54,6 @@ class _EncoderStub:
         *,
         num_tokens: int,
         num_samples: int,
-        use_kernel: bool = False,
     ) -> tuple[mx.array, mx.array, mx.array]:
         batch, n_atoms = atom_cond.shape[:2]
         enc_tokens = mx.zeros((batch, num_samples, num_tokens, self.token_dim), dtype=mx.float32)
@@ -79,8 +78,6 @@ class _DecoderStub:
         atom_exists_mask: mx.array,
         atom_kv_indices: mx.array | None,
         block_atom_pair_mask: mx.array | None,
-        *,
-        use_kernel: bool = False,
     ) -> mx.array:
         return mx.zeros((*atom_repr.shape[:-1], 3), dtype=mx.float32)
 

@@ -193,8 +193,8 @@ class ChaiMLX(nn.Module):
     def featurize(self, inputs: FeatureContext | InputBundle | dict) -> FeatureContext:
         return _featurize(inputs)
 
-    def embed_inputs(self, ctx: FeatureContext, *, use_kernel: bool = False) -> EmbeddingOutputs:
-        return self.input_embedder(ctx, use_kernel=use_kernel)
+    def embed_inputs(self, ctx: FeatureContext) -> EmbeddingOutputs:
+        return self.input_embedder(ctx)
 
     def trunk(self, emb: EmbeddingOutputs, *, recycles: int = 3) -> TrunkOutputs:
         return self.trunk_module(emb, recycles=recycles)
@@ -216,12 +216,8 @@ class ChaiMLX(nn.Module):
         cache: DiffusionCache,
         coords: mx.array,
         sigma: mx.array,
-        *,
-        use_kernel: bool = False,
     ) -> mx.array:
-        return self.diffusion_module.denoise(
-            cache, coords, sigma, use_kernel=use_kernel
-        )
+        return self.diffusion_module.denoise(cache, coords, sigma)
 
     def diffusion_step(
         self,
@@ -230,8 +226,6 @@ class ChaiMLX(nn.Module):
         sigma_curr: mx.array | float,
         sigma_next: mx.array | float,
         gamma: mx.array | float,
-        *,
-        use_kernel: bool = False,
     ) -> mx.array:
         return self.diffusion_module.diffusion_step(
             cache,
@@ -239,7 +233,6 @@ class ChaiMLX(nn.Module):
             sigma_curr,
             sigma_next,
             gamma,
-            use_kernel=use_kernel,
         )
 
     def confidence(self, trunk_out: TrunkOutputs, coords: mx.array) -> ConfidenceOutputs:
@@ -286,11 +279,10 @@ class ChaiMLX(nn.Module):
         recycles: int = 3,
         num_samples: int = 5,
         num_steps: int | None = None,
-        use_kernel: bool = False,
     ) -> InferenceOutputs:
         """Run production inference (no intermediate retention)."""
         ctx = self.featurize(inputs)
-        emb = self.embed_inputs(ctx, use_kernel=use_kernel)
+        emb = self.embed_inputs(ctx)
         # Raw features are only needed during embedding.
         ctx = self._without_raw_features(ctx)
         structure = ctx.structure_inputs
@@ -313,7 +305,6 @@ class ChaiMLX(nn.Module):
                 sigma_curr,
                 sigma_next,
                 gamma,
-                use_kernel=use_kernel,
             )
             mx.eval(coords)
             if step_idx % 16 == 0:
@@ -342,11 +333,10 @@ class ChaiMLX(nn.Module):
         recycles: int = 3,
         num_samples: int = 5,
         num_steps: int | None = None,
-        use_kernel: bool = False,
     ) -> FoldOutputs:
         """Run debug inference and return full intermediate tensors."""
         ctx = self.featurize(inputs)
-        emb = self.embed_inputs(ctx, use_kernel=use_kernel)
+        emb = self.embed_inputs(ctx)
         trunk_out = self.trunk(emb, recycles=recycles)
         cache = self.prepare_diffusion_cache(trunk_out)
         mx.eval(cache.s_static, cache.z_cond, cache.blocked_pair_base,
@@ -359,7 +349,6 @@ class ChaiMLX(nn.Module):
                 sigma_curr,
                 sigma_next,
                 gamma,
-                use_kernel=use_kernel,
             )
             mx.eval(coords)
         conf = self.confidence(trunk_out, coords)

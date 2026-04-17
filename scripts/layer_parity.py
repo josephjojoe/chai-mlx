@@ -280,7 +280,6 @@ def capture_embeddings(
     model: ChaiMLX,
     ctx: FeatureContext,
     *,
-    use_kernel: bool,
     tensors: dict[str, np.ndarray],
 ) -> EmbeddingOutputs:
     ctx = model.input_embedder._trim_empty_msa_rows(ctx)
@@ -310,7 +309,6 @@ def capture_embeddings(
         atom_mask=structure.atom_exists_mask,
         kv_idx=structure.atom_kv_indices,
         block_mask=structure.block_atom_pair_mask,
-        use_kernel=use_kernel,
     )
     emb = EmbeddingOutputs(
         token_single_input=feats["token_single"],
@@ -458,7 +456,6 @@ def _capture_diffusion_transformer(
     s_cond: mx.array,
     pair_biases: tuple[mx.array, ...],
     *,
-    use_kernel: bool,
     tensors: dict[str, np.ndarray],
     prefix: str,
 ) -> mx.array:
@@ -470,7 +467,6 @@ def _capture_diffusion_transformer(
             out.reshape(b * ds, n, d),
             s_cond.reshape(b * ds, n, s_cond.shape[-1]),
             bias.reshape(b * ds, *pair_bias.shape[1:]),
-            use_kernel=use_kernel,
         ).reshape(b, ds, n, d)
         _record(tensors, f"{prefix}.block_{i}.token_repr", out)
     return out
@@ -482,7 +478,6 @@ def capture_denoise(
     coords: mx.array,
     sigma: mx.array,
     *,
-    use_kernel: bool,
     tensors: dict[str, np.ndarray],
 ) -> mx.array:
     trunk = cache.trunk_outputs
@@ -508,7 +503,6 @@ def capture_denoise(
         structure.block_atom_pair_mask,
         num_tokens=trunk.single_initial.shape[1],
         num_samples=num_samples,
-        use_kernel=use_kernel,
     )
     x = x + enc_tokens
     _record(tensors, "denoise.scaled_coords", scaled_coords)
@@ -521,7 +515,6 @@ def capture_denoise(
         x,
         s_cond,
         cache.pair_biases,
-        use_kernel=use_kernel,
         tensors=tensors,
         prefix="denoise.transformer",
     )
@@ -541,7 +534,6 @@ def capture_denoise(
         structure.atom_exists_mask,
         structure.atom_kv_indices,
         structure.block_atom_pair_mask,
-        use_kernel=use_kernel,
     )
     denoised = c_skip[:, :, None, None] * coords + c_out[:, :, None, None] * pos_updates
     _record(tensors, "denoise.token_repr_post_transformer", x)
@@ -627,10 +619,9 @@ def capture_model_tensors(
     extras: dict[str, mx.array],
     *,
     recycles: int,
-    use_kernel: bool,
 ) -> dict[str, np.ndarray]:
     tensors: dict[str, np.ndarray] = {}
-    emb = capture_embeddings(model, ctx, use_kernel=use_kernel, tensors=tensors)
+    emb = capture_embeddings(model, ctx, tensors=tensors)
     trunk_out = capture_trunk(model, emb, recycles=recycles, tensors=tensors)
     cache = capture_cache(model, trunk_out, tensors=tensors)
 
@@ -643,7 +634,6 @@ def capture_model_tensors(
                 cache,
                 coords,
                 sigma,
-                use_kernel=use_kernel,
                 tensors=tensors,
             )
         confidence = capture_confidence(model, trunk_out, coords, tensors=tensors)
@@ -704,7 +694,6 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--tol", type=float, default=1e-4)
     parser.add_argument("--recycles", type=int, default=1)
     parser.add_argument("--key-pattern", type=str, default=None)
-    parser.add_argument("--use-kernel", action="store_true")
     parser.add_argument(
         "--fail-on-extra-actual-keys",
         action="store_true",
@@ -722,7 +711,6 @@ def main(argv: Iterable[str] | None = None) -> None:
         ctx,
         extras,
         recycles=args.recycles,
-        use_kernel=args.use_kernel,
     )
 
     if args.write_mlx_dump is not None:
