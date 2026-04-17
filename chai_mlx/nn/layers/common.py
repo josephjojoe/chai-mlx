@@ -36,10 +36,19 @@ class AdaLayerNorm(nn.Module):
     def __call__(self, x: mx.array, cond: mx.array, *, use_kernel: bool = False) -> mx.array:
         scale, shift = chunk_last(self.to_scale_shift(cond), 2)
         if use_kernel:
-            return fused_adaln_full(
+            # NOTE: the reference path below silently upcasts to float32 when
+            # the inputs are bfloat16, because the Python literal ``1.0`` in
+            # ``(1.0 + scale)`` promotes the expression to float32.  Several
+            # downstream consumers (in particular SDPA mask dtype) rely on
+            # this implicit promotion, so we match it here to keep the fused
+            # kernel a drop-in replacement.
+            out = fused_adaln_full(
                 x, None, None, scale, shift,
                 eps=self._ADALN_EPS,
             )
+            if out.dtype != mx.float32:
+                out = out.astype(mx.float32)
+            return out
         return self.norm(x) * (1.0 + scale) + shift
 
 
