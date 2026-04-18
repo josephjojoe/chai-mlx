@@ -26,6 +26,11 @@ convert = [
 test = [
   "pytest",
 ]
+cuda-harness = [
+  "modal>=1.3",
+  "gemmi>=0.7",
+  "biopython>=1.84",
+]
 
 [project.scripts]
 chai-mlx-export-torchscript = "chai_mlx.io.weights.export_torchscript:main"
@@ -33,7 +38,7 @@ chai-mlx-convert-torchscript = "chai_mlx.io.weights.convert_torchscript:main"
 chai-mlx-convert-npz = "chai_mlx.io.weights.convert_npz:main"
 
 [tool.setuptools.packages.find]
-include = ["chai_mlx*"]
+include = ["chai_mlx*", "cuda_harness*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
