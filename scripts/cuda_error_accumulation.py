@@ -5,12 +5,10 @@ This harness consumes a CUDA intermediates NPZ (produced by
 questions:
 
 1. **Trunk recycle growth.**  How does the MLX-vs-CUDA error on
-   ``(single_repr, pair_repr)`` evolve across recycles 1..N?  The
-   earlier ``stage_isolation_parity.py`` harness feeds CUDA embeddings
-   into MLX *once* and runs all recycles locally — useful, but doesn't
-   show the per-recycle growth curve.  Here we feed the CUDA embeddings
-   for recycle 0 and then, for each recycle, capture MLX's intermediate
-   and compare against the CUDA snapshot.  Two modes are supported:
+   ``(single_repr, pair_repr)`` evolve across recycles 1..N?  We feed
+   the CUDA embeddings for recycle 0 and then, for each recycle,
+   capture MLX's intermediate and compare against the CUDA snapshot.
+   Two modes are supported:
 
    * ``--mode isolated``: at each recycle, reseed MLX with the CUDA
      output of the *previous* recycle.  This measures the intrinsic

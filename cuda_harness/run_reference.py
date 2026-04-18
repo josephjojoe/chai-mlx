@@ -1,8 +1,7 @@
 """Run a reference end-to-end chai-lab inference on CUDA via Modal.
 
-This is the CUDA-side equivalent of :mod:`scripts.cif_seed_sweep` and is the
-primary input for :mod:`scripts.cuda_structure_sweep`.  For one or more
-targets and seeds, it:
+This is the primary input for :mod:`scripts.cuda_structure_sweep`. For one
+or more targets and seeds, it:
 
 * Runs ``chai_lab.chai1.run_inference`` on a CUDA GPU on Modal.
 * Captures per-sample ``pred.model_idx_*.cif`` bytes + ``scores.model_idx_*.npz``

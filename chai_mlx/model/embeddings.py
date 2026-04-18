@@ -311,7 +311,6 @@ class InputEmbedder(nn.Module):
     def __init__(self, cfg: ChaiConfig) -> None:
         super().__init__()
         self.cfg = cfg
-        self._compute_dtype = resolve_dtype(cfg)
         self.feature_embedding = FeatureEmbedding(cfg)
         self.bond_projection = BondProjection(cfg)
         self.token_input = TokenInputEmbedding(cfg)
@@ -400,7 +399,7 @@ class InputEmbedder(nn.Module):
             feats["token_pair_trunk"] = feats["token_pair_trunk"] + bond_trunk
             feats["token_pair_structure"] = feats["token_pair_structure"] + bond_structure
 
-        dt = self._compute_dtype
+        dt = resolve_dtype(self.cfg)
         if dt != mx.float32:
             feats = {k: v.astype(dt) for k, v in feats.items()}
 

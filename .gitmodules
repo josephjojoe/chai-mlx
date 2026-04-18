@@ -1,0 +1,3 @@
+[submodule "chai-lab"]
+	path = chai-lab
+	url = https://github.com/chaidiscovery/chai-lab

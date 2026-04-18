@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "MLX inference port of Chai-1 with a clean pipeline API and reusable tooling"
 readme = "README.md"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Joseph Jojoe" }]
 dependencies = [
   "numpy>=1.26",
   "huggingface_hub>=0.28",

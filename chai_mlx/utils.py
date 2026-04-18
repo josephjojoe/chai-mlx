@@ -235,5 +235,7 @@ def edm_sigmas(
 def edm_gammas(sigmas: mx.array, s_churn: float, s_tmin: float, s_tmax: float) -> mx.array:
     gamma = mx.full(sigmas.shape, 0.0, dtype=mx.float32)
     active = (sigmas >= s_tmin) & (sigmas <= s_tmax)
+    # EDM paper eq. 5: gamma_i = min(S_churn / N, sqrt(2) - 1). ``sigmas.shape[0]``
+    # equals the schedule's N (no terminal zero is appended in ``edm_sigmas``).
     gamma_value = min(s_churn / int(sigmas.shape[0]), math.sqrt(2.0) - 1.0)
     return mx.where(active, mx.full(sigmas.shape, gamma_value, dtype=mx.float32), gamma)

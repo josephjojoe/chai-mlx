@@ -13,7 +13,16 @@ def make_structure_inputs(
     n_atoms: int = 8,
     msa_depth: int = 3,
     n_templates: int = 2,
+    with_ranker_fields: bool = False,
 ) -> StructureInputs:
+    """Build a ``StructureInputs`` with masks/indices sized to the given shape.
+
+    When ``with_ranker_fields`` is true, also populates the fields consumed
+    by the ranking pipeline (``token_residue_index``, ``token_entity_type``,
+    ``token_backbone_frame_mask``, ``token_backbone_frame_index``). Those
+    default to ``None`` to keep the majority of tests that don't exercise
+    ranking on their existing happy path.
+    """
     token_exists = mx.ones((batch_size, n_tokens), dtype=mx.float32)
     atom_exists = mx.ones((batch_size, n_atoms), dtype=mx.float32)
     atom_token_index = (mx.arange(n_atoms)[None, :] % n_tokens).astype(mx.int32)
@@ -25,6 +34,15 @@ def make_structure_inputs(
     template_input_masks = mx.ones(
         (batch_size, n_templates, n_tokens, n_tokens), dtype=mx.float32
     )
+
+    ranker_extras: dict = {}
+    if with_ranker_fields:
+        ranker_extras = {
+            "token_residue_index": mx.arange(n_tokens, dtype=mx.int32)[None, :],
+            "token_entity_type": mx.zeros((batch_size, n_tokens), dtype=mx.int32),
+            "token_backbone_frame_mask": mx.ones((batch_size, n_tokens), dtype=mx.bool_),
+            "token_backbone_frame_index": mx.zeros((batch_size, n_tokens, 3), dtype=mx.int32),
+        }
 
     return StructureInputs(
         atom_exists_mask=atom_exists,
@@ -40,6 +58,7 @@ def make_structure_inputs(
         token_is_polymer=mx.ones((batch_size, n_tokens), dtype=mx.float32),
         msa_mask=msa_mask,
         template_input_masks=template_input_masks,
+        **ranker_extras,
     )
 
 

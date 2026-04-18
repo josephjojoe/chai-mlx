@@ -130,6 +130,14 @@ def load_pretrained_config(
     return path, cfg
 
 
+# Periodically drop Metal's allocator cache during long diffusion roll-outs.
+# Without this MLX's pool can grow unboundedly across hundreds of steps.
+# Calling ``mx.clear_cache`` on every step forces a sync that hurts
+# throughput; 16 is the empirical sweet spot that bounds peak memory
+# without noticeably disrupting the compute pipeline.
+_DIFFUSION_CACHE_CLEAR_INTERVAL = 16
+
+
 @dataclass
 class FoldOutputs:
     """Debug fold outputs with full intermediate tensors."""
@@ -307,7 +315,7 @@ class ChaiMLX(nn.Module):
                 gamma,
             )
             mx.eval(coords)
-            if step_idx % 16 == 0:
+            if step_idx % _DIFFUSION_CACHE_CLEAR_INTERVAL == 0:
                 mx.clear_cache()
         mx.clear_cache()
 

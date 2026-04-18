@@ -3,8 +3,7 @@
 Consumes a CUDA intermediates NPZ produced by
 ``modal run -m cuda_harness.run_intermediates`` and replays the MLX pipeline
 against those exact inputs, comparing each stage's outputs to the CUDA
-captures.  This is the CUDA-side equivalent of
-:mod:`scripts.stage_isolation_parity`, which compares against Torch-MPS.
+captures.
 
 What it checks, in order (each stage feeds CUDA-captured boundary inputs
 to MLX so upstream drift doesn't poison downstream comparisons):
@@ -27,8 +26,7 @@ to MLX so upstream drift doesn't poison downstream comparisons):
 
 For each comparison we print ``max / mean / p99 / rel_range`` absolute
 error.  Pass/fail is driven by an optional per-stage tolerance (defaults
-are calibrated against the 1L2Y bf16 MLX-vs-MPS floor documented in
-``docs/status.md``).
+are calibrated against the bf16 per-op divergence floor measured on 1L2Y).
 
 Usage
 -----
@@ -66,6 +64,15 @@ from chai_mlx.data.types import (
 )
 from chai_mlx.model.diffusion import DiffusionModule  # noqa: F401  (sanity import)
 from chai_mlx.utils import resolve_dtype
+
+try:
+    from chai_lab.chai1 import feature_generators
+    from chai_lab.data.parsing.structure.entity_type import EntityType as ChaiEntityType
+except ImportError as e:
+    raise SystemExit(
+        "cuda_parity requires chai_lab (for feature_generators + EntityType). "
+        "Install via: pip install -e '.[featurize]'"
+    ) from e
 
 
 # ---------------------------------------------------------------------------
@@ -105,10 +112,9 @@ def _reconstruct_structure_inputs(data: dict[str, np.ndarray]) -> StructureInput
 
     token_entity_type = data["inputs.batch.token_entity_type"].astype(np.int64)
     is_polymer = np.zeros_like(token_entity_type, dtype=np.float32)
-    # EntityType: PROTEIN=1, RNA=3, DNA=4 (see chai_lab.data.parsing.structure.entity_type)
-    # Use the chai-lab enum to keep this correct regardless of ordering.
-    from chai_lab.data.parsing.structure.entity_type import EntityType as ChaiEntityType
-
+    # EntityType: PROTEIN=1, RNA=3, DNA=4 (see chai_lab.data.parsing.structure.entity_type).
+    # We use the chai-lab enum here so the mapping stays correct regardless of
+    # how the upstream enum is ordered.
     for v in (
         ChaiEntityType.PROTEIN.value,
         ChaiEntityType.RNA.value,
@@ -162,7 +168,6 @@ def _reconstruct_structure_inputs(data: dict[str, np.ndarray]) -> StructureInput
 
 def _reconstruct_feature_context(data: dict[str, np.ndarray]) -> FeatureContext:
     structure = _reconstruct_structure_inputs(data)
-    from chai_lab.chai1 import feature_generators  # type: ignore[import-not-found]
 
     raw: dict[str, mx.array] = {}
     for name in feature_generators:
@@ -604,7 +609,7 @@ def check_confidence(
 def _default_tolerance(stage: str, dtype: str) -> float:
     # These tolerances are designed to flag structural mismatches; they are
     # *not* so tight that bf16 fused-kernel rounding differences between MLX
-    # and CUDA will fail them.  See docs/status.md for the MPS-side floor.
+    # and CUDA will fail them.
     if dtype == "float32":
         return {
             "embedding": 1e-3,

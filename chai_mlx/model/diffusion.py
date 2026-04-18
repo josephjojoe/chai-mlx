@@ -270,8 +270,12 @@ class DiffusionModule(nn.Module):
         gamma: mx.array | float,
     ) -> mx.array:
         structure = cache.structure_inputs
+        # Decide second-order from the scalar schedule value BEFORE broadcasting
+        # to a batched tensor. Doing the comparison on the broadcast tensor
+        # would force a host sync (``.item()``) at every diffusion step.
+        sigma_next_scalar = float(sigma_next)
         sigma_curr = mx.full((coords.shape[0], coords.shape[1]), float(sigma_curr), dtype=mx.float32)
-        sigma_next = mx.full((coords.shape[0], coords.shape[1]), float(sigma_next), dtype=mx.float32)
+        sigma_next = mx.full((coords.shape[0], coords.shape[1]), sigma_next_scalar, dtype=mx.float32)
         gamma = mx.full((coords.shape[0], coords.shape[1]), float(gamma), dtype=mx.float32)
 
         # SE(3) augmentation before noise injection.
@@ -292,8 +296,7 @@ class DiffusionModule(nn.Module):
         d_i = (coords_hat - denoised) / sigma_hat[:, :, None, None]
         coords_euler = coords_hat + (sigma_next - sigma_hat)[:, :, None, None] * d_i
 
-        sigma_next_nonzero = bool(mx.any(sigma_next != 0).item())
-        if self.cfg.diffusion.second_order and sigma_next_nonzero:
+        if self.cfg.diffusion.second_order and sigma_next_scalar != 0.0:
             denoised_next = self.denoise(cache, coords_euler, sigma_next)
             d_i_prime = (coords_euler - denoised_next) / sigma_next[:, :, None, None]
             coords_euler = coords_euler + (sigma_next - sigma_hat)[:, :, None, None] * (d_i_prime + d_i) / 2.0

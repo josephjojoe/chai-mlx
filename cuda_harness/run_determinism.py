@@ -1,12 +1,11 @@
 """Measure CUDA's own run-to-run determinism for Chai-1 on Modal.
 
-When interpreting the ``~0.75 Å`` MLX-vs-CUDA Cα RMSD reported in
-``docs/status.md``, the natural question is: *how different are two
-CUDA runs of the same seed?*  If CUDA is bit-exact on replay, the full
-0.75 Å is "real" MLX-vs-CUDA drift; if CUDA disagrees with itself by a
-measurable amount, some fraction of 0.75 Å is just CUDA's own
-non-determinism (atomic reductions, cuDNN autotune, TF32 on matmul
-epilogues).
+When interpreting an MLX-vs-CUDA Cα RMSD number, the natural question is:
+*how different are two CUDA runs of the same seed?*  If CUDA is bit-exact
+on replay, the full gap is "real" MLX-vs-CUDA drift; if CUDA disagrees
+with itself by a measurable amount, some fraction of the gap is just
+CUDA's own non-determinism (atomic reductions, cuDNN autotune, TF32 on
+matmul epilogues).
 
 This harness runs chai-lab end-to-end **twice in the same container**
 on the same target + seed and dumps a compact NPZ with per-run:

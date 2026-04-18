@@ -19,9 +19,8 @@ Jobs spawned
 
 Jobs 1-6 are Modal H100; job 4 also pairs with a local ``cuda_parity``
 run when the payload lands.  Jobs 7-8 run locally after the reference
-CIFs come back; they re-use
-[`scripts/cuda_structure_sweep.py`](/Users/josephjojoe/Documents/Projects/chai-mlx/scripts/cuda_structure_sweep.py)
-to extract Cα RMSDs / GDT-TS / lDDT against both CUDA and the PDB.
+CIFs come back; they re-use ``scripts/cuda_structure_sweep.py`` to
+extract Cα RMSDs / GDT-TS / lDDT against both CUDA and the PDB.
 
 Usage
 -----

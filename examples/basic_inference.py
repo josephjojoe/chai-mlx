@@ -1,3 +1,13 @@
+"""Minimal end-to-end smoke example using random dummy inputs.
+
+Runs ``ChaiMLX`` across embedding, trunk, one diffusion step, confidence, and
+ranking on random inputs and prints the resulting shapes. No weights, no
+featurizer; useful only as a sanity check that the pipeline is wired up.
+
+For a real FASTA-backed inference run, see ``examples/fasta_smoke.py`` or
+``scripts/inference.py``.
+"""
+
 from __future__ import annotations
 
 import mlx.core as mx
@@ -5,7 +15,20 @@ import mlx.core as mx
 from chai_mlx import ChaiMLX, featurize
 
 
-def build_dummy_inputs(batch_size: int = 1, n_tokens: int = 256, msa_depth: int = 32, n_templates: int = 4):
+def build_dummy_inputs(
+    batch_size: int = 1,
+    n_tokens: int = 256,
+    msa_depth: int = 32,
+    n_templates: int = 4,
+) -> dict:
+    """Build a FeatureContext-shaped dict of random inputs.
+
+    All tensors are random where the shape is non-trivial, and mask-like
+    fields are set to ones so the model exercises every code path. Index
+    fields used by the ranker (``token_centre_atom_index``,
+    ``token_residue_index``, etc.) are populated with reasonable defaults
+    so ``rank_outputs`` runs cleanly; the numeric values are not meaningful.
+    """
     n_atoms = 23 * n_tokens
     num_blocks = n_atoms // 32
     token_exists = mx.ones((batch_size, n_tokens), dtype=mx.bool_)
@@ -13,6 +36,7 @@ def build_dummy_inputs(batch_size: int = 1, n_tokens: int = 256, msa_depth: int 
     atom_token_index = mx.arange(n_atoms)[None, :] // 23
     atom_within_token_index = mx.arange(n_atoms)[None, :] % 37
     token_ref_atom_index = mx.arange(n_tokens)[None, :] * 23
+    token_centre_atom_index = mx.arange(n_tokens)[None, :] * 23
     q_idx = mx.arange(n_atoms).reshape(1, num_blocks, 32)
     kv_idx = mx.clip(
         q_idx[:, :, :1] + mx.arange(128)[None, None, :] - 48,
@@ -36,10 +60,15 @@ def build_dummy_inputs(batch_size: int = 1, n_tokens: int = 256, msa_depth: int 
             "atom_token_index": atom_token_index,
             "atom_within_token_index": atom_within_token_index,
             "token_reference_atom_index": token_ref_atom_index,
-            "token_asym_id": mx.zeros((batch_size, n_tokens), dtype=mx.int32),
-            "token_entity_id": mx.zeros((batch_size, n_tokens), dtype=mx.int32),
-            "token_chain_id": mx.zeros((batch_size, n_tokens), dtype=mx.int32),
+            "token_centre_atom_index": token_centre_atom_index,
+            "token_asym_id": mx.ones((batch_size, n_tokens), dtype=mx.int32),
+            "token_entity_id": mx.ones((batch_size, n_tokens), dtype=mx.int32),
+            "token_chain_id": mx.ones((batch_size, n_tokens), dtype=mx.int32),
             "token_is_polymer": mx.ones((batch_size, n_tokens), dtype=mx.bool_),
+            "token_residue_index": mx.arange(n_tokens, dtype=mx.int32)[None, :],
+            "token_entity_type": mx.zeros((batch_size, n_tokens), dtype=mx.int32),
+            "token_backbone_frame_mask": mx.ones((batch_size, n_tokens), dtype=mx.bool_),
+            "token_backbone_frame_index": mx.zeros((batch_size, n_tokens, 3), dtype=mx.int32),
             "bond_adjacency": mx.zeros((batch_size, n_tokens, n_tokens, 1)),
             "atom_q_indices": q_idx,
             "atom_kv_indices": kv_idx,

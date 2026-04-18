@@ -1,0 +1,12 @@
+chai-mlx
+Copyright 2026 Joseph Jojoe
+
+This product is a derivative work of Chai-1 (https://github.com/chaidiscovery/chai-lab),
+Copyright 2024 Chai Discovery, licensed under the Apache License, Version 2.0.
+
+Portions of this work derive architecturally and numerically from chai-lab's
+model definitions and weight formats. All upstream copyright notices are
+preserved in the pinned ``chai-lab/`` submodule's LICENSE file.
+
+Weights are distributed by Chai Discovery under their own terms; see
+https://chaiassets.com and the upstream chai-lab repository for details.
