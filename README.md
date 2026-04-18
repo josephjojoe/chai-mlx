@@ -25,13 +25,14 @@ Multimer and ligand targets are untested.
 ## Install
 
 ```bash
-git clone --recurse-submodules <repo-url>
+git clone --recurse-submodules https://github.com/josephjojoe/chai-mlx
 cd chai-mlx
 pip install -e .
 ```
 
 The `--recurse-submodules` flag fetches the pinned `chai-lab/` reference
-checkout used by the featurizer and some comparison harnesses.
+checkout used by the featurizer and some comparison harnesses. If you've
+already cloned without it, run `git submodule update --init chai-lab`.
 
 Optional extras:
 
@@ -42,35 +43,57 @@ pip install -e ".[cuda-harness]"  # modal + gemmi + biopython; for the CUDA comp
 pip install -e ".[test]"          # pytest
 ```
 
-## Public API
+## Quick start
 
 ```python
-from chai_mlx import ChaiMLX, featurize, featurize_fasta
+from chai_mlx import ChaiMLX, featurize_fasta
 
-model = ChaiMLX.from_pretrained("./weights")
+# Pulls ~1.2 GB of safetensors from the HF repo on first call.
+model = ChaiMLX.from_pretrained("josephjojoe/chai-mlx")
 
-ctx = featurize(inputs)
-# or:
-# ctx = featurize_fasta("input.fasta", output_dir="./out")
-
+ctx = featurize_fasta("input.fasta", output_dir="./out")  # needs [featurize] extra
 result = model.run_inference(ctx, recycles=3, num_samples=5, num_steps=200)
 # result.coords, result.confidence, result.ranking
-
-# Debug variant returns the full context, embeddings, and trunk intermediates:
-debug = model.run_inference_debug(ctx, recycles=3, num_samples=5, num_steps=200)
 ```
 
-`ChaiMLX.from_pretrained(...)` accepts either a local directory containing
-`config.json` plus `model.safetensors` (or sharded safetensors with an
-index file), or a Hugging Face repo id, in which case `huggingface_hub`
-downloads the snapshot first. The gitignored `weights/` directory is the
-expected local home for model artifacts.
+`ChaiMLX.from_pretrained(...)` accepts either a Hugging Face repo id (as
+above, via `huggingface_hub`) or a local directory containing `config.json`
+plus `model.safetensors` (or sharded safetensors with an index file). Pass
+`compute_dtype="float32"` to disable mixed-precision inference.
 
-To build safetensors from the upstream Chai-1 TorchScript distribution:
+For a no-weights smoke test of the pipeline, see
+`examples/basic_inference.py`. For debug outputs (context + embeddings +
+trunk intermediates alongside coords / confidence / ranking), use
+`model.run_inference_debug(...)`.
+
+The full set of staged entry points — `embed_inputs`, `trunk`,
+`prepare_diffusion_cache`, `diffusion_step`, `confidence`, `rank_outputs` —
+is documented in `chai_mlx/model/core.py`; they're what the CUDA comparison
+harnesses call into, and are useful when you want to feed reference tensors
+into individual stages.
+
+## Weights
+
+Pre-converted weights are hosted on Hugging Face at
+[`josephjojoe/chai-mlx`](https://huggingface.co/josephjojoe/chai-mlx)
+(~1.2 GB, float32 safetensors). These are Chai Discovery's released
+Chai-1 weights, rewritten as safetensors for MLX — no retraining or
+numerical modification.
+
+If you'd rather start from the upstream TorchScript distribution, fetch
+the `.pt` files from Chai Discovery's CDN and convert locally:
 
 ```bash
-chai-mlx-convert-torchscript --pt-dir path/to/pt --out-dir weights/
+for f in trunk token_embedder feature_embedding diffusion_module \
+         confidence_head bond_loss_input_proj; do
+  curl -O "https://chaiassets.com/chai1-inference-depencencies/models_v2/${f}.pt"
+done
+chai-mlx-convert-torchscript --pt-dir . --out-dir weights/
 ```
+
+Or, if you have a Modal account set up, `cuda_harness/modal_common.py`
+exposes a `download_inference_dependencies` Function that populates a
+Modal Volume with the same files (used by the CUDA harnesses below).
 
 ## Repository layout
 
@@ -85,11 +108,26 @@ chai_mlx/           MLX package
 
 cuda_harness/       Modal-hosted chai-lab-on-CUDA reference harness
 examples/           minimal runnable examples
-scripts/            contributor tooling (CUDA comparison drivers, inference)
-tests/              pytest suite
+scripts/            CUDA comparison drivers + FASTA inference runner
+tests/              pytest suite (27 tests, ~3 s)
 chai-lab/           pinned upstream reference checkout (git submodule)
-weights/            local model artifacts (gitignored)
+weights/            local model artifacts (gitignored; see "Weights" above)
+LICENSE, NOTICE     Apache-2.0 + upstream attribution
 ```
+
+## Running locally
+
+- **Smoke the package on random inputs** (no weights, no featurizer):
+  `python examples/basic_inference.py`
+- **Run end-to-end FASTA inference** (needs `[featurize]` extra):
+  `python scripts/inference.py --weights-dir weights/ --fasta path/to/input.fasta`
+- **Benchmark the diffusion loop**:
+  `python examples/diffusion_benchmark.py`
+- **FASTA featurization smoke**:
+  `python examples/fasta_smoke.py --fasta path/to/input.fasta`
+- **Tests**: `pip install -e ".[test]"` then `pytest -q` (≈3 s; the
+  `test_ranking.py` parity tests are auto-skipped unless `[featurize]`
+  is also installed).
 
 ## CUDA comparison harnesses
 
@@ -113,7 +151,7 @@ artifacts that local `scripts/cuda_*` helpers consume. No local GPU needed.
 
 | Harness | What it does |
 | --- | --- |
-| `modal run -m cuda_harness.run_reference` | End-to-end CUDA inference per target + seed; returns CIFs and score NPZ per diffusion sample. |
+| `modal run -m cuda_harness.run_reference` | End-to-end CUDA inference for each (target, seed) pair; returns CIFs and score NPZ per diffusion sample. |
 | `modal run -m cuda_harness.run_intermediates` | Same flow plus per-boundary tensor dumps (embedding, bond projection, per-recycle trunk, diffusion snapshots, confidence logits, ranking) into one NPZ per seed. |
 | `modal run -m cuda_harness.run_determinism` | Runs chai-lab on CUDA twice on the same seed under configurable precision policy (`default` / `tf32_off` / `deterministic`) to measure CUDA's own run-to-run non-determinism. |
 | `modal run -m cuda_harness.bench_throughput` | Per-module CUDA timings with warmup and `cuda.synchronize` gates; per-target JSON plus combined CSV. |
@@ -130,7 +168,7 @@ Local companions:
 | `scripts/mlx_throughput.py` + `scripts/report_throughput_comparison.py` | Side-by-side MLX vs CUDA per-module wall clock. |
 | `scripts/spawn_cuda_sweep.py` | Fan out every CUDA experiment to Modal in parallel. |
 
-### Example workflow
+### Example workflows
 
 ```bash
 # 1. Numerical parity (single target + seed, full stage-isolation diff)
@@ -151,7 +189,21 @@ python scripts/cuda_structure_sweep.py \
     --mlx-output-dir /tmp/chai_mlx_cuda/mlx \
     --compare-pdb --csv /tmp/chai_mlx_cuda/structure_sweep.csv
 
-# 3. Throughput: CUDA on Modal, MLX locally, then a side-by-side report
+# 3. CUDA run-to-run determinism (answers "how much of the gap is just
+#    CUDA disagreeing with itself?")
+modal run -m cuda_harness.run_determinism \
+    --targets 1L2Y --seeds 42 --precision default
+python scripts/cuda_determinism_report.py \
+    --npz /tmp/chai_mlx_cuda/determinism/1L2Y/seed_42_default.npz
+
+# 4. Trunk-vs-diffusion attribution (answers "how much of the gap is
+#    trunk drift vs MLX diffusion sampler differences?")
+python scripts/cuda_mlx_diffusion_isolation.py \
+    --weights-dir weights \
+    --npz /tmp/chai_mlx_cuda/intermediates/1L2Y/seed_42.npz \
+    --cuda-reference-dir /tmp/chai_mlx_cuda/reference/1L2Y/seed_42
+
+# 5. Throughput: CUDA on Modal, MLX locally, then a side-by-side report
 modal run -m cuda_harness.bench_throughput \
     --targets 1L2Y,1VII,1CRN,1UBQ
 
@@ -164,14 +216,6 @@ python scripts/report_throughput_comparison.py \
     --mlx-json /tmp/chai_mlx_cuda/throughput/mlx.json \
     --cuda-dir /tmp/chai_mlx_cuda/throughput
 ```
-
-## Local workflows
-
-- Smoke the package on random inputs: `python examples/basic_inference.py`
-- Run end-to-end FASTA inference: `python scripts/inference.py --weights-dir weights/ --fasta path/to/input.fasta`
-- Benchmark the diffusion loop: `python examples/diffusion_benchmark.py`
-- FASTA featurization smoke: `python examples/fasta_smoke.py --fasta path/to/input.fasta`
-- Run the test suite: `pytest -q`
 
 ## License
 

@@ -16,10 +16,11 @@ class ConfidenceHead(nn.Module):
         self.cfg = cfg
         self.single_to_pair_proj = nn.Linear(cfg.hidden.token_single, 2 * cfg.hidden.token_pair, bias=False)
         self.atom_distance_bins_projection = nn.Linear(16, cfg.hidden.token_pair, bias=False)
-        self.atom_distance_v_bins = mx.array(
-            cfg.confidence.distance_bin_edges,
-            dtype=mx.float32,
-        )
+        # ``atom_distance_v_bins`` is a constant derived from the config, not a
+        # learned parameter.  Storing it as a plain ``mx.array`` attribute on
+        # this module would make ``nn.Module.parameters()`` list it and
+        # ``strict=True`` weight loading would demand it be present in the
+        # safetensors; we rebuild it lazily in ``_run_single`` instead.
         self.blocks = [
             PairformerBlock(
                 pair_dim=cfg.hidden.token_pair,
@@ -54,7 +55,8 @@ class ConfidenceHead(nn.Module):
 
         ref_coords = representative_atom_coords(coords, structure.token_reference_atom_index)
         dists = cdist(ref_coords)
-        dist_bins = one_hot_binned(dists, self.atom_distance_v_bins)
+        dist_bin_edges = mx.array(self.cfg.confidence.distance_bin_edges, dtype=mx.float32)
+        dist_bins = one_hot_binned(dists, dist_bin_edges)
         pair = pair + self.atom_distance_bins_projection(dist_bins).astype(pair.dtype)
 
         token_mask = structure.token_exists_mask.astype(pair.dtype)
