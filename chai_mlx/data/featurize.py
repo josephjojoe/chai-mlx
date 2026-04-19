@@ -13,13 +13,25 @@ When ``featurize_fasta()`` is used, raw per-feature tensors are stored as
 concatenate, and project each feature group independently — avoiding the
 multi-GB materialisation of a single wide encoded tensor that the
 pre-computed path requires.
+
+The ``esm_backend`` knob on :func:`featurize_fasta` selects how ESM-2
+embeddings are obtained:
+
+* ``"off"`` (default): no ESM embeddings; the feature is zero-filled.
+  Matches every existing harness call site.
+* ``"chai"``: pass ``use_esm_embeddings=True`` through to chai-lab, which
+  loads its traced CUDA fp16 checkpoint.  Only sensible on a machine that
+  has torch + CUDA.
+* ``"mlx"``: pre-compute embeddings with ``esm-mlx`` on Apple silicon
+  and inject them into the chai-lab featurization pipeline.  Requires
+  the ``[esm]`` extra.
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .types import FeatureContext, InputBundle, StructureInputs
 
@@ -86,7 +98,9 @@ def featurize_fasta(
     output_dir: str | Path | None = None,
     msa_directory: Path | None = None,
     constraint_path: Path | None = None,
-    use_esm_embeddings: bool = True,
+    use_esm_embeddings: bool | None = None,
+    esm_backend: Literal["off", "chai", "mlx", "mlx_cache"] = "off",
+    esm_cache_dir: str | Path | None = None,
     use_msa_server: bool = False,
     msa_server_url: str = "https://api.colabfold.com",
     use_templates_server: bool = False,
@@ -97,8 +111,39 @@ def featurize_fasta(
     Requires ``chai-lab`` and ``torch`` to be installed.  Returns a
     ``FeatureContext`` with ``raw_features`` populated — the heavy-duty
     encoding + projection is deferred to ``FeatureEmbedding.__call__``.
+
+    Parameters
+    ----------
+    esm_backend:
+        * ``"off"`` (default) — zero-fill ESM embeddings. All existing
+          harness scripts use this.
+        * ``"chai"`` — delegate to chai-lab's traced CUDA fp16 checkpoint.
+          Only sensible on a CUDA host.
+        * ``"mlx"`` — compute embeddings with ``esm-mlx`` in-process.
+          Loads the full 3B model; not advisable alongside chai-mlx
+          inference on a 16 GB Mac.
+        * ``"mlx_cache"`` — load embeddings from the directory pointed to
+          by ``esm_cache_dir`` (as produced by
+          :mod:`scripts.precompute_esm_mlx`). Zero extra RAM cost at
+          inference time.
+
+    esm_cache_dir:
+        Directory of pre-computed ``<sha1>.npy`` files. Required when
+        ``esm_backend="mlx_cache"``; ignored otherwise.
+
+    use_esm_embeddings:
+        **Deprecated.** Retained for backward compatibility with callers
+        that pass this boolean.  ``True`` is equivalent to
+        ``esm_backend="chai"``; ``False`` is equivalent to the default
+        ``esm_backend="off"``.  Passing both raises ``ValueError``.
     """
     import tempfile
+
+    # Patch chai-lab's RDKit timeout on macOS before its modules are
+    # imported inside ``make_all_atom_feature_context``.
+    from chai_mlx.data._rdkit_timeout_patch import apply_rdkit_timeout_patch
+
+    apply_rdkit_timeout_patch()
 
     fasta_file = Path(fasta_file)
     if output_dir is None:
@@ -106,6 +151,21 @@ def featurize_fasta(
     else:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+
+    if use_esm_embeddings is not None:
+        if esm_backend != "off":
+            raise ValueError(
+                "Pass only one of use_esm_embeddings= or esm_backend= "
+                "(use_esm_embeddings is deprecated)"
+            )
+        esm_backend = "chai" if use_esm_embeddings else "off"
+
+    if esm_backend not in ("off", "chai", "mlx", "mlx_cache"):
+        raise ValueError(
+            f"esm_backend must be 'off', 'chai', 'mlx', or 'mlx_cache'; got {esm_backend!r}"
+        )
+    if esm_backend == "mlx_cache" and esm_cache_dir is None:
+        raise ValueError("esm_backend='mlx_cache' requires esm_cache_dir=")
 
     from chai_lab.chai1 import (
         Collate,
@@ -117,7 +177,12 @@ def featurize_fasta(
     feature_context = make_all_atom_feature_context(
         fasta_file,
         output_dir=output_dir,
-        use_esm_embeddings=use_esm_embeddings,
+        # Use the FASTA entity names as chain IDs so constraint CSVs can
+        # reference chains by the same label the user wrote in the FASTA
+        # header.  Without this, chai-lab auto-assigns A/B/C... and
+        # constraint lookups silently return zero matches.
+        entity_name_as_subchain=True,
+        use_esm_embeddings=(esm_backend == "chai"),
         use_msa_server=use_msa_server,
         msa_server_url=msa_server_url,
         msa_directory=msa_directory,
@@ -125,6 +190,19 @@ def featurize_fasta(
         use_templates_server=use_templates_server,
         templates_path=templates_path,
     )
+
+    if esm_backend == "mlx":
+        from chai_mlx.data.esm_mlx_adapter import build_embedding_context
+
+        feature_context.embedding_context = build_embedding_context(
+            feature_context.chains
+        )
+    elif esm_backend == "mlx_cache":
+        from chai_mlx.data.esm_mlx_adapter import build_embedding_context_from_cache
+
+        feature_context.embedding_context = build_embedding_context_from_cache(
+            feature_context.chains, cache_dir=esm_cache_dir
+        )
 
     collator = Collate(
         feature_factory=feature_factory,

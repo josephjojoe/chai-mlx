@@ -36,6 +36,20 @@ def main() -> None:
         help="Use debug inference path and retain full intermediates",
     )
     parser.add_argument(
+        "--esm-backend",
+        choices=["off", "chai", "mlx", "mlx_cache"],
+        default="off",
+        help="ESM-2 embedding source: 'off' (zero-fill, default), 'chai' "
+        "(chai-lab CUDA), 'mlx' (esm-mlx in-process; requires [esm] extra), "
+        "'mlx_cache' (load pre-computed embeddings from --esm-cache-dir)",
+    )
+    parser.add_argument(
+        "--esm-cache-dir",
+        type=Path,
+        default=None,
+        help="Directory of pre-computed ESM-MLX embeddings (only used with --esm-backend mlx_cache)",
+    )
+    parser.add_argument(
         "--save-npz",
         type=Path,
         default=None,
@@ -50,11 +64,12 @@ def main() -> None:
     model = ChaiMLX.from_pretrained(args.weights_dir, strict=False, compute_dtype=args.dtype)
     print("Model loaded.")
 
-    print("Featurizing FASTA ...")
+    print(f"Featurizing FASTA (esm_backend={args.esm_backend}) ...")
     ctx = featurize_fasta(
         args.fasta,
         output_dir=args.feature_dir,
-        use_esm_embeddings=False,
+        esm_backend=args.esm_backend,
+        esm_cache_dir=args.esm_cache_dir,
         use_msa_server=False,
         use_templates_server=False,
     )

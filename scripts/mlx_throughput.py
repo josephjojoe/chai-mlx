@@ -68,7 +68,7 @@ import mlx.core as mx
 from chai_mlx import ChaiMLX
 from chai_mlx.data.featurize import featurize_fasta
 
-from cuda_harness.modal_common import DEFAULT_TARGETS
+from cuda_harness.modal_common import DEFAULT_TARGETS, Target
 
 
 def _sync(*arrays: mx.array) -> None:
@@ -89,7 +89,7 @@ class ModuleTiming:
 @dataclass
 class TargetResult:
     target: str
-    sequence: str
+    fasta: str
     n_tokens: int
     dtype: str
     num_recycles: int
@@ -120,8 +120,7 @@ def _summarize(xs: list[float]) -> ModuleTiming:
 
 def _bench_target(
     weights_dir: Path,
-    target: str,
-    sequence: str,
+    target: Target,
     *,
     num_recycles: int,
     num_steps: int,
@@ -129,19 +128,21 @@ def _bench_target(
     warmup: int,
     dtype: str,
     feature_dir: Path,
+    esm_backend: str = "off",
 ) -> TargetResult:
     feature_dir.mkdir(parents=True, exist_ok=True)
-    fasta_path = feature_dir / f"{target}.fasta"
-    fasta_path.write_text(f">protein|name={target}\n{sequence}\n")
+    fasta_path = feature_dir / f"{target.name}.fasta"
+    fasta_path.write_text(target.to_fasta())
 
-    print(f"[mlx] loading weights (dtype={dtype}) for {target}")
+    print(f"[mlx] loading weights (dtype={dtype}) for {target.name}")
     model = ChaiMLX.from_pretrained(weights_dir, strict=False, compute_dtype=dtype)
 
-    print(f"[mlx] featurizing {target} ({len(sequence)} residues)")
+    n_poly = target.n_protein_residues + target.n_nucleic_residues
+    print(f"[mlx] featurizing {target.name} ({n_poly} polymer residues)")
     ctx = featurize_fasta(
         fasta_path,
         output_dir=feature_dir / "mlx_features",
-        use_esm_embeddings=False,
+        esm_backend=esm_backend,
         use_msa_server=False,
         use_templates_server=False,
     )
@@ -158,7 +159,7 @@ def _bench_target(
     for trial in range(total):
         is_warmup = trial < warmup
         label = "warmup" if is_warmup else "repeat"
-        print(f"[mlx] {target} trial {trial + 1}/{total} ({label})")
+        print(f"[mlx] {target.name} trial {trial + 1}/{total} ({label})")
         mx.random.seed(42 + trial)
         mx.clear_cache()
         gc.collect()
@@ -273,9 +274,9 @@ def _bench_target(
         e2e_times.append(e2e_ms)
 
     return TargetResult(
-        target=target,
-        sequence=sequence,
-        n_tokens=len(sequence),
+        target=target.name,
+        fasta=target.to_fasta(),
+        n_tokens=int(emb.token_single_input.shape[1]),
         dtype=dtype,
         num_recycles=num_recycles,
         num_steps=num_steps,
@@ -321,6 +322,12 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--feature-dir", type=Path, default=Path("/tmp/chai_mlx_cuda/mlx_bench_features"))
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--output-csv", type=Path, default=None)
+    parser.add_argument(
+        "--esm-backend",
+        choices=["off", "chai", "mlx"],
+        default="off",
+        help="ESM-2 embedding source (default: off)",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     targets = [t.strip() for t in args.targets.split(",") if t.strip()]
@@ -328,19 +335,19 @@ def main(argv: Iterable[str] | None = None) -> None:
     print("=" * 100)
     print(f"MLX throughput: dtype={args.dtype} recycles={args.num_recycles} steps={args.num_steps}")
     print("=" * 100)
-    for target in targets:
-        if target not in DEFAULT_TARGETS:
-            raise KeyError(f"Unknown target {target!r}. Known: {sorted(DEFAULT_TARGETS)}")
+    for name in targets:
+        if name not in DEFAULT_TARGETS:
+            raise KeyError(f"Unknown target {name!r}. Known: {sorted(DEFAULT_TARGETS)}")
         result = _bench_target(
             args.weights_dir,
-            target,
-            DEFAULT_TARGETS[target],
+            DEFAULT_TARGETS[name],
             num_recycles=args.num_recycles,
             num_steps=args.num_steps,
             num_repeats=args.num_repeats,
             warmup=args.warmup,
             dtype=args.dtype,
-            feature_dir=args.feature_dir / target,
+            feature_dir=args.feature_dir / name,
+            esm_backend=args.esm_backend,
         )
         _print_row(result)
         results.append(result)

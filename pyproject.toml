@@ -28,6 +28,9 @@ convert = [
 test = [
   "pytest",
 ]
+esm = [
+  "esm-mlx @ file://./esm-mlx",
+]
 cuda-harness = [
   "modal>=1.3",
   "gemmi>=0.7",
