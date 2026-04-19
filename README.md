@@ -19,8 +19,12 @@ CUDA reference that actually runs in production.
   different implementations) plus per-step diffusion RNG differences between
   `mx.random.normal` and `torch.randn`. Neither is a structural bug.
 
-Validated so far: monomers up to ~76 residues (1L2Y, 1VII, 1CRN, 1UBQ).
-Multimer and ligand targets are untested.
+Numerically validated so far: monomers up to 76 residues (1L2Y, 1VII,
+1CRN, 1UBQ). The expanded validation slate (multimer, ligand, >200
+residue, nucleic acid, ESM, constraints) is wired up end-to-end through
+the harnesses but the Modal sweep that populates numbers has not yet
+run. See the [Validation coverage](#validation-coverage) section below
+for the full target matrix and how to reproduce each axis.
 
 ## Install
 
@@ -30,14 +34,17 @@ cd chai-mlx
 pip install -e .
 ```
 
-The `--recurse-submodules` flag fetches the pinned `chai-lab/` reference
-checkout used by the featurizer and some comparison harnesses. If you've
-already cloned without it, run `git submodule update --init chai-lab`.
+The `--recurse-submodules` flag fetches two pinned checkouts: `chai-lab/`
+(used by the featurizer and comparison harnesses) and `esm-mlx/` (used
+to produce ESM-2 embeddings locally on Apple silicon, avoiding the need
+for torch + chai-lab's traced 3B CUDA checkpoint). If you've already
+cloned without it, run `git submodule update --init --recursive`.
 
 Optional extras:
 
 ```bash
 pip install -e ".[featurize]"     # torch + chai_lab; required for FASTA featurization
+pip install -e ".[esm]"           # esm-mlx; enables esm_backend="mlx" in featurize_fasta
 pip install -e ".[convert]"       # torch + safetensors; for TorchScript -> safetensors export
 pip install -e ".[cuda-harness]"  # modal + gemmi + biopython; for the CUDA comparison harnesses
 pip install -e ".[test]"          # pytest
@@ -216,6 +223,69 @@ python scripts/report_throughput_comparison.py \
     --mlx-json /tmp/chai_mlx_cuda/throughput/mlx.json \
     --cuda-dir /tmp/chai_mlx_cuda/throughput
 ```
+
+## Validation coverage
+
+The target slate in `cuda_harness/modal_common.py::DEFAULT_TARGETS` is
+the single source of truth for "what has chai-mlx been pointed at?".
+Each target is tagged with one or more `kinds`, and harnesses accept a
+`--target-kinds` filter so you can sweep a single axis at a time.
+
+| Target        | Kind(s)              | Entities                                 | What it exercises                                        | CUDA vs MLX status |
+| ------------- | -------------------- | ---------------------------------------- | -------------------------------------------------------- | ------------------ |
+| `1L2Y`        | monomer              | 1 protein (20 aa)                        | Baseline Cα RMSD / GDT / lDDT (already measured)         | **0.75 Å**, 95.1% GDT |
+| `1VII`        | monomer              | 1 protein (35 aa)                        | Small α-helical fold                                     | measured            |
+| `1CRN`        | monomer              | 1 protein (46 aa)                        | Crambin, tight 2.0 Å PDB reference                       | measured            |
+| `1UBQ`        | monomer              | 1 protein (76 aa)                        | Mid-size α/β monomer; previous ceiling                    | measured            |
+| `1BRS`        | multimer             | 2 proteins (barnase + barstar, 199 aa)   | Multi-chain featurizer, interface Cα RMSD, iPTM          | scaffolded         |
+| `1FKB`        | ligand               | FKBP-12 + FK506 SMILES                   | `EntityType.LIGAND` path, ligand heavy-atom RMSD         | scaffolded         |
+| `7TIM`        | long                 | 1 protein (248 aa, TIM barrel)            | >200 residue ceiling, bf16 error growth                  | scaffolded         |
+| `1BNA`        | dna, multimer        | 2 DNA strands (12 bp duplex)              | `EntityType.DNA` featurization, P-backbone RMSD          | scaffolded         |
+| `1UBQ_ESM`    | esm                  | 1 protein (76 aa)                        | MLX esm2_t36_3B_UR50D vs chai-lab CUDA traced checkpoint | scaffolded         |
+| `1CRN_CONSTR` | constraints, ligand  | 1 protein + methanethiol + 3 restraints  | Contact / pocket / covalent restraint features           | scaffolded         |
+
+"measured" means numbers exist in `## Status` above; "scaffolded" means
+the plumbing is end-to-end ready but the Modal sweep has not run yet.
+
+### Reproducing the expanded sweep
+
+Everything below assumes you've installed the `[cuda-harness]` and
+`[featurize]` extras and have a working `modal` profile.  No MSA or
+template servers are used (offline only).  Local MLX inference uses the
+`[esm]` extra when `--esm-backend mlx` is set.
+
+```bash
+# 1. CUDA reference runs for every new target on one seed (use_esm_embeddings=True
+#    on the Modal side; local MLX stays esm-off unless you opt in below).
+modal run -m cuda_harness.run_expanded_targets --seeds 42
+
+# 2. Local MLX + per-kind structural comparison (reads the CUDA CIFs from step 1).
+python scripts/cuda_structure_sweep.py \
+    --weights-dir weights \
+    --reference-dir /tmp/chai_mlx_cuda/expanded \
+    --mlx-output-dir /tmp/chai_mlx_cuda/mlx_expanded \
+    --csv /tmp/chai_mlx_cuda/expanded_sweep.csv
+
+# 3. Constraint-feature parity (MLX featurizer vs CUDA featurizer on the same CSV).
+modal run -m cuda_harness.run_intermediates \
+    --targets 1CRN_CONSTR --seeds 42 \
+    --constraint-resource 1CRN_all_three.csv
+
+python scripts/cuda_constraints_parity.py \
+    --weights-dir weights \
+    --npz /tmp/chai_mlx_cuda/intermediates/1CRN_CONSTR/seed_42.npz
+
+# 4. ESM-on-MLX vs ESM-on-CUDA (one seed, one sample pair).
+python scripts/inference.py --weights-dir weights/ \
+    --fasta /tmp/chai_mlx_cuda/expanded/1UBQ_ESM/seed_42/input.fasta \
+    --esm-backend mlx --save-npz /tmp/chai_mlx_cuda/mlx_expanded/1UBQ_ESM_mlx.npz
+```
+
+Step 2's CSV is wide: per-row it carries per-chain Cα RMSDs, an
+interface Cα RMSD for multimers, a heavy-atom RMSD for ligands, and a
+phosphate-backbone RMSD for DNA/RNA, alongside the aggregate MLX-vs-CUDA
+score gap.  The per-kind summary printed at the end of the run is what
+drops into this README once the sweep has been executed.
 
 ## License
 
