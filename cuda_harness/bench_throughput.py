@@ -52,9 +52,10 @@ from cuda_harness.modal_common import (
     chai_outputs_volume,
     DEFAULT_TARGETS,
     download_inference_dependencies,
-    fasta_for,
     image,
 )
+
+from cuda_harness.run_reference import _load_constraint_bytes
 
 
 N_DIFFUSION_SAMPLES = 5
@@ -68,12 +69,14 @@ N_DIFFUSION_SAMPLES = 5
 )
 def cuda_benchmark(
     target: str,
-    sequence: str,
+    fasta: str,
     num_recycles: int,
     num_steps: int,
     num_repeats: int,
     warmup: int,
     run_id: str,
+    constraint_csv_bytes: bytes | None = None,
+    use_esm_embeddings: bool = False,
 ) -> dict:
     """Benchmark one target on CUDA and return per-module timings."""
     import math
@@ -103,17 +106,24 @@ def cuda_benchmark(
     device = torch.device("cuda:0")
     gpu_name = torch.cuda.get_device_name(0)
 
-    fasta_path = Path("/tmp/input.fasta")
-    fasta_path.write_text(fasta_for(target, sequence).strip())
-
     work_dir = OUTPUTS_DIR / run_id / target
     work_dir.mkdir(parents=True, exist_ok=True)
+    fasta_path = work_dir / "input.fasta"
+    fasta_path.write_text(fasta.strip() + "\n")
+
+    constraint_path = None
+    if constraint_csv_bytes is not None:
+        constraint_path = work_dir / "constraints.csv"
+        constraint_path.write_bytes(constraint_csv_bytes)
+
     feature_context = make_all_atom_feature_context(
         fasta_file=fasta_path,
         output_dir=work_dir / "features",
-        use_esm_embeddings=False,
+        entity_name_as_subchain=True,
+        use_esm_embeddings=use_esm_embeddings,
         use_msa_server=False,
         use_templates_server=False,
+        constraint_path=constraint_path,
         esm_device=device,
     )
 
@@ -389,8 +399,8 @@ def cuda_benchmark(
 
     return {
         "target": target,
-        "sequence": sequence,
-        "n_tokens": len(sequence),
+        "fasta": fasta,
+        "n_tokens": int(token_single_mask.sum().item()),
         "model_size": int(model_size),
         "num_recycles": num_recycles,
         "num_steps": num_steps,
@@ -420,6 +430,8 @@ def bench_throughput(
     output_dir: str = "/tmp/chai_mlx_cuda/throughput",
     run_id: str | None = None,
     ensure_weights: bool = True,
+    constraint_resource: str | None = None,
+    use_esm_embeddings: bool = False,
 ) -> None:
     import csv
 
@@ -433,23 +445,28 @@ def bench_throughput(
         download_inference_dependencies.remote(force=False)
 
     all_rows: list[dict] = []
-    for target in targets_list:
-        if target not in DEFAULT_TARGETS:
+    for name in targets_list:
+        if name not in DEFAULT_TARGETS:
             raise KeyError(
-                f"Unknown target {target!r}. Known: {sorted(DEFAULT_TARGETS)}"
+                f"Unknown target {name!r}. Known: {sorted(DEFAULT_TARGETS)}"
             )
-        sequence = DEFAULT_TARGETS[target]
-        print(f"[modal] bench -> {target} ({len(sequence)} residues)")
+        target = DEFAULT_TARGETS[name]
+        resource = constraint_resource or target.constraint_resource
+        constraint_bytes = _load_constraint_bytes(resource)
+        n_poly = target.n_protein_residues + target.n_nucleic_residues
+        print(f"[modal] bench -> {name} ({n_poly} polymer residues)")
         result = cuda_benchmark.remote(
-            target=target,
-            sequence=sequence,
+            target=name,
+            fasta=target.to_fasta(),
             num_recycles=num_recycles,
             num_steps=num_steps,
             num_repeats=num_repeats,
             warmup=warmup,
             run_id=rid,
+            constraint_csv_bytes=constraint_bytes,
+            use_esm_embeddings=use_esm_embeddings,
         )
-        dst = output_dir_path / f"{target}_throughput.json"
+        dst = output_dir_path / f"{name}_throughput.json"
         dst.write_text(json.dumps(result, indent=2))
         all_rows.append(result)
         print(f"[modal]   saved {dst}")

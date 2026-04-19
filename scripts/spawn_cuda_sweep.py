@@ -65,12 +65,14 @@ def _spawn_all(output_root: Path) -> list[Handle]:
 
     handles: list[Handle] = []
 
+    baseline = DEFAULT_TARGETS["1L2Y"]
+
     # ---- determinism sweeps (3 policies) ----
     for precision in ("default", "tf32_off", "deterministic"):
         run_id = f"det-{precision}-3r-200s"
         call = cuda_determinism.spawn(
-            target="1L2Y",
-            sequence=DEFAULT_TARGETS["1L2Y"],
+            target=baseline.name,
+            fasta=baseline.to_fasta(),
             seed=42,
             num_recycles=3,
             num_steps=200,
@@ -78,12 +80,12 @@ def _spawn_all(output_root: Path) -> list[Handle]:
             precision=precision,
             n_repeats=2,
         )
-        out = output_root / "determinism" / "1L2Y" / f"seed_42_{precision}.npz"
+        out = output_root / "determinism" / baseline.name / f"seed_42_{precision}.npz"
         handles.append(
             Handle(
                 name=f"determinism_{precision}",
                 call_id=call.object_id,
-                target="1L2Y",
+                target=baseline.name,
                 seed=42,
                 precision=precision,
                 kind="determinism",
@@ -94,8 +96,8 @@ def _spawn_all(output_root: Path) -> list[Handle]:
 
     # ---- intermediates @ tf32_off (pair with cuda_parity.py locally) ----
     call = cuda_intermediates.spawn(
-        target="1L2Y",
-        sequence=DEFAULT_TARGETS["1L2Y"],
+        target=baseline.name,
+        fasta=baseline.to_fasta(),
         seed=42,
         num_recycles=3,
         num_steps=200,
@@ -103,12 +105,12 @@ def _spawn_all(output_root: Path) -> list[Handle]:
         run_id="intm-tf32_off-3r-200s",
         precision="tf32_off",
     )
-    out = output_root / "intermediates" / "1L2Y" / "seed_42_tf32_off.npz"
+    out = output_root / "intermediates" / baseline.name / "seed_42_tf32_off.npz"
     handles.append(
         Handle(
             name="intermediates_tf32_off",
             call_id=call.object_id,
-            target="1L2Y",
+            target=baseline.name,
             seed=42,
             precision="tf32_off",
             kind="intermediates",
@@ -118,29 +120,30 @@ def _spawn_all(output_root: Path) -> list[Handle]:
     print(f"[spawn] intermediates tf32_off -> call {call.object_id}")
 
     # ---- reference runs for larger targets (1VII, 1UBQ) x (0, 42, 123) ----
-    for target in ("1VII", "1UBQ"):
+    for name in ("1VII", "1UBQ"):
+        target = DEFAULT_TARGETS[name]
         for seed in (0, 42, 123):
             call = cuda_inference.spawn(
-                target=target,
-                sequence=DEFAULT_TARGETS[target],
+                target=name,
+                fasta=target.to_fasta(),
                 seed=seed,
                 num_recycles=3,
                 num_steps=200,
                 run_id="ref-3r-200s",
             )
-            dst_dir = output_root / "reference" / target / f"seed_{seed}"
+            dst_dir = output_root / "reference" / name / f"seed_{seed}"
             handles.append(
                 Handle(
-                    name=f"reference_{target}_s{seed}",
+                    name=f"reference_{name}_s{seed}",
                     call_id=call.object_id,
-                    target=target,
+                    target=name,
                     seed=seed,
                     precision="default",
                     kind="reference",
                     output_path=str(dst_dir),
                 )
             )
-            print(f"[spawn] reference {target} seed={seed} -> call {call.object_id}")
+            print(f"[spawn] reference {name} seed={seed} -> call {call.object_id}")
 
     return handles
 

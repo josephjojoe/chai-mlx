@@ -67,9 +67,10 @@ from cuda_harness.modal_common import (
     chai_outputs_volume,
     DEFAULT_TARGETS,
     download_inference_dependencies,
-    fasta_for,
     image,
 )
+
+from cuda_harness.run_reference import _load_constraint_bytes
 
 
 N_DIFFUSION_SAMPLES = 5
@@ -117,13 +118,15 @@ def _apply_precision_policy(policy: str) -> dict[str, object]:
 )
 def cuda_determinism(
     target: str,
-    sequence: str,
+    fasta: str,
     seed: int,
     num_recycles: int,
     num_steps: int,
     run_id: str,
     precision: str,
     n_repeats: int = 2,
+    constraint_csv_bytes: bytes | None = None,
+    use_esm_embeddings: bool = False,
 ) -> bytes:
     """Run chai-lab ``n_repeats`` times in the same container; return an NPZ.
 
@@ -149,13 +152,22 @@ def cuda_determinism(
     device = torch.device("cuda:0")
     gpu_name = torch.cuda.get_device_name(0)
 
-    fasta_path = Path("/tmp/input.fasta")
-    fasta_path.write_text(fasta_for(target, sequence).strip())
+    work_dir = OUTPUTS_DIR / run_id / target / f"seed_{seed}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    fasta_path = work_dir / "input.fasta"
+    fasta_path.write_text(fasta.strip() + "\n")
+
+    constraint_path: Path | None = None
+    if constraint_csv_bytes is not None:
+        constraint_path = work_dir / "constraints.csv"
+        constraint_path.write_bytes(constraint_csv_bytes)
 
     meta: dict = {
         "target": target,
         "seed": seed,
-        "sequence": sequence,
+        "fasta": fasta,
+        "constraints_attached": constraint_csv_bytes is not None,
+        "use_esm_embeddings": use_esm_embeddings,
         "num_recycles": num_recycles,
         "num_steps": num_steps,
         "n_diffusion_samples": N_DIFFUSION_SAMPLES,
@@ -164,7 +176,6 @@ def cuda_determinism(
         "precision_settings": settings,
         "gpu_name": gpu_name,
         "torch_version": torch.__version__,
-        "n_tokens": len(sequence),
         "runs": [],
     }
 
@@ -178,27 +189,29 @@ def cuda_determinism(
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-        work_dir = OUTPUTS_DIR / run_id / target / f"seed_{seed}" / f"run_{run_idx}"
+        run_work_dir = work_dir / f"run_{run_idx}"
         # ``run_inference`` asserts the output dir is empty; recreate each time.
-        if work_dir.exists():
+        if run_work_dir.exists():
             import shutil
 
-            shutil.rmtree(work_dir)
-        work_dir.mkdir(parents=True, exist_ok=True)
+            shutil.rmtree(run_work_dir)
+        run_work_dir.mkdir(parents=True, exist_ok=True)
 
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         candidates = run_inference(
             fasta_file=fasta_path,
-            output_dir=work_dir,
+            output_dir=run_work_dir,
             num_trunk_recycles=num_recycles,
             num_diffn_timesteps=num_steps,
             num_diffn_samples=N_DIFFUSION_SAMPLES,
             seed=seed,
             device=str(device),
-            use_esm_embeddings=False,
+            use_esm_embeddings=use_esm_embeddings,
             use_msa_server=False,
             use_templates_server=False,
+            constraint_path=constraint_path,
+            fasta_names_as_cif_chains=True,
             low_memory=True,
         )
         torch.cuda.synchronize()
@@ -259,6 +272,8 @@ def run_determinism(
     output_dir: str = "/tmp/chai_mlx_cuda/determinism",
     run_id: str | None = None,
     ensure_weights: bool = True,
+    constraint_resource: str | None = None,
+    use_esm_embeddings: bool = False,
 ) -> None:
     targets_list = [t.strip() for t in targets.split(",") if t.strip()]
     seeds_list = [int(s.strip()) for s in seeds.split(",") if s.strip()]
@@ -270,28 +285,34 @@ def run_determinism(
         print("[modal] ensuring weights are on the volume")
         download_inference_dependencies.remote(force=False)
 
-    for target in targets_list:
-        if target not in DEFAULT_TARGETS:
+    for name in targets_list:
+        if name not in DEFAULT_TARGETS:
             raise KeyError(
-                f"Unknown target {target!r}. Known: {sorted(DEFAULT_TARGETS)}"
+                f"Unknown target {name!r}. Known: {sorted(DEFAULT_TARGETS)}"
             )
-        sequence = DEFAULT_TARGETS[target]
+        target = DEFAULT_TARGETS[name]
+        resource = constraint_resource or target.constraint_resource
+        constraint_bytes = _load_constraint_bytes(resource)
         for seed in seeds_list:
-            print(
-                f"[modal] -> {target} seed={seed} precision={precision} "
-                f"n_repeats={n_repeats}"
+            label = (
+                f"{name} seed={seed} precision={precision} n_repeats={n_repeats}"
             )
+            if resource:
+                label += f" constraints={resource}"
+            print(f"[modal] -> {label}")
             payload = cuda_determinism.remote(
-                target=target,
-                sequence=sequence,
+                target=name,
+                fasta=target.to_fasta(),
                 seed=seed,
                 num_recycles=num_recycles,
                 num_steps=num_steps,
                 run_id=rid,
                 precision=precision,
                 n_repeats=n_repeats,
+                constraint_csv_bytes=constraint_bytes,
+                use_esm_embeddings=use_esm_embeddings,
             )
-            dst = output_dir_path / target / f"seed_{seed}_{precision}.npz"
+            dst = output_dir_path / name / f"seed_{seed}_{precision}.npz"
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(payload)
             print(

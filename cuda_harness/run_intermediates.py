@@ -69,12 +69,24 @@ from cuda_harness.modal_common import (
     chai_outputs_volume,
     DEFAULT_TARGETS,
     download_inference_dependencies,
-    fasta_for,
     image,
 )
 
 
 N_DIFFUSION_SAMPLES = 5
+
+CONSTRAINTS_DIR = Path(__file__).resolve().parent / "constraints"
+
+
+def _load_constraint_bytes(resource_name: str | None) -> bytes | None:
+    if resource_name is None:
+        return None
+    path = CONSTRAINTS_DIR / resource_name
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Constraint resource {resource_name!r} not found at {path}"
+        )
+    return path.read_bytes()
 
 
 def _apply_precision_policy(policy: str) -> dict[str, object]:
@@ -121,13 +133,15 @@ def _apply_precision_policy(policy: str) -> dict[str, object]:
 )
 def cuda_intermediates(
     target: str,
-    sequence: str,
+    fasta: str,
     seed: int,
     num_recycles: int,
     num_steps: int,
     snapshot_steps: list[int],
     run_id: str,
     precision: str = "default",
+    constraint_csv_bytes: bytes | None = None,
+    use_esm_embeddings: bool = False,
 ) -> bytes:
     """Run chai-lab end-to-end on CUDA and bundle the intermediates as NPZ bytes."""
     import math
@@ -166,18 +180,25 @@ def cuda_intermediates(
     device = torch.device("cuda:0")
     gpu_name = torch.cuda.get_device_name(0)
 
-    fasta_path = Path("/tmp/input.fasta")
-    fasta_path.write_text(fasta_for(target, sequence).strip())
-
     work_dir = OUTPUTS_DIR / run_id / target / f"seed_{seed}"
     work_dir.mkdir(parents=True, exist_ok=True)
+
+    fasta_path = work_dir / "input.fasta"
+    fasta_path.write_text(fasta.strip() + "\n")
+
+    constraint_path: Path | None = None
+    if constraint_csv_bytes is not None:
+        constraint_path = work_dir / "constraints.csv"
+        constraint_path.write_bytes(constraint_csv_bytes)
 
     feature_context = make_all_atom_feature_context(
         fasta_file=fasta_path,
         output_dir=work_dir / "features",
-        use_esm_embeddings=False,
+        entity_name_as_subchain=True,
+        use_esm_embeddings=use_esm_embeddings,
         use_msa_server=False,
         use_templates_server=False,
+        constraint_path=constraint_path,
         esm_device=device,
     )
     set_seed([seed])
@@ -214,7 +235,9 @@ def cuda_intermediates(
     meta: dict = {
         "target": target,
         "seed": seed,
-        "sequence": sequence,
+        "fasta": fasta,
+        "constraints_attached": constraint_csv_bytes is not None,
+        "use_esm_embeddings": use_esm_embeddings,
         "num_recycles": num_recycles,
         "num_steps": num_steps,
         "snapshot_steps": list(snapshot_steps),
@@ -575,6 +598,8 @@ def run_intermediates(
     run_id: str | None = None,
     ensure_weights: bool = True,
     precision: str = "default",
+    constraint_resource: str | None = None,
+    use_esm_embeddings: bool = False,
 ) -> None:
     targets_list = [t.strip() for t in targets.split(",") if t.strip()]
     seeds_list = [int(s.strip()) for s in seeds.split(",") if s.strip()]
@@ -588,26 +613,33 @@ def run_intermediates(
         print("[modal] ensuring weights are on the volume")
         download_inference_dependencies.remote(force=False)
 
-    for target in targets_list:
-        if target not in DEFAULT_TARGETS:
+    for name in targets_list:
+        if name not in DEFAULT_TARGETS:
             raise KeyError(
-                f"Unknown target {target!r}. Known: {sorted(DEFAULT_TARGETS)}"
+                f"Unknown target {name!r}. Known: {sorted(DEFAULT_TARGETS)}"
             )
-        sequence = DEFAULT_TARGETS[target]
+        target = DEFAULT_TARGETS[name]
+        resource = constraint_resource or target.constraint_resource
+        constraint_bytes = _load_constraint_bytes(resource)
         for seed in seeds_list:
-            print(f"[modal] -> {target} seed={seed} steps={steps}")
+            label = f"{name} seed={seed} steps={steps}"
+            if resource:
+                label += f" constraints={resource}"
+            print(f"[modal] -> {label}")
             payload = cuda_intermediates.remote(
-                target=target,
-                sequence=sequence,
+                target=name,
+                fasta=target.to_fasta(),
                 seed=seed,
                 num_recycles=num_recycles,
                 num_steps=num_steps,
                 snapshot_steps=steps,
                 run_id=rid,
                 precision=precision,
+                constraint_csv_bytes=constraint_bytes,
+                use_esm_embeddings=use_esm_embeddings,
             )
             suffix = "" if precision == "default" else f"_{precision}"
-            dst = output_dir_path / target / f"seed_{seed}{suffix}.npz"
+            dst = output_dir_path / name / f"seed_{seed}{suffix}.npz"
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(payload)
             print(f"[modal]    wrote {len(payload) / (1 << 20):.1f} MB -> {dst}")

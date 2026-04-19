@@ -27,6 +27,17 @@ Run a custom sweep::
         --num-recycles 3 \\
         --output-dir /tmp/chai_mlx_cuda/reference
 
+Attach a constraint CSV (must be a resource name under
+``cuda_harness/constraints/``)::
+
+    modal run -m cuda_harness.run_reference \\
+        --targets 1CRN_CONSTR --seeds 42 \\
+        --constraint-resource 1CRN_all_three.csv
+
+``constraint_resource`` may also be pre-baked on the target (the
+``1CRN_CONSTR`` target ships with its own default).  The CLI flag, when
+provided, overrides the per-target default for every listed target.
+
 Notes
 -----
 
@@ -40,7 +51,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 import modal
 
@@ -48,27 +58,41 @@ from cuda_harness.modal_common import (
     MINUTES,
     MODELS_DIR,
     OUTPUTS_DIR,
+    DEFAULT_TARGETS,
+    Target,
     app,
     chai_model_volume,
     chai_outputs_volume,
-    DEFAULT_TARGETS,
     download_inference_dependencies,
-    fasta_for,
     image,
 )
 
 
 N_DIFFUSION_SAMPLES = 5  # hard-coded in chai-lab
 
+CONSTRAINTS_DIR = Path(__file__).resolve().parent / "constraints"
+
+
+def _load_constraint_bytes(resource_name: str | None) -> bytes | None:
+    if resource_name is None:
+        return None
+    path = CONSTRAINTS_DIR / resource_name
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Constraint resource {resource_name!r} not found at {path}"
+        )
+    return path.read_bytes()
+
 
 @dataclass
 class CudaRun:
     target: str
     seed: int
-    sequence: str
+    fasta: str
     cifs: list[bytes]
     scores: list[bytes]
-    n_tokens: int
+    n_protein_residues: int
+    n_nucleic_residues: int
     wall_seconds: float
     gpu_name: str
 
@@ -81,11 +105,13 @@ class CudaRun:
 )
 def cuda_inference(
     target: str,
-    sequence: str,
+    fasta: str,
     seed: int,
     num_recycles: int,
     num_steps: int,
     run_id: str,
+    constraint_csv_bytes: bytes | None = None,
+    use_esm_embeddings: bool = False,
 ) -> dict:
     """Run one CUDA chai-lab inference and return bytes for every sample."""
     import time
@@ -93,8 +119,16 @@ def cuda_inference(
     import torch
     from chai_lab import chai1
 
-    fasta_path = Path("/tmp/input.fasta")
-    fasta_path.write_text(fasta_for(target, sequence).strip())
+    work_dir = Path("/tmp") / target / f"seed_{seed}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    fasta_path = work_dir / "input.fasta"
+    fasta_path.write_text(fasta.strip() + "\n")
+
+    constraint_path: Path | None = None
+    if constraint_csv_bytes is not None:
+        constraint_path = work_dir / "constraints.csv"
+        constraint_path.write_bytes(constraint_csv_bytes)
+
     output_dir = OUTPUTS_DIR / run_id / target / f"seed_{seed}"
     if output_dir.exists():
         # Empty it; run_inference requires an empty directory.
@@ -114,9 +148,14 @@ def cuda_inference(
     chai1.run_inference(
         fasta_file=fasta_path,
         output_dir=output_dir,
-        use_esm_embeddings=False,
+        use_esm_embeddings=use_esm_embeddings,
         use_msa_server=False,
         use_templates_server=False,
+        constraint_path=constraint_path,
+        # Use FASTA entity names as chain IDs so constraint CSVs can
+        # reference chains by the labels the user wrote in the FASTA
+        # header (matches chai_mlx.data.featurize.featurize_fasta).
+        fasta_names_as_cif_chains=True,
         num_trunk_recycles=num_recycles,
         num_diffn_timesteps=num_steps,
         num_diffn_samples=N_DIFFUSION_SAMPLES,
@@ -136,14 +175,12 @@ def cuda_inference(
         cifs.append((output_dir / f"pred.model_idx_{ii}.cif").read_bytes())
         scores.append((output_dir / f"scores.model_idx_{ii}.npz").read_bytes())
 
-    n_tokens = len(sequence)
     chai_outputs_volume.commit()
 
     return {
         "target": target,
         "seed": seed,
-        "sequence": sequence,
-        "n_tokens": n_tokens,
+        "fasta": fasta,
         "wall_seconds": wall_seconds,
         "gpu_name": gpu_name,
         "cifs": cifs,
@@ -151,7 +188,7 @@ def cuda_inference(
     }
 
 
-def _save_run(result: dict, output_dir: Path) -> Path:
+def _save_run(result: dict, target_meta: Target, output_dir: Path) -> Path:
     target = result["target"]
     seed = result["seed"]
     dst = output_dir / target / f"seed_{seed}"
@@ -159,11 +196,18 @@ def _save_run(result: dict, output_dir: Path) -> Path:
     for i, (cif, score) in enumerate(zip(result["cifs"], result["scores"])):
         (dst / f"pred.model_idx_{i}.cif").write_bytes(cif)
         (dst / f"scores.model_idx_{i}.npz").write_bytes(score)
+    (dst / "input.fasta").write_text(result["fasta"])
     manifest = {
         "target": target,
         "seed": seed,
-        "sequence": result["sequence"],
-        "n_tokens": result["n_tokens"],
+        "records": [
+            {"kind": r.kind, "name": r.name, "sequence": r.sequence}
+            for r in target_meta.records
+        ],
+        "kinds": sorted(target_meta.kinds),
+        "description": target_meta.description,
+        "n_protein_residues": target_meta.n_protein_residues,
+        "n_nucleic_residues": target_meta.n_nucleic_residues,
         "wall_seconds": result["wall_seconds"],
         "gpu_name": result["gpu_name"],
     }
@@ -180,6 +224,8 @@ def run_reference(
     output_dir: str = "/tmp/chai_mlx_cuda/reference",
     run_id: str | None = None,
     ensure_weights: bool = True,
+    constraint_resource: str | None = None,
+    use_esm_embeddings: bool = False,
 ) -> None:
     targets_list: list[str] = [t.strip() for t in targets.split(",") if t.strip()]
     seeds_list: list[int] = [int(s.strip()) for s in seeds.split(",") if s.strip()]
@@ -192,23 +238,30 @@ def run_reference(
         download_inference_dependencies.remote(force=False)
 
     print(f"[modal] targets={targets_list} seeds={seeds_list}")
-    for target in targets_list:
-        if target not in DEFAULT_TARGETS:
+    for name in targets_list:
+        if name not in DEFAULT_TARGETS:
             raise KeyError(
-                f"Unknown target {target!r}. Known: {sorted(DEFAULT_TARGETS)}"
+                f"Unknown target {name!r}. Known: {sorted(DEFAULT_TARGETS)}"
             )
-        sequence = DEFAULT_TARGETS[target]
+        target = DEFAULT_TARGETS[name]
+        resource = constraint_resource or target.constraint_resource
+        constraint_bytes = _load_constraint_bytes(resource)
         for seed in seeds_list:
-            print(f"[modal] -> {target} seed={seed}")
+            label = f"{name} seed={seed}"
+            if resource:
+                label += f" constraints={resource}"
+            print(f"[modal] -> {label}")
             result = cuda_inference.remote(
-                target=target,
-                sequence=sequence,
+                target=name,
+                fasta=target.to_fasta(),
                 seed=seed,
                 num_recycles=num_recycles,
                 num_steps=num_steps,
                 run_id=rid,
+                constraint_csv_bytes=constraint_bytes,
+                use_esm_embeddings=use_esm_embeddings,
             )
-            dst = _save_run(result, output_dir_path)
+            dst = _save_run(result, target, output_dir_path)
             print(
                 f"[modal]    wrote {len(result['cifs'])} CIFs + "
                 f"{len(result['scores'])} score files -> {dst} "
