@@ -10,13 +10,13 @@ from __future__ import annotations
 import modal
 
 from cuda_harness.modal_common import (
+    DEFAULT_TARGETS,
     MINUTES,
     MODELS_DIR,
     OUTPUTS_DIR,
     app,
     chai_model_volume,
     chai_outputs_volume,
-    fasta_for,
     image,
 )
 
@@ -35,9 +35,7 @@ def smoke() -> dict:
     from chai_lab import chai1
 
     fasta_path = Path("/tmp/smoke.fasta")
-    fasta_path.write_text(
-        fasta_for("1CRN", "TTCCPSIVARSNFNVCRLPGTPEALCATYTGCIIIPGATCPGDYAN").strip()
-    )
+    fasta_path.write_text(DEFAULT_TARGETS["1CRN"].to_fasta().strip() + "\n")
     output_dir = OUTPUTS_DIR / "smoke" / "1CRN"
     output_dir.mkdir(parents=True, exist_ok=True)
     # Clear any leftover so run_inference doesn't complain about non-empty dir

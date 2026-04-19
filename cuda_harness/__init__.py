@@ -25,20 +25,28 @@ from cuda_harness.modal_common import (
     DEFAULT_TARGETS,
     MODELS_DIR,
     OUTPUTS_DIR,
+    FastaRecord,
+    Target,
     app,
     chai_model_volume,
     chai_outputs_volume,
     download_inference_dependencies,
+    fasta_for,
+    filter_targets,
     image,
 )
 
 __all__ = [
     "DEFAULT_TARGETS",
+    "FastaRecord",
     "MODELS_DIR",
     "OUTPUTS_DIR",
+    "Target",
     "app",
     "chai_model_volume",
     "chai_outputs_volume",
     "download_inference_dependencies",
+    "fasta_for",
+    "filter_targets",
     "image",
 ]
