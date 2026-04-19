@@ -192,16 +192,72 @@ in ~5 s after the one-time 5.7 GB model download on Apple silicon.
 
 ### 1.8 Test suite
 
-34 offline tests, all passing in ~33 s:
+40 offline tests, all passing in ~28 s (with `[featurize]` extra
+installed; a handful of chai-lab-gated tests skip without it):
 
 * 27 original tests (attention, embeddings, trunk, diffusion,
   featurize, weight loading, ranking, end-to-end).
-* 5 new tests covering the expanded validation axes:
+* 5 tests covering the expanded validation axes:
   `test_esm_mlx_adapter.py`, `test_multimer_featurize.py`,
   `test_nucleic_acid_featurize.py`, `test_constraints_parse.py` (now
   with 4 sub-tests including ligand + covalent end-to-end).
+* 6 tests covering the `scripts/inference.py` CLI surface:
+  `test_inference_cli.py` (arg-parsing smoke + mutually-exclusive
+  validation for `--use-msa-server` / `--msa-directory`,
+  `--use-templates-server` / `--use-msa-server`, `--esm-backend
+  mlx_cache` / `--esm-cache-dir`, and a full-surface positive case).
 
 Run locally: `python3 -m pytest -q`.
+
+### 1.9 Inference CLI coverage matrix
+
+`scripts/inference.py` is the polished user-facing entry point for
+arbitrary FASTA input. It exposes the full `featurize_fasta` surface
+and writes the same per-sample CIF + `scores.json` + `manifest.json`
+set that `scripts/run_mlx_sweep.py` produces (minus the hardcoded
+`DEFAULT_TARGETS` constraint). Every flag corresponds to a
+`featurize_fasta` kwarg or a chai-lab featurization knob:
+
+| CLI flag                    | `featurize_fasta` kwarg | Validated end-to-end here? |
+| --------------------------- | ----------------------- | -------------------------- |
+| `--constraint-path`         | `constraint_path`       | Yes — §1.6 (contact + pocket + covalent on 1CRN_CONSTR) |
+| `--msa-directory`           | `msa_directory`         | **No** — plumbed through chai-lab's offline MSA loader, not exercised by any target in DEFAULT_TARGETS |
+| `--use-msa-server`          | `use_msa_server`        | **No** — calls chai-lab's ColabFold API client; no sweep run |
+| `--msa-server-url`          | `msa_server_url`        | **No** — pass-through to chai-lab |
+| `--templates-path`          | `templates_path`        | **No** — plumbed through chai-lab's offline template loader, not exercised |
+| `--use-templates-server`    | `use_templates_server`  | **No** — chai-lab requires `use_msa_server=True` to drive this; not exercised |
+| `--esm-backend off`         | `esm_backend="off"`     | Yes — every target in §1.1 |
+| `--esm-backend chai`        | `esm_backend="chai"`    | Yes — CUDA side of §1.2 (traced chai-lab checkpoint; only works on CUDA) |
+| `--esm-backend mlx`         | `esm_backend="mlx"`     | Yes — loads esm-mlx 3B in-process; 16 GB OOM risk on smaller Macs |
+| `--esm-backend mlx_cache`   | `esm_backend="mlx_cache"` | Yes — recommended path on Apple silicon; used by §1.2 / §1.5 / §1.7 |
+| `--debug`                   | (uses `run_inference_debug`) | Yes via `scripts/cuda_parity.py` + intermediates NPZs |
+| `--skip-cif`                | (local flag)            | Covered by CLI tests |
+| `--save-npz`                | (local flag)            | Covered by smoke tests |
+
+On protein / DNA / multimer / ligand / constraints input with
+`--esm-backend {off, mlx_cache}`, the script is covered by the
+§1.1 – §1.7 data. On the **No** rows, the plumbing has been
+read-through verified (the CLI calls `featurize_fasta`, which passes
+kwargs straight into `chai_lab.chai1.make_all_atom_feature_context`,
+which then dispatches to chai-lab's own `generate_colabfold_msas` /
+`get_template_context` / `get_msa_contexts`) but no sweep has been
+run against it. Most likely it just works — it's chai-lab's own code
+path — but confidence should be proportional to the test coverage,
+and that's in the CLI surface tests only.
+
+Entity-kind coverage through the same CLI:
+
+| Kind     | Validated end-to-end here?                |
+| -------- | ----------------------------------------- |
+| protein  | Yes — every monomer / multimer target     |
+| ligand   | Yes — 1FKB (FK506), 1CRN_CONSTR (methanethiol) |
+| dna      | Yes — 1BNA                                |
+| rna      | **No** — plumbed through chai-lab's FASTA parser, not exercised by any DEFAULT_TARGETS entry |
+| glycan   | **No** — same; chai-lab parses `>glycan|name=...` headers but we've not run one |
+
+Modified residues / PTMs: chai-lab's FASTA parser accepts `res_*`
+tokens for modified residues. Our featurizer inherits that. Not
+exercised here.
 
 ## 2. How the ESM-on sweep was run
 
@@ -442,15 +498,22 @@ from chai_mlx import ChaiMLX, featurize_fasta
 model = ChaiMLX.from_pretrained("josephjojoe/chai-mlx")        # HF or local dir
 ctx = featurize_fasta(
     "input.fasta",
-    constraint_path=None,
-    esm_backend="off",             # "off" | "chai" | "mlx" | "mlx_cache"
-    esm_cache_dir=None,            # required for mlx_cache
-    use_msa_server=False,
-    use_templates_server=False,
+    output_dir="out/_features",
+    constraint_path=None,           # chai-lab restraint CSV, optional
+    msa_directory=None,             # offline MSA dir, optional
+    use_msa_server=False,           # online MSA via ColabFold API
+    msa_server_url="https://api.colabfold.com",
+    use_templates_server=False,     # online templates (requires use_msa_server=True)
+    templates_path=None,            # offline templates m8 file, optional
+    esm_backend="off",              # "off" | "chai" | "mlx" | "mlx_cache"
+    esm_cache_dir=None,             # required when esm_backend="mlx_cache"
 )
 result = model.run_inference(ctx, recycles=3, num_samples=5, num_steps=200)
 # result.coords, result.confidence, result.ranking
 ```
+
+The same keyword surface is exposed on the CLI by
+`scripts/inference.py`; see §1.9 for the CLI coverage matrix.
 
 ## 5. Known issues and their resolutions
 
@@ -593,12 +656,23 @@ Modal CUDA sweep takes ~7 min on an H100.
   `run_inference`. Memory management (`mx.clear_cache` cadence)
   tuned for 16 GB Macs.
 * `chai_mlx/data/featurize.py` — `featurize_fasta(esm_backend=...)`
-  switchboard.
+  switchboard; exposes every chai-lab knob (constraints, offline MSA
+  dir, online MSA server, offline templates, online templates server)
+  so `scripts/inference.py` can forward them through untouched.
 * `chai_mlx/data/esm_mlx_adapter.py` — the ESM-MLX bridge.
 * `chai_mlx/data/_rdkit_timeout_patch.py` — the macOS fix.
+* `scripts/inference.py` — **the user-facing FASTA → CIFs CLI.** One
+  invocation covers protein / ligand / DNA / RNA / glycan, optional
+  constraint CSV, offline / online MSA, offline / online templates,
+  and all four ESM backends. Writes `pred.model_idx_*.cif` +
+  `scores.json` + `manifest.json` per run; see §1.9 for the CLI
+  coverage matrix.
 * `scripts/compare_vs_pdb.py` — the ground-truth comparison.
-* `scripts/run_mlx_sweep.py` — subprocess-per-target driver.
+* `scripts/run_mlx_sweep.py` — subprocess-per-target driver for the
+  hardcoded DEFAULT_TARGETS slate (used by §1 validation).
 * `scripts/precompute_esm_mlx.py` — ESM cache builder.
+* `tests/test_inference_cli.py` — offline smoke of the CLI surface
+  (6 tests, mutually-exclusive / required-combination checks).
 * `esm-mlx/esm_mlx/model.py` — fairseq-key canonicalisation (see §5.6).
 * `/tmp/chai_mlx_cuda/findings/vs_pdb.json` — authoritative no-ESM
   PDB comparison data.
@@ -612,19 +686,55 @@ Modal CUDA sweep takes ~7 min on an H100.
 
 ## 8. Open questions
 
-None that block the port. Potential follow-ups (all optional):
+None that block the port.
+
+### 8.1 Plumbed-but-not-end-to-end-validated paths
+
+These are the code paths exposed by `scripts/inference.py` (and
+therefore by `featurize_fasta`) that we have not personally driven
+through the full FASTA → CIF pipeline in this repo. Chai-lab itself
+implements and tests each of them upstream; we're flagging them here
+so anyone reading the engineering log knows exactly what we have vs
+what we inherit.
+
+* **Online MSA (`--use-msa-server`).** Forwarded to chai-lab's
+  `generate_colabfold_msas`, which hits the ColabFold API and writes
+  a3m files into `<feature-dir>/msas/`. Expected to work; requires
+  internet access. No regression numbers here.
+* **Online templates (`--use-templates-server`).** Driven by the same
+  server path; writes `all_chain_templates.m8`. Same status.
+* **Offline MSA directory (`--msa-directory`).** Passed to
+  chai-lab's `get_msa_contexts(chains, msa_directory=...)`. Same
+  code path the server variant writes to, so "the server path worked
+  end-to-end" would by itself imply the offline variant works. Not
+  verified here.
+* **Offline templates file (`--templates-path`).** Same story;
+  chai-lab's `get_template_context(template_hits_m8=...)` call.
+* **RNA-only inputs.** Featurizer dispatches to `EntityType.RNA`
+  via chai-lab's FASTA parser. No DEFAULT_TARGETS entry exercises it.
+  Expected to behave like DNA.
+* **Glycan inputs.** Same; chai-lab parses `>glycan|name=...` with
+  its own glycan grammar. Not exercised.
+* **Modified residues / PTMs.** Chai-lab supports `res_*` tokens in
+  FASTA sequences. Our featurizer inherits that; not exercised.
+* **ESM 15B checkpoint forward pass.** The MLX port loads the 15B
+  weights cleanly (canonical schema on HF, verified via
+  `from_pretrained`) but we only ran a full forward through the 3B.
+  Chai-1 itself uses the 3B in production.
+
+### 8.2 Potential measurement follow-ups (optional)
 
 * Regenerate the full 5×5 RMSD / self-variance matrices with ESM on
   to directly measure CUDA-ESM↔CUDA-ESM and MLX-ESM↔MLX-ESM. The
   per-sample pairwise data in §1.5 is sufficient to pin the
   accumulation-collapses story, but a full 5×5 would be the
   tidiest way to express it.
-* Run an inference smoke test with the 15B ESM-2 checkpoint
-  (`esm2_t48_15B_UR50D`). The weight-loading path is confirmed end
-  to end (the 15B was re-uploaded in MLX schema, header-verified on
-  HF, and loads cleanly through the canonical `from_pretrained`),
-  but we did not run a forward pass on it. Not required — chai-1
-  uses the 3B checkpoint in production.
+* Drive the ColabFold MSA + templates server end-to-end on a small
+  target (e.g. 1UBQ) and verify the MLX output matches the
+  chai-lab-with-same-MSAs CUDA output. This would retire the
+  biggest "plumbed-but-not-measured" row in §8.1.
+* Run an RNA target and a glycan target through the same CLI to
+  close §8.1's entity-kind gaps.
 * Measure CUDA↔CUDA self-variance with ESM on to check whether the
   whole distribution tightens, not just the MLX-vs-CUDA cross term.
   Expected yes from the per-sample GDT numbers in §1.5, but not

@@ -6,10 +6,20 @@ per-sequence fp32 embeddings to disk, then letting the Python process
 exit (freeing the 6 GB of weights) is the cleanest way to keep the
 subsequent chai-mlx inference from paging.
 
+Two input modes:
+
+* ``--targets <names>`` (default) — looks names up in
+  ``cuda_harness.modal_common.DEFAULT_TARGETS`` and caches every
+  protein record found there.  Used by the validation sweep driver.
+* ``--fasta <path>`` — parses an arbitrary chai-lab FASTA
+  (``>kind|name=SHORT`` headers) and caches every protein record in
+  it.  Intended for arbitrary user inputs driven by
+  ``scripts/inference.py``.
+
 Output schema::
 
     <cache-dir>/<sha1-of-sequence>.npy     # float32 (L, 2560)
-    <cache-dir>/manifest.json              # maps target_name -> [{entity_name, sequence, sha1}]
+    <cache-dir>/manifest.json              # maps source_name -> [{entity_name, sequence, sha1}]
 
 The adapter this pairs with reads the sha1 from a sequence and loads
 the .npy back in without needing the ESM weights present.
@@ -62,12 +72,84 @@ def _collect_unique_proteins(target_names: list[str]) -> dict[str, list[dict]]:
     return plan
 
 
+def _collect_unique_proteins_from_fasta(fasta_path: Path) -> dict[str, list[dict]]:
+    """Parse a chai-lab FASTA and return the same plan shape as
+    :func:`_collect_unique_proteins`, keyed by the FASTA filename.
+
+    Only ``>protein|name=...`` records are cached; ligand / dna / rna /
+    glycan records are silently skipped (they don't need ESM embeddings).
+    Header parsing matches chai-lab's ``read_inputs`` but is kept
+    deliberately light-weight so this script doesn't have to import
+    chai-lab's featurizer just to tokenise a header line.
+    """
+    if not fasta_path.is_file():
+        raise FileNotFoundError(f"FASTA not found: {fasta_path}")
+
+    entries: list[dict] = []
+    current_kind: str | None = None
+    current_name: str | None = None
+    current_seq: list[str] = []
+
+    def _flush() -> None:
+        nonlocal current_kind, current_name, current_seq
+        if current_kind == "protein" and current_name and current_seq:
+            seq = "".join(current_seq).strip().upper()
+            if seq:
+                entries.append(
+                    {
+                        "entity_name": current_name,
+                        "sequence": seq,
+                        "sha1": _sha1(seq),
+                    }
+                )
+        current_kind = None
+        current_name = None
+        current_seq = []
+
+    for line in fasta_path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith(">"):
+            _flush()
+            header = line[1:]
+            if "|" not in header:
+                # Non-standard header; ignore (chai-lab would raise, but we
+                # just skip so users can still cache the rest of the file).
+                continue
+            kind, _, rest = header.partition("|")
+            name_part = ""
+            for kv in rest.split("|"):
+                k, _, v = kv.partition("=")
+                if k.strip() == "name":
+                    name_part = v.strip()
+                    break
+            current_kind = kind.strip().lower()
+            current_name = name_part or None
+        else:
+            current_seq.append(line)
+    _flush()
+
+    if not entries:
+        return {}
+    return {fasta_path.name: entries}
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--targets",
-        default="1L2Y,1VII,1CRN,1UBQ,1BRS,1FKB,7TIM,1UBQ_ESM,1CRN_CONSTR",
-        help="Comma-separated target names. Non-protein entries are skipped.",
+        default=None,
+        help="Comma-separated target names from cuda_harness.modal_common."
+             "DEFAULT_TARGETS. Non-protein entries are skipped.",
+    )
+    mode.add_argument(
+        "--fasta",
+        type=Path,
+        default=None,
+        help="Path to a chai-lab-format FASTA. Every '>protein|name=...' "
+             "record is cached; non-protein records are skipped.",
     )
     parser.add_argument(
         "--cache-dir",
@@ -81,17 +163,33 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    targets = [t.strip() for t in args.targets.split(",") if t.strip()]
+    if args.targets is None and args.fasta is None:
+        # Default to the full validation slate so existing
+        # `python scripts/precompute_esm_mlx.py` invocations keep working.
+        args.targets = "1L2Y,1VII,1CRN,1UBQ,1BRS,1FKB,7TIM,1UBQ_ESM,1CRN_CONSTR"
+
     args.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    plan = _collect_unique_proteins(targets)
+    if args.fasta is not None:
+        plan = _collect_unique_proteins_from_fasta(args.fasta)
+        source_label = f"fasta {args.fasta}"
+    else:
+        targets = [t.strip() for t in args.targets.split(",") if t.strip()]
+        plan = _collect_unique_proteins(targets)
+        source_label = f"{len(plan)} target(s)"
+
     unique_sha_to_seq: dict[str, tuple[str, str]] = {}
-    for name, entries in plan.items():
+    for _name, entries in plan.items():
         for e in entries:
             unique_sha_to_seq[e["sha1"]] = (e["entity_name"], e["sequence"])
 
-    print(f"[precompute] {len(plan)} target(s); "
+    print(f"[precompute] {source_label}; "
           f"{len(unique_sha_to_seq)} unique protein sequence(s)")
+    if not unique_sha_to_seq:
+        print("[precompute] no protein sequences found; nothing to cache")
+        manifest = {"model": args.model, "targets": plan}
+        (args.cache_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        return
 
     # Filter to those not already cached.
     to_run = [

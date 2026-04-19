@@ -9,22 +9,28 @@ CUDA reference that actually runs in production.
 
 - Structurally faithful end-to-end. Diffusion is bit-for-bit exact given
   correct trunk outputs.
-- On 1L2Y (Trp-cage, 20 residues), MLX vs CUDA (H100, bf16) Cα RMSD is
-  **0.75 Å mean** across 15 sample pairs (3 seeds × 5 diffusion samples),
-  vs **0.57 Å** for CUDA against the NMR ground truth. MLX sits ~0.26 Å
-  further from experimental truth than CUDA on average, with
-  **GDT-TS = 95.1%** and **Cα lDDT = 89.8%** between the two implementations.
-- The remaining gap is dominated by bf16 fused-kernel rounding accumulating
-  through the 48-block pairformer trunk (inherent to running bf16 on two
-  different implementations) plus per-step diffusion RNG differences between
-  `mx.random.normal` and `torch.randn`. Neither is a structural bug.
+- Validated on the full 10-target slate: monomer (1L2Y, 1VII, 1CRN,
+  1UBQ), multimer (1BRS), ligand (1FKB), long monomer (7TIM), DNA
+  (1BNA), ESM target (1UBQ_ESM), constraints (1CRN_CONSTR). With ESM
+  on, MLX wins against the experimental PDB on 6/10 targets and CUDA
+  wins on 4/10, with the deltas dominated by bf16 accumulation in the
+  48-block pairformer rather than any structural bug — same well,
+  different samples. Full numbers and the "collapse once ESM is on"
+  MLX↔CUDA convergence are in `HANDOFF.md` §1.1 – §1.5.
+- 40 offline tests (`pytest -q`) cover the featurizer (protein, DNA,
+  multimer, constraints including covalent bonds, ligand end-to-end),
+  attention / embeddings / trunk / diffusion / ranking, weight
+  loading, the ESM-MLX adapter, and the `scripts/inference.py` CLI
+  surface.
 
-Numerically validated so far: monomers up to 76 residues (1L2Y, 1VII,
-1CRN, 1UBQ). The expanded validation slate (multimer, ligand, >200
-residue, nucleic acid, ESM, constraints) is wired up end-to-end through
-the harnesses but the Modal sweep that populates numbers has not yet
-run. See the [Validation coverage](#validation-coverage) section below
-for the full target matrix and how to reproduce each axis.
+Plumbed but not yet exercised end-to-end in this repo: online MSA
+(ColabFold API), online templates, offline MSA directories, offline
+template m8 files, RNA-only inputs, glycan inputs. The code paths
+call chai-lab's own server clients / offline loaders — i.e. they are
+expected to work — but there are no regression numbers for them here.
+See `HANDOFF.md` §1 and §8 for the caveat log. If you need one of
+these paths, `scripts/inference.py` exposes the flags and is the
+place to drive them.
 
 ## Install
 
@@ -52,13 +58,65 @@ pip install -e ".[test]"          # pytest
 
 ## Quick start
 
+### Run chai-1 on a FASTA with one command
+
+```bash
+python scripts/inference.py \
+    --weights-dir weights \
+    --fasta input.fasta \
+    --output-dir out/my_run
+```
+
+That's the main entry point. It handles any combination of protein,
+ligand, DNA, RNA, and glycan chains that chai-1 itself supports, and
+writes one mmCIF per diffusion sample plus a `scores.json`
+(pTM / ipTM / pLDDT / aggregate) and a `manifest.json` (dtype, recycles,
+steps, wall clock, input references) — the same polished output layout
+the validation sweep produces. See [FASTA format](#fasta-format) below
+for the header conventions and [CLI reference](#cli-reference) for
+every flag.
+
+Optional extensions covered by the same CLI:
+
+```bash
+# With contact / pocket / covalent-bond restraints (chai-lab CSV).
+python scripts/inference.py --weights-dir weights --fasta input.fasta \
+    --output-dir out/ --constraint-path constraints.csv
+
+# With a pre-computed local ESM cache (recommended on Apple silicon).
+python scripts/precompute_esm_mlx.py --cache-dir esm_cache --fasta input.fasta
+python scripts/inference.py --weights-dir weights --fasta input.fasta \
+    --output-dir out/ --esm-backend mlx_cache --esm-cache-dir esm_cache
+
+# With online MSAs + templates (ColabFold API; plumbed, not validated
+# here, see HANDOFF.md §1 for coverage caveats).
+python scripts/inference.py --weights-dir weights --fasta input.fasta \
+    --output-dir out/ --use-msa-server --use-templates-server
+
+# With a pre-computed local MSA directory / template m8 file.
+python scripts/inference.py --weights-dir weights --fasta input.fasta \
+    --output-dir out/ --msa-directory my_msas/ --templates-path my_templates.m8
+```
+
+### Or call the Python API directly
+
 ```python
 from chai_mlx import ChaiMLX, featurize_fasta
 
 # Pulls ~1.2 GB of safetensors from the HF repo on first call.
 model = ChaiMLX.from_pretrained("josephjojoe/chai-mlx")
 
-ctx = featurize_fasta("input.fasta", output_dir="./out")  # needs [featurize] extra
+ctx = featurize_fasta(
+    "input.fasta",
+    output_dir="./out",
+    constraint_path=None,          # chai-lab restraint CSV, optional
+    msa_directory=None,            # offline MSA dir, optional
+    use_msa_server=False,          # ColabFold online MSA
+    use_templates_server=False,    # online templates (requires use_msa_server=True)
+    templates_path=None,           # offline templates m8, optional
+    esm_backend="off",             # "off" | "chai" | "mlx" | "mlx_cache"
+    esm_cache_dir=None,            # required when esm_backend="mlx_cache"
+)
 result = model.run_inference(ctx, recycles=3, num_samples=5, num_steps=200)
 # result.coords, result.confidence, result.ranking
 ```
@@ -78,6 +136,62 @@ The full set of staged entry points — `embed_inputs`, `trunk`,
 is documented in `chai_mlx/model/core.py`; they're what the CUDA comparison
 harnesses call into, and are useful when you want to feed reference tensors
 into individual stages.
+
+### FASTA format
+
+Chai-1 (and therefore `scripts/inference.py`) uses chai-lab's header
+convention:
+
+```text
+>kind|name=SHORT
+SEQUENCE
+```
+
+`kind` is one of `protein`, `ligand`, `dna`, `rna`, or `glycan`. `SHORT`
+is a per-entity name of **at most 4 characters** (chai-lab packs it
+into a fixed-length tensor when `entity_name_as_subchain=True`, which
+is what the featurizer uses so constraint CSVs can address chains by
+the same label the user wrote — see `HANDOFF.md` §5.4). `SEQUENCE` is
+an amino-acid string for protein, a nucleotide string for dna / rna,
+or a SMILES string for ligand. Multiple records in one file form a
+complex; chai-1 will fold them together.
+
+Example (protein + ligand):
+
+```text
+>protein|name=FKBP
+GVQVETISPGDGRTFPKRGQTCVVHYTGMLEDGKKFDSSRDRNKPFKFMLGKQEVIRGWE
+EGVAQMSVGQRAKLTISPDYAYGATGHPGIIPPHATLVFDVELLKLE
+>ligand|name=FK
+CC=CC1CC(C)CC2(O)OC3(C(CC(C3O)C)C)OC(=O)C(N4CCCCC4C(=O)O2)
+CC(=O)C(C)C=C(C)C(O)C(OC)CC(=O)C(C)CC(=C)C(C)C(O)C(C)C1OC
+```
+
+### CLI reference
+
+`python scripts/inference.py --help` lists every flag. A condensed view:
+
+| Group | Flag | Notes |
+| --- | --- | --- |
+| core | `--weights-dir` | Local dir with `config.json` + safetensors (or HF repo id). |
+| core | `--fasta` | Input FASTA; required. |
+| core | `--output-dir` | Where `pred.model_idx_*.cif`, `scores.json`, `manifest.json` land. |
+| model | `--dtype` | `bfloat16` (default) or `float32`. |
+| model | `--recycles` / `--num-steps` / `--num-samples` / `--seed` | Sampling knobs; defaults match the validation sweep (3 / 200 / 5 / 42). |
+| constraints | `--constraint-path` | Chai-lab restraint CSV (contact + pocket + covalent). |
+| MSA | `--msa-directory` | Offline MSA dir, mutually exclusive with `--use-msa-server`. |
+| MSA | `--use-msa-server` / `--msa-server-url` | Online MSA via ColabFold. |
+| templates | `--templates-path` | Offline templates m8 file. |
+| templates | `--use-templates-server` | Online templates; requires `--use-msa-server`. |
+| ESM | `--esm-backend` | `off` (default), `chai` (CUDA only), `mlx` (16 GB RAM), `mlx_cache`. |
+| ESM | `--esm-cache-dir` | Required with `mlx_cache`; pre-computed `<sha1>.npy` directory. |
+| output | `--save-npz` | Also dump raw coords + scores as npz (CIFs are always written). |
+| output | `--skip-cif` | Skip CIF output (scores + optional npz only). |
+| output | `--feature-dir` | Override where chai-lab caches MSA / template artifacts. |
+
+Validation coverage for each knob is summarised in `HANDOFF.md` §1 —
+what's been end-to-end measured vs what's plumbed-but-not-yet-exercised
+in this repo.
 
 ## Weights
 
@@ -127,14 +241,16 @@ LICENSE, NOTICE     Apache-2.0 + upstream attribution
 - **Smoke the package on random inputs** (no weights, no featurizer):
   `python examples/basic_inference.py`
 - **Run end-to-end FASTA inference** (needs `[featurize]` extra):
-  `python scripts/inference.py --weights-dir weights/ --fasta path/to/input.fasta`
+  `python scripts/inference.py --weights-dir weights/ --fasta path/to/input.fasta --output-dir out/`
+  → writes `pred.model_idx_*.cif` + `scores.json` + `manifest.json`.
+  Full CLI is in [Quick start / CLI reference](#cli-reference).
 - **Benchmark the diffusion loop**:
   `python examples/diffusion_benchmark.py`
 - **FASTA featurization smoke**:
   `python examples/fasta_smoke.py --fasta path/to/input.fasta`
-- **Tests**: `pip install -e ".[test]"` then `pytest -q` (≈3 s; the
-  `test_ranking.py` parity tests are auto-skipped unless `[featurize]`
-  is also installed).
+- **Tests**: `pip install -e ".[test]"` then `pytest -q` (≈30 s with
+  `[featurize]` installed; `test_ranking.py` parity tests are auto-
+  skipped without it). See `HANDOFF.md` §1.8 for the test count.
 
 ## CUDA comparison harnesses
 
@@ -231,21 +347,31 @@ the single source of truth for "what has chai-mlx been pointed at?".
 Each target is tagged with one or more `kinds`, and harnesses accept a
 `--target-kinds` filter so you can sweep a single axis at a time.
 
-| Target        | Kind(s)              | Entities                                 | What it exercises                                        | CUDA vs MLX status |
-| ------------- | -------------------- | ---------------------------------------- | -------------------------------------------------------- | ------------------ |
-| `1L2Y`        | monomer              | 1 protein (20 aa)                        | Baseline Cα RMSD / GDT / lDDT (already measured)         | **0.75 Å**, 95.1% GDT |
-| `1VII`        | monomer              | 1 protein (35 aa)                        | Small α-helical fold                                     | measured            |
-| `1CRN`        | monomer              | 1 protein (46 aa)                        | Crambin, tight 2.0 Å PDB reference                       | measured            |
-| `1UBQ`        | monomer              | 1 protein (76 aa)                        | Mid-size α/β monomer; previous ceiling                    | measured            |
-| `1BRS`        | multimer             | 2 proteins (barnase + barstar, 199 aa)   | Multi-chain featurizer, interface Cα RMSD, iPTM          | scaffolded         |
-| `1FKB`        | ligand               | FKBP-12 + FK506 SMILES                   | `EntityType.LIGAND` path, ligand heavy-atom RMSD         | scaffolded         |
-| `7TIM`        | long                 | 1 protein (248 aa, TIM barrel)            | >200 residue ceiling, bf16 error growth                  | scaffolded         |
-| `1BNA`        | dna, multimer        | 2 DNA strands (12 bp duplex)              | `EntityType.DNA` featurization, P-backbone RMSD          | scaffolded         |
-| `1UBQ_ESM`    | esm                  | 1 protein (76 aa)                        | MLX esm2_t36_3B_UR50D vs chai-lab CUDA traced checkpoint | scaffolded         |
-| `1CRN_CONSTR` | constraints, ligand  | 1 protein + methanethiol + 3 restraints  | Contact / pocket / covalent restraint features           | scaffolded         |
+All targets below are measured end-to-end in `HANDOFF.md` §1.1 – §1.5
+(both ESM-on and ESM-off). Numbers here are Cα RMSD vs experimental PDB
+with ESM on; see the HANDOFF for full ESM-off / ESM-on / MLX↔CUDA
+matrices, the accumulation signature discussion, and the winners
+breakdown (MLX 6 / CUDA 4 on the 10-target slate).
 
-"measured" means numbers exist in `## Status` above; "scaffolded" means
-the plumbing is end-to-end ready but the Modal sweep has not run yet.
+| Target        | Kind(s)              | Entities                                 | What it exercises                                        | MLX vs PDB (ESM on) |
+| ------------- | -------------------- | ---------------------------------------- | -------------------------------------------------------- | ------------------- |
+| `1L2Y`        | monomer              | 1 protein (20 aa)                        | Baseline Cα RMSD / GDT / lDDT                            | 0.74 Å              |
+| `1VII`        | monomer              | 1 protein (35 aa)                        | Small α-helical fold                                     | 4.02 Å              |
+| `1CRN`        | monomer              | 1 protein (46 aa)                        | Crambin, tight 2.0 Å PDB reference                       | 4.43 Å              |
+| `1UBQ`        | monomer              | 1 protein (76 aa)                        | Mid-size α/β monomer                                     | 0.90 Å              |
+| `1BRS`        | multimer             | 2 proteins (barnase + barstar, 199 aa)   | Multi-chain featurizer, interface Cα RMSD, iPTM          | 21.24 Å             |
+| `1FKB`        | ligand               | FKBP-12 + FK506 SMILES                   | `EntityType.LIGAND` path, ligand heavy-atom RMSD         | 0.77 Å              |
+| `7TIM`        | long                 | 1 protein (248 aa, TIM barrel)           | >200 residue ceiling, bf16 error growth                  | 6.49 Å              |
+| `1BNA`        | dna, multimer        | 2 DNA strands (12 bp duplex)             | `EntityType.DNA` featurization, P-backbone RMSD          | 8.12 Å              |
+| `1UBQ_ESM`    | esm                  | 1 protein (76 aa)                        | MLX esm2_t36_3B_UR50D vs chai-lab CUDA traced checkpoint | 0.90 Å              |
+| `1CRN_CONSTR` | constraints, ligand  | 1 protein + methanethiol + 3 restraints  | Contact / pocket / covalent restraint features           | 4.72 Å              |
+
+Axes that are plumbed but not yet end-to-end measured in this repo:
+online MSA via the ColabFold API, online templates, offline MSA
+directories, offline template m8 files, RNA-only inputs, and glycan
+inputs. The `scripts/inference.py` CLI surface documents how to drive
+each of them; see `HANDOFF.md` §1 and §8 for what that means for
+confidence.
 
 ### Reproducing the expanded sweep
 
@@ -278,7 +404,8 @@ python scripts/cuda_constraints_parity.py \
 # 4. ESM-on-MLX vs ESM-on-CUDA (one seed, one sample pair).
 python scripts/inference.py --weights-dir weights/ \
     --fasta /tmp/chai_mlx_cuda/expanded/1UBQ_ESM/seed_42/input.fasta \
-    --esm-backend mlx --save-npz /tmp/chai_mlx_cuda/mlx_expanded/1UBQ_ESM_mlx.npz
+    --output-dir /tmp/chai_mlx_cuda/mlx_expanded/1UBQ_ESM_mlx \
+    --esm-backend mlx
 ```
 
 Step 2's CSV is wide: per-row it carries per-chain Cα RMSDs, an
