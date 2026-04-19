@@ -67,7 +67,7 @@ if LOCAL_CHAI_LAB.exists():
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from cuda_harness.modal_common import DEFAULT_TARGETS  # noqa: E402
+from cuda_harness.modal_common import DEFAULT_TARGETS, Target  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -76,17 +76,97 @@ from cuda_harness.modal_common import DEFAULT_TARGETS  # noqa: E402
 
 
 def _ca_from_cif(cif_path: Path) -> np.ndarray:
+    """All Cα atoms across every protein chain, flat (N, 3) array."""
+    chain_arrs = _ca_by_chain(cif_path)
+    if not chain_arrs:
+        return np.zeros((0, 3), dtype=np.float64)
+    return np.concatenate(list(chain_arrs.values()), axis=0)
+
+
+# Nucleic-acid backbone atoms in chai-lab's CIF output.  P is the most
+# robust choice for a single-point-per-residue representation, matching
+# how Cα represents proteins.
+_DNA_RNA_BACKBONE_ATOMS = ("P",)
+
+# Residue names chai-lab emits for proteins, DNA, RNA.  Used to decide
+# per-chain which backbone rule applies.
+_PROTEIN_RESNAMES = frozenset(
+    {
+        "ALA", "ARG", "ASN", "ASP", "CYS", "GLU", "GLN", "GLY", "HIS",
+        "ILE", "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP",
+        "TYR", "VAL", "UNK",
+    }
+)
+_NUCLEIC_RESNAMES = frozenset(
+    {"DA", "DT", "DG", "DC", "DU", "DX", "A", "U", "G", "C", "N"}
+)
+
+
+def _ca_by_chain(cif_path: Path) -> dict[str, np.ndarray]:
+    """Cα coordinates bucketed by chain ID.  Empty for ligand-only chains."""
     import gemmi
 
     structure = gemmi.read_structure(str(cif_path))
-    ca: list[tuple[float, float, float]] = []
+    out: dict[str, list[tuple[float, float, float]]] = {}
     for model in structure:
         for chain in model:
+            acc = out.setdefault(chain.name, [])
             for residue in chain:
                 for atom in residue:
                     if atom.name.strip() == "CA":
-                        ca.append((atom.pos.x, atom.pos.y, atom.pos.z))
-    return np.array(ca, dtype=np.float64)
+                        acc.append((atom.pos.x, atom.pos.y, atom.pos.z))
+    return {k: np.array(v, dtype=np.float64) for k, v in out.items() if v}
+
+
+def _nucleic_backbone_by_chain(cif_path: Path) -> dict[str, np.ndarray]:
+    """Phosphate (P) coordinates bucketed by DNA/RNA chain."""
+    import gemmi
+
+    structure = gemmi.read_structure(str(cif_path))
+    out: dict[str, list[tuple[float, float, float]]] = {}
+    for model in structure:
+        for chain in model:
+            has_nucleic = any(
+                residue.name.strip() in _NUCLEIC_RESNAMES for residue in chain
+            )
+            if not has_nucleic:
+                continue
+            acc = out.setdefault(chain.name, [])
+            for residue in chain:
+                if residue.name.strip() not in _NUCLEIC_RESNAMES:
+                    continue
+                for atom in residue:
+                    if atom.name.strip() in _DNA_RNA_BACKBONE_ATOMS:
+                        acc.append((atom.pos.x, atom.pos.y, atom.pos.z))
+    return {k: np.array(v, dtype=np.float64) for k, v in out.items() if v}
+
+
+def _ligand_heavy_by_chain(cif_path: Path) -> dict[str, np.ndarray]:
+    """All non-H atoms from chains that contain no polymer residues.
+
+    chai-lab emits ligand entities as their own chain with HETATM records;
+    we identify them as chains that contain zero protein/nucleic residue
+    names.  Hydrogens are excluded so the RMSD is comparable to standard
+    ligand-docking metrics.
+    """
+    import gemmi
+
+    structure = gemmi.read_structure(str(cif_path))
+    out: dict[str, list[tuple[float, float, float]]] = {}
+    for model in structure:
+        for chain in model:
+            names = {residue.name.strip() for residue in chain}
+            if names & (_PROTEIN_RESNAMES | _NUCLEIC_RESNAMES):
+                continue
+            acc: list[tuple[float, float, float]] = []
+            for residue in chain:
+                for atom in residue:
+                    if atom.element.name.strip().upper() == "H":
+                        continue
+                    acc.append((atom.pos.x, atom.pos.y, atom.pos.z))
+            if acc:
+                out[chain.name] = np.array(acc, dtype=np.float64)
+    return out
 
 
 def _ca_from_pdb(pdb_id: str, chain_id: str) -> np.ndarray:
@@ -159,6 +239,99 @@ def _align_length(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarray,
     return a[:n], b[:n], n, truncated
 
 
+def _pair_chains(
+    mlx_chains: dict[str, np.ndarray],
+    cuda_chains: dict[str, np.ndarray],
+) -> list[tuple[str, np.ndarray, np.ndarray]]:
+    """Pair MLX and CUDA chains.
+
+    First tries name-based matching.  If the two sides use different
+    chain naming (chai-lab's ``fasta_names_as_cif_chains=True`` emits
+    entity names, while MLX's ``save_to_cif`` currently emits A/B/...),
+    falls back to length-based positional matching: chains are sorted
+    by residue count and matched in order so chain assignments don't
+    drift.
+    """
+    common = set(mlx_chains) & set(cuda_chains)
+    if common:
+        return [(k, mlx_chains[k], cuda_chains[k]) for k in sorted(common)]
+
+    if len(mlx_chains) != len(cuda_chains):
+        return []
+
+    mlx_sorted = sorted(mlx_chains.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    cuda_sorted = sorted(cuda_chains.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    return [
+        (f"{mk}~{ck}", marr, carr)
+        for (mk, marr), (ck, carr) in zip(mlx_sorted, cuda_sorted)
+    ]
+
+
+def _per_chain_rmsd(
+    mlx_chains: dict[str, np.ndarray],
+    cuda_chains: dict[str, np.ndarray],
+) -> dict[str, float]:
+    """Kabsch-aligned RMSD between matching chains."""
+    out: dict[str, float] = {}
+    for key, mlx_arr, cuda_arr in _pair_chains(mlx_chains, cuda_chains):
+        a, b, n, _ = _align_length(mlx_arr, cuda_arr)
+        if n < 3:
+            continue
+        rmsd, _ = _kabsch(a, b)
+        out[key] = rmsd
+    return out
+
+
+def _interface_rmsd(
+    mlx_chains: dict[str, np.ndarray],
+    cuda_chains: dict[str, np.ndarray],
+    *,
+    cutoff: float = 10.0,
+) -> float | None:
+    """Interface Cα RMSD: residues on chain A within ``cutoff`` of chain B,
+    plus residues on chain B within ``cutoff`` of chain A, aligned jointly.
+    """
+    paired = _pair_chains(mlx_chains, cuda_chains)
+    if len(paired) < 2:
+        return None
+
+    (_, a_mlx, a_cuda), (_, b_mlx, b_cuda) = paired[0], paired[1]
+    n_a = min(len(a_mlx), len(a_cuda))
+    n_b = min(len(b_mlx), len(b_cuda))
+    if n_a < 3 or n_b < 3:
+        return None
+    a_mlx, a_cuda = a_mlx[:n_a], a_cuda[:n_a]
+    b_mlx, b_cuda = b_mlx[:n_b], b_cuda[:n_b]
+
+    d_mlx = np.linalg.norm(a_mlx[:, None, :] - b_mlx[None, :, :], axis=-1)
+    in_iface_a = (d_mlx.min(axis=1) < cutoff)
+    in_iface_b = (d_mlx.min(axis=0) < cutoff)
+    if not in_iface_a.any() or not in_iface_b.any():
+        return None
+
+    mlx_joint = np.concatenate([a_mlx[in_iface_a], b_mlx[in_iface_b]], axis=0)
+    cuda_joint = np.concatenate([a_cuda[in_iface_a], b_cuda[in_iface_b]], axis=0)
+    rmsd, _ = _kabsch(mlx_joint, cuda_joint)
+    return rmsd
+
+
+def _classify_target(target: Target) -> str:
+    """Coarse label for per-target metric selection.
+
+    Order of precedence: dna > multimer > ligand > monomer.  A DNA multimer
+    is still labelled ``dna`` because that drives backbone-atom (P) RMSD
+    selection; the iPTM/per-chain columns pick up the multimer information
+    independently.
+    """
+    if "dna" in target.kinds or "rna" in target.kinds:
+        return "dna"
+    if "multimer" in target.kinds:
+        return "multimer"
+    if "ligand" in target.kinds:
+        return "ligand"
+    return "monomer"
+
+
 # ---------------------------------------------------------------------------
 # MLX inference
 # ---------------------------------------------------------------------------
@@ -166,8 +339,7 @@ def _align_length(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarray,
 
 def _mlx_run(
     weights_dir: Path,
-    sequence: str,
-    target: str,
+    target: Target,
     seed: int,
     *,
     feature_dir: Path,
@@ -176,6 +348,7 @@ def _mlx_run(
     num_steps: int,
     num_recycles: int,
     num_samples: int,
+    esm_backend: str = "off",
 ) -> dict:
     import torch
     import mlx.core as mx
@@ -186,13 +359,14 @@ def _mlx_run(
     from chai_mlx import ChaiMLX
     from chai_mlx.data.featurize import featurize_fasta
 
-    fasta_path = feature_dir / f"{target}.fasta"
+    fasta_path = feature_dir / f"{target.name}.fasta"
     fasta_path.parent.mkdir(parents=True, exist_ok=True)
-    fasta_path.write_text(f">protein|name={target}\n{sequence}\n")
+    fasta_path.write_text(target.to_fasta())
 
     ref_ctx = make_all_atom_feature_context(
         fasta_file=fasta_path,
         output_dir=feature_dir / "ref_features",
+        entity_name_as_subchain=True,
         use_esm_embeddings=False,
         use_msa_server=False,
         use_templates_server=False,
@@ -205,7 +379,7 @@ def _mlx_run(
     ctx = featurize_fasta(
         fasta_path,
         output_dir=feature_dir / "mlx_features",
-        use_esm_embeddings=False,
+        esm_backend=esm_backend,
         use_msa_server=False,
         use_templates_server=False,
     )
@@ -257,6 +431,7 @@ def _mlx_run(
 @dataclass
 class ComparisonRow:
     target: str
+    kind: str
     seed: int
     sample_idx: int
     mlx_dtype: str
@@ -275,50 +450,80 @@ class ComparisonRow:
     ptm_cuda: float
     iptm_mlx: float
     iptm_cuda: float
+    # Per-kind extras; ``None`` when the target does not exercise that metric.
+    per_chain_rmsd: dict[str, float] | None = None
+    interface_rmsd_mlx_vs_cuda: float | None = None
+    ligand_heavy_rmsd_mlx_vs_cuda: float | None = None
+    dna_backbone_rmsd_mlx_vs_cuda: float | None = None
     has_clashes_mlx: bool | None = None
     has_clashes_cuda: bool | None = None
 
 
 def _pretty_print(rows: list[ComparisonRow]) -> None:
-    print("\n" + "=" * 120)
+    def _f(x: float | None, width: int = 6, spec: str = ".2f", suffix: str = "Å") -> str:
+        if x is None or (isinstance(x, float) and np.isnan(x)):
+            return f"{'--':>{width + len(suffix)}}"
+        return f"{x:>{width}{spec}}{suffix}"
+
+    print("\n" + "=" * 132)
     print(
-        f"  {'target':<6} {'seed':>5} {'idx':>3} {'dtype':>8} {'N':>4} "
-        f"{'rmsd':>7} {'gdt':>6} {'lddt':>6} {'max_dca':>9} "
-        f"{'mlx_pdb':>8} {'cuda_pdb':>9} "
+        f"  {'target':<11} {'kind':<9} {'seed':>5} {'idx':>3} {'dtype':>8} {'N':>4} "
+        f"{'rmsd':>8} {'gdt':>6} {'lddt':>6} {'ifRMSD':>8} {'ligRMSD':>8} "
         f"{'agg_mlx':>8} {'agg_cuda':>9} {'Δagg':>8}"
     )
-    print("  " + "-" * 118)
+    print("  " + "-" * 130)
     for r in rows:
-        mlx_pdb = f"{r.rmsd_mlx_vs_pdb:7.2f}Å" if r.rmsd_mlx_vs_pdb is not None else "    --   "
-        cuda_pdb = f"{r.rmsd_cuda_vs_pdb:8.2f}Å" if r.rmsd_cuda_vs_pdb is not None else "     --   "
         print(
-            f"  {r.target:<6} {r.seed:>5} {r.sample_idx:>3} {r.mlx_dtype:>8} "
-            f"{r.n_residues:>4} {r.rmsd_mlx_vs_cuda:>6.2f}Å "
+            f"  {r.target:<11} {r.kind:<9} {r.seed:>5} {r.sample_idx:>3} {r.mlx_dtype:>8} "
+            f"{r.n_residues:>4} "
+            f"{_f(r.rmsd_mlx_vs_cuda, 7)} "
             f"{r.gdt_mlx_vs_cuda:>5.1%} {r.lddt_mlx_vs_cuda:>5.1%} "
-            f"{r.max_ca_err_mlx_vs_cuda:>8.2f}Å "
-            f"{mlx_pdb:>8} {cuda_pdb:>9} "
+            f"{_f(r.interface_rmsd_mlx_vs_cuda, 7)} "
+            f"{_f(r.ligand_heavy_rmsd_mlx_vs_cuda, 7)} "
             f"{r.agg_mlx:>8.4f} {r.agg_cuda:>9.4f} {r.agg_gap:>+7.4f}"
         )
+
+
+def _nanmean(values: list[float | None]) -> float:
+    arr = np.array([v for v in values if v is not None and not np.isnan(v)], dtype=np.float64)
+    return float(arr.mean()) if arr.size else float("nan")
 
 
 def _aggregate_summary(rows: list[ComparisonRow]) -> dict:
     if not rows:
         return {}
-    per_dtype: dict[str, dict[str, float]] = {}
-    for dtype in sorted({r.mlx_dtype for r in rows}):
-        filtered = [r for r in rows if r.mlx_dtype == dtype]
-        rmsds = np.array([r.rmsd_mlx_vs_cuda for r in filtered])
-        per_dtype[dtype] = {
-            "mean_rmsd_mlx_vs_cuda": float(rmsds.mean()),
-            "median_rmsd_mlx_vs_cuda": float(np.median(rmsds)),
-            "p90_rmsd_mlx_vs_cuda": float(np.percentile(rmsds, 90)),
-            "max_rmsd_mlx_vs_cuda": float(rmsds.max()),
-            "mean_gdt_mlx_vs_cuda": float(np.mean([r.gdt_mlx_vs_cuda for r in filtered])),
-            "mean_lddt_mlx_vs_cuda": float(np.mean([r.lddt_mlx_vs_cuda for r in filtered])),
-            "mean_agg_gap": float(np.mean([r.agg_gap for r in filtered])),
-            "std_agg_gap": float(np.std([r.agg_gap for r in filtered])),
+
+    def _bucket(filtered: list[ComparisonRow]) -> dict:
+        rmsds = np.array(
+            [r.rmsd_mlx_vs_cuda for r in filtered
+             if not np.isnan(r.rmsd_mlx_vs_cuda)]
+        )
+        return {
             "n_samples": len(filtered),
+            "mean_rmsd_mlx_vs_cuda": float(rmsds.mean()) if rmsds.size else float("nan"),
+            "median_rmsd_mlx_vs_cuda": float(np.median(rmsds)) if rmsds.size else float("nan"),
+            "p90_rmsd_mlx_vs_cuda": float(np.percentile(rmsds, 90)) if rmsds.size else float("nan"),
+            "max_rmsd_mlx_vs_cuda": float(rmsds.max()) if rmsds.size else float("nan"),
+            "mean_gdt_mlx_vs_cuda": _nanmean([r.gdt_mlx_vs_cuda for r in filtered]),
+            "mean_lddt_mlx_vs_cuda": _nanmean([r.lddt_mlx_vs_cuda for r in filtered]),
+            "mean_interface_rmsd": _nanmean([r.interface_rmsd_mlx_vs_cuda for r in filtered]),
+            "mean_ligand_heavy_rmsd": _nanmean([r.ligand_heavy_rmsd_mlx_vs_cuda for r in filtered]),
+            "mean_dna_backbone_rmsd": _nanmean([r.dna_backbone_rmsd_mlx_vs_cuda for r in filtered]),
+            "mean_agg_gap": _nanmean([r.agg_gap for r in filtered]),
+            "std_agg_gap": float(
+                np.std([r.agg_gap for r in filtered if not np.isnan(r.agg_gap)])
+            ) if filtered else float("nan"),
         }
+
+    per_dtype: dict[str, dict] = {}
+    for dtype in sorted({r.mlx_dtype for r in rows}):
+        by_dtype = [r for r in rows if r.mlx_dtype == dtype]
+        bucket = {"all": _bucket(by_dtype), "per_kind": {}}
+        for kind in sorted({r.kind for r in by_dtype}):
+            bucket["per_kind"][kind] = _bucket(
+                [r for r in by_dtype if r.kind == kind]
+            )
+        per_dtype[dtype] = bucket
     return per_dtype
 
 
@@ -395,13 +600,12 @@ def main(argv: Iterable[str] | None = None) -> None:
     args.feature_dir.mkdir(parents=True, exist_ok=True)
 
     # Discover targets/seeds from the reference tree.
-    plan: list[tuple[str, int, str]] = []
+    plan: list[tuple[str, int]] = []
     for target_dir in sorted(p for p in args.reference_dir.iterdir() if p.is_dir()):
-        target = target_dir.name
-        if target not in DEFAULT_TARGETS:
-            print(f"[warn] unknown target {target!r}, skipping")
+        name = target_dir.name
+        if name not in DEFAULT_TARGETS:
+            print(f"[warn] unknown target {name!r}, skipping")
             continue
-        sequence = DEFAULT_TARGETS[target]
         for seed_dir in sorted(p for p in target_dir.iterdir() if p.is_dir() and p.name.startswith("seed_")):
             try:
                 seed = int(seed_dir.name.split("_", 1)[1])
@@ -410,7 +614,7 @@ def main(argv: Iterable[str] | None = None) -> None:
             if not any(seed_dir.glob("pred.model_idx_*.cif")):
                 print(f"[warn] no CUDA CIFs at {seed_dir}")
                 continue
-            plan.append((target, seed, sequence))
+            plan.append((name, seed))
 
     if not plan:
         print(f"[error] no reference runs found under {args.reference_dir}")
@@ -418,23 +622,25 @@ def main(argv: Iterable[str] | None = None) -> None:
 
     rows: list[ComparisonRow] = []
 
-    for target, seed, sequence in plan:
-        seed_ref_dir = args.reference_dir / target / f"seed_{seed}"
+    for name, seed in plan:
+        target = DEFAULT_TARGETS[name]
+        kind = _classify_target(target)
+        seed_ref_dir = args.reference_dir / name / f"seed_{seed}"
         cuda_cifs = sorted(seed_ref_dir.glob("pred.model_idx_*.cif"))
-        cuda_ca_list = [_ca_from_cif(p) for p in cuda_cifs]
         cuda_scores = [_load_cuda_scores(seed_ref_dir / f"scores.model_idx_{i}.npz")
                        for i in range(len(cuda_cifs))]
 
-        # Optional PDB ground truth.
+        # Optional PDB ground truth (Cα only; not meaningful for ligand-only
+        # or DNA-only targets).
         pdb_ca = None
-        if args.compare_pdb:
+        if args.compare_pdb and target.n_protein_residues > 0:
             try:
-                pdb_ca = _ca_from_pdb(target, "A")
+                pdb_ca = _ca_from_pdb(name, "A")
             except Exception as exc:
-                warnings.warn(f"{target}: could not fetch PDB: {exc}")
+                warnings.warn(f"{name}: could not fetch PDB: {exc}")
 
         for dtype in args.mlx_dtypes:
-            mlx_dir = args.mlx_output_dir / dtype / target / f"seed_{seed}"
+            mlx_dir = args.mlx_output_dir / dtype / name / f"seed_{seed}"
             cached_cifs = sorted(mlx_dir.glob("pred.model_idx_*.cif"))
             cached_scores = mlx_dir / "scores.json"
             has_complete_cache = (
@@ -445,7 +651,7 @@ def main(argv: Iterable[str] | None = None) -> None:
             # 200-step MLX inference on already-done seeds.
             if args.skip_mlx or (has_complete_cache and not args.force_rerun_mlx):
                 if args.skip_mlx and not has_complete_cache:
-                    print(f"[skip-mlx] nothing to compare; skipping {target} seed={seed} dtype={dtype}")
+                    print(f"[skip-mlx] nothing to compare; skipping {name} seed={seed} dtype={dtype}")
                     continue
                 label = "skip-mlx" if args.skip_mlx else "reuse-cache"
                 print(f"[{label}] reusing {mlx_dir}")
@@ -456,18 +662,18 @@ def main(argv: Iterable[str] | None = None) -> None:
                 mlx_ptm = np.array(cached["ptm"], dtype=np.float32)
                 mlx_iptm = np.array(cached["iptm"], dtype=np.float32)
             else:
-                print(f"[mlx] {target} seed={seed} dtype={dtype}")
+                print(f"[mlx] {name} seed={seed} dtype={dtype}")
                 mlx_result = _mlx_run(
                     weights_dir=args.weights_dir,
-                    sequence=sequence,
                     target=target,
                     seed=seed,
-                    feature_dir=args.feature_dir / target,
+                    feature_dir=args.feature_dir / name,
                     out_dir=mlx_dir,
                     dtype=dtype,
                     num_steps=args.num_steps,
                     num_recycles=args.num_recycles,
                     num_samples=args.num_samples,
+                    esm_backend=getattr(args, "esm_backend", "off"),
                 )
                 mlx_cifs = mlx_result["cif_paths"]
                 mlx_agg = mlx_result["aggregate_score"]
@@ -486,20 +692,84 @@ def main(argv: Iterable[str] | None = None) -> None:
 
             n_samples = min(len(mlx_cifs), len(cuda_cifs))
             for sample_idx in range(n_samples):
-                mlx_ca = _ca_from_cif(mlx_cifs[sample_idx])
-                cuda_ca = cuda_ca_list[sample_idx]
-                a, b, n, truncated = _align_length(mlx_ca, cuda_ca)
-                rmsd, dists = _kabsch(a, b)
-                gdt = _gdt_ts(dists)
-                lddt = _lddt(a, b)
-                max_err = float(dists.max())
+                mlx_ca_by_chain = _ca_by_chain(mlx_cifs[sample_idx])
+                cuda_ca_by_chain = _ca_by_chain(cuda_cifs[sample_idx])
+                mlx_dna_by_chain = _nucleic_backbone_by_chain(mlx_cifs[sample_idx])
+                cuda_dna_by_chain = _nucleic_backbone_by_chain(cuda_cifs[sample_idx])
+                mlx_lig_by_chain = _ligand_heavy_by_chain(mlx_cifs[sample_idx])
+                cuda_lig_by_chain = _ligand_heavy_by_chain(cuda_cifs[sample_idx])
+
+                # Headline: Cα for protein-bearing targets, P backbone for
+                # DNA/RNA-only targets, ligand heavy atoms otherwise.
+                if kind == "dna":
+                    headline_mlx = (
+                        np.concatenate(list(mlx_dna_by_chain.values()), axis=0)
+                        if mlx_dna_by_chain else np.zeros((0, 3))
+                    )
+                    headline_cuda = (
+                        np.concatenate(list(cuda_dna_by_chain.values()), axis=0)
+                        if cuda_dna_by_chain else np.zeros((0, 3))
+                    )
+                elif target.n_protein_residues > 0:
+                    headline_mlx = (
+                        np.concatenate(list(mlx_ca_by_chain.values()), axis=0)
+                        if mlx_ca_by_chain else np.zeros((0, 3))
+                    )
+                    headline_cuda = (
+                        np.concatenate(list(cuda_ca_by_chain.values()), axis=0)
+                        if cuda_ca_by_chain else np.zeros((0, 3))
+                    )
+                else:
+                    headline_mlx = (
+                        np.concatenate(list(mlx_lig_by_chain.values()), axis=0)
+                        if mlx_lig_by_chain else np.zeros((0, 3))
+                    )
+                    headline_cuda = (
+                        np.concatenate(list(cuda_lig_by_chain.values()), axis=0)
+                        if cuda_lig_by_chain else np.zeros((0, 3))
+                    )
+
+                a, b, n, truncated = _align_length(headline_mlx, headline_cuda)
+                if n >= 3:
+                    rmsd, dists = _kabsch(a, b)
+                    gdt = _gdt_ts(dists)
+                    lddt = _lddt(a, b)
+                    max_err = float(dists.max())
+                else:
+                    rmsd = float("nan")
+                    gdt = float("nan")
+                    lddt = float("nan")
+                    max_err = float("nan")
 
                 rmsd_mlx_pdb = None
                 rmsd_cuda_pdb = None
-                if pdb_ca is not None:
+                if pdb_ca is not None and n >= 3:
                     n_pdb = min(len(pdb_ca), len(a))
                     rmsd_mlx_pdb, _ = _kabsch(a[:n_pdb], pdb_ca[:n_pdb])
                     rmsd_cuda_pdb, _ = _kabsch(b[:n_pdb], pdb_ca[:n_pdb])
+
+                # Per-kind extras: always computed when the target has the
+                # relevant atoms.
+                per_chain_dict = _per_chain_rmsd(mlx_ca_by_chain, cuda_ca_by_chain)
+                interface_rmsd = (
+                    _interface_rmsd(mlx_ca_by_chain, cuda_ca_by_chain)
+                    if target.is_multimer and target.n_protein_residues > 0
+                    else None
+                )
+                ligand_rmsd = None
+                if mlx_lig_by_chain and cuda_lig_by_chain:
+                    lig_mlx = np.concatenate(list(mlx_lig_by_chain.values()), axis=0)
+                    lig_cuda = np.concatenate(list(cuda_lig_by_chain.values()), axis=0)
+                    la, lb, ln, _ = _align_length(lig_mlx, lig_cuda)
+                    if ln >= 3:
+                        ligand_rmsd, _ = _kabsch(la, lb)
+                dna_rmsd = None
+                if mlx_dna_by_chain and cuda_dna_by_chain:
+                    dna_mlx = np.concatenate(list(mlx_dna_by_chain.values()), axis=0)
+                    dna_cuda = np.concatenate(list(cuda_dna_by_chain.values()), axis=0)
+                    da, db, dn, _ = _align_length(dna_mlx, dna_cuda)
+                    if dn >= 3:
+                        dna_rmsd, _ = _kabsch(da, db)
 
                 agg_mlx = float(mlx_agg[sample_idx]) if sample_idx < len(mlx_agg) else float("nan")
                 agg_cuda = cuda_scores[sample_idx][0]
@@ -511,7 +781,8 @@ def main(argv: Iterable[str] | None = None) -> None:
 
                 rows.append(
                     ComparisonRow(
-                        target=target,
+                        target=name,
+                        kind=kind,
                         seed=seed,
                         sample_idx=sample_idx,
                         mlx_dtype=dtype,
@@ -530,6 +801,10 @@ def main(argv: Iterable[str] | None = None) -> None:
                         ptm_cuda=ptm_cuda,
                         iptm_mlx=iptm_mlx,
                         iptm_cuda=iptm_cuda,
+                        per_chain_rmsd=per_chain_dict or None,
+                        interface_rmsd_mlx_vs_cuda=interface_rmsd,
+                        ligand_heavy_rmsd_mlx_vs_cuda=ligand_rmsd,
+                        dna_backbone_rmsd_mlx_vs_cuda=dna_rmsd,
                         has_clashes_cuda=has_clashes_cuda,
                     )
                 )
@@ -537,20 +812,38 @@ def main(argv: Iterable[str] | None = None) -> None:
     _pretty_print(rows)
     summary = _aggregate_summary(rows)
     print("\nPer-dtype aggregate (MLX vs CUDA):")
-    for dtype, metrics in summary.items():
-        print(f"  {dtype}: n={metrics['n_samples']}")
-        for key, value in metrics.items():
+    for dtype, bucket in summary.items():
+        all_metrics = bucket["all"]
+        print(f"  {dtype}: n={all_metrics['n_samples']}")
+        for key, value in all_metrics.items():
             if key == "n_samples":
                 continue
-            print(f"    {key:>32}: {value:+.4f}")
+            if isinstance(value, float) and np.isnan(value):
+                print(f"    {key:>32}: --")
+            else:
+                print(f"    {key:>32}: {value:+.4f}")
+        for kind, kmetrics in bucket["per_kind"].items():
+            print(f"    [{kind}] n={kmetrics['n_samples']}")
+            for key in ("mean_rmsd_mlx_vs_cuda", "mean_interface_rmsd",
+                        "mean_ligand_heavy_rmsd", "mean_dna_backbone_rmsd"):
+                val = kmetrics[key]
+                if isinstance(val, float) and np.isnan(val):
+                    continue
+                print(f"      {key:>30}: {val:+.4f}")
 
     if args.csv is not None:
         args.csv.parent.mkdir(parents=True, exist_ok=True)
         with args.csv.open("w", newline="") as fh:
-            writer = csv.DictWriter(fh, fieldnames=list(asdict(rows[0]).keys()) if rows else [])
+            writer = csv.DictWriter(
+                fh, fieldnames=list(asdict(rows[0]).keys()) if rows else []
+            )
             writer.writeheader()
             for r in rows:
-                writer.writerow(asdict(r))
+                record = asdict(r)
+                # DictWriter can't serialize dict fields; fold them to JSON.
+                if record.get("per_chain_rmsd") is not None:
+                    record["per_chain_rmsd"] = json.dumps(record["per_chain_rmsd"])
+                writer.writerow(record)
         print(f"[save] rows -> {args.csv}")
 
     if args.summary_json is not None:
