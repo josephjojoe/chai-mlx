@@ -8,12 +8,16 @@ from the wrong representation.
 
 from __future__ import annotations
 
+from dataclasses import replace as dc_replace
+
 import numpy as np
 
 import mlx.core as mx
+from mlx.utils import tree_flatten
 
 from chai_mlx.config import ChaiConfig
 from chai_mlx.data.types import DiffusionCache, TrunkOutputs
+from chai_mlx.model.core import ChaiMLX, _cast_weights
 from chai_mlx.model.diffusion import DiffusionModule
 from tests.helpers import make_structure_inputs
 
@@ -94,6 +98,67 @@ class _FakeDiffusionModule:
         self.atom_attention_decoder = _DecoderStub()
 
 
+def _make_diffusion_trunk(cfg: ChaiConfig, *, dtype: mx.Dtype) -> TrunkOutputs:
+    batch_size = 1
+    n_tokens = 4
+    n_atoms = 32
+    atom_blocks = n_atoms // 32
+
+    structure = make_structure_inputs(
+        batch_size=batch_size,
+        n_tokens=n_tokens,
+        n_atoms=n_atoms,
+        msa_depth=2,
+        n_templates=1,
+    )
+    q_idx = mx.arange(n_atoms, dtype=mx.int32).reshape(batch_size, atom_blocks, 32)
+    kv_idx = mx.clip(
+        q_idx[:, :, :1] + mx.arange(128, dtype=mx.int32)[None, None, :] - 48,
+        0,
+        n_atoms - 1,
+    )
+    block_mask = mx.ones((batch_size, atom_blocks, 32, 128), dtype=mx.float32)
+    structure = dc_replace(
+        structure,
+        atom_q_indices=q_idx,
+        atom_kv_indices=kv_idx,
+        block_atom_pair_mask=block_mask,
+    )
+
+    return TrunkOutputs(
+        single_initial=mx.zeros((batch_size, n_tokens, cfg.hidden.token_single), dtype=dtype),
+        single_trunk=mx.zeros((batch_size, n_tokens, cfg.hidden.token_single), dtype=dtype),
+        single_structure=mx.zeros((batch_size, n_tokens, cfg.hidden.token_single), dtype=dtype),
+        pair_initial=mx.zeros(
+            (batch_size, n_tokens, n_tokens, cfg.hidden.token_pair), dtype=dtype
+        ),
+        pair_trunk=mx.zeros(
+            (batch_size, n_tokens, n_tokens, cfg.hidden.token_pair), dtype=dtype
+        ),
+        pair_structure=mx.zeros(
+            (batch_size, n_tokens, n_tokens, cfg.hidden.token_pair), dtype=dtype
+        ),
+        atom_single_structure_input=mx.zeros(
+            (batch_size, n_atoms, cfg.hidden.atom_single), dtype=dtype
+        ),
+        atom_pair_structure_input=mx.zeros(
+            (
+                batch_size,
+                atom_blocks,
+                cfg.atom_blocks.query_block,
+                cfg.atom_blocks.kv_block,
+                cfg.hidden.atom_pair,
+            ),
+            dtype=dtype,
+        ),
+        msa_input=mx.zeros((batch_size, 2, n_tokens, cfg.hidden.msa), dtype=dtype),
+        template_input=mx.zeros(
+            (batch_size, 1, n_tokens, n_tokens, cfg.hidden.template_pair), dtype=dtype
+        ),
+        structure_inputs=structure,
+    )
+
+
 def test_denoise_projects_sigma_conditioned_single_repr() -> None:
     """Ensure ``denoise`` projects from ``s_cond`` rather than trunk structure."""
     cfg = ChaiConfig()
@@ -139,3 +204,63 @@ def test_denoise_projects_sigma_conditioned_single_repr() -> None:
         np.array(recorder.last_input, copy=False),
         np.array(s_cond, copy=False),
     )
+
+
+def test_cast_weights_keeps_diffusion_module_fp32() -> None:
+    model = ChaiMLX(ChaiConfig(compute_dtype="bfloat16"))
+    _cast_weights(model, mx.bfloat16)
+
+    params = {
+        key: value
+        for key, value in tree_flatten(model.parameters())
+        if isinstance(value, mx.array)
+    }
+    diffusion_dtypes = {
+        key: value.dtype
+        for key, value in params.items()
+        if key.startswith("diffusion_module.")
+    }
+    trunk_dtypes = {
+        key: value.dtype
+        for key, value in params.items()
+        if key.startswith("trunk_module.")
+    }
+
+    assert diffusion_dtypes
+    assert trunk_dtypes
+    assert all(dtype == mx.float32 for dtype in diffusion_dtypes.values())
+    assert any(dtype == mx.bfloat16 for dtype in trunk_dtypes.values())
+
+
+def test_prepare_cache_upcasts_trunk_conditioning_to_fp32() -> None:
+    cfg = ChaiConfig(compute_dtype="bfloat16")
+    module = DiffusionModule(cfg)
+    trunk = _make_diffusion_trunk(cfg, dtype=mx.bfloat16)
+
+    cache = module.prepare_cache(trunk)
+    tensors = (
+        cache.s_static,
+        cache.z_cond,
+        cache.blocked_pair_base,
+        cache.atom_cond,
+        cache.atom_single_cond,
+        *cache.pair_biases,
+    )
+    mx.eval(*tensors)
+
+    assert trunk.single_trunk.dtype == mx.bfloat16
+    assert all(t.dtype == mx.float32 for t in tensors)
+
+
+def test_diffusion_step_returns_fp32_under_bfloat16_compute_dtype() -> None:
+    cfg = ChaiConfig(compute_dtype="bfloat16")
+    module = DiffusionModule(cfg)
+    trunk = _make_diffusion_trunk(cfg, dtype=mx.bfloat16)
+    cache = module.prepare_cache(trunk)
+    coords = module.init_noise(1, 1, trunk.structure_inputs)
+    sigma_curr, sigma_next, gamma = next(module.schedule(num_steps=2))
+
+    out = module.diffusion_step(cache, coords, sigma_curr, sigma_next, gamma)
+    mx.eval(out)
+
+    assert out.dtype == mx.float32

@@ -23,7 +23,8 @@ took to prove that the port is actually faithful.
 ## Status
 
 - Structurally faithful end-to-end. The diffusion sampler is bit-for-bit
-  exact given correct trunk outputs.
+  exact given correct trunk outputs and now runs in fp32 to match the
+  TorchScript reference bundle.
 - On 1L2Y (Trp-cage, 20 residues), MLX vs CUDA (H100, bf16) Cα RMSD is
   **0.75 Å mean** across 15 sample pairs (3 seeds × 5 diffusion samples),
   vs **0.57 Å** for CUDA against the NMR ground truth. MLX sits ~0.26 Å
@@ -129,7 +130,8 @@ result = model.run_inference(ctx, recycles=3, num_samples=5, num_steps=200)
 above, via `huggingface_hub`) or a local directory containing
 `config.json` plus `model.safetensors` (or sharded safetensors with an
 index file). Pass `compute_dtype="float32"` to disable mixed-precision
-inference.
+inference in the trunk / confidence paths; diffusion already runs in fp32
+to match the reference bundle.
 
 `model.run_inference_debug(...)` returns a superset `FoldOutputs` that
 retains the feature context, embeddings, and trunk intermediates

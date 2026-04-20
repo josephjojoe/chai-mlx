@@ -137,9 +137,8 @@ growth is even smaller: the recycle projection is a LayerNorm +
 Linear that at bf16 produces ~0.1 % of fresh drift.
 - **Diffusion is bit-for-bit exact given correct trunk outputs**
 (README status, section 1.1). The scripted diffusion module
-runs in pure fp32 end-to-end; MLX currently runs it at bf16 per
-the default compute_dtype, but README reports no meaningful
-structural degradation from that.
+  runs in pure fp32 end-to-end; MLX now matches that and keeps the
+  diffusion path in fp32 even when the rest of the model runs at bf16.
 
 ## What we built during this investigation
 

@@ -16,6 +16,7 @@ from chai_mlx.utils import (
     center_random_augmentation,
     edm_gammas,
     edm_sigmas,
+    ensure_fp32,
     gather_blocked_pair_values,
 )
 
@@ -143,7 +144,29 @@ class DiffusionModule(nn.Module):
 
     def prepare_cache(self, trunk: TrunkOutputs) -> DiffusionCache:
         structure = trunk.structure_inputs
-        s_static, z_cond = self.diffusion_conditioning.prepare_static(trunk)
+        # TorchScript switches to an fp32-only diffusion bundle even though the
+        # trunk itself mostly runs in bf16. Mirror that boundary here.
+        pair_trunk = ensure_fp32(trunk.pair_trunk)
+        pair_structure = ensure_fp32(trunk.pair_structure)
+        single_structure = ensure_fp32(trunk.single_structure)
+        single_trunk = ensure_fp32(trunk.single_trunk)
+        atom_single_structure = ensure_fp32(trunk.atom_single_structure_input)
+        atom_pair_structure = ensure_fp32(trunk.atom_pair_structure_input)
+
+        fp32_trunk = TrunkOutputs(
+            single_initial=trunk.single_initial,
+            single_trunk=single_trunk,
+            single_structure=single_structure,
+            pair_initial=trunk.pair_initial,
+            pair_trunk=pair_trunk,
+            pair_structure=pair_structure,
+            atom_single_structure_input=atom_single_structure,
+            atom_pair_structure_input=atom_pair_structure,
+            msa_input=trunk.msa_input,
+            template_input=trunk.template_input,
+            structure_inputs=trunk.structure_inputs,
+        )
+        s_static, z_cond = self.diffusion_conditioning.prepare_static(fp32_trunk)
         pair_biases = self.diffusion_transformer.precompute_pair_biases(
             z_cond, pair_mask=structure.token_pair_mask
         )
@@ -156,14 +179,14 @@ class DiffusionModule(nn.Module):
             q_token_idx,
             kv_token_idx,
         )
-        blocked_pair_base = blocked_pair_base + trunk.atom_pair_structure_input
+        blocked_pair_base = blocked_pair_base + atom_pair_structure
 
         atom_cond = self.atom_attention_encoder.to_atom_cond(
-            trunk.atom_single_structure_input
+            atom_single_structure
         )
         atom_single_cond = self.atom_attention_encoder.prepare_cond(
             atom_cond,
-            trunk.single_trunk,
+            single_trunk,
             structure.atom_token_index,
         )
 

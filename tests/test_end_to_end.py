@@ -19,6 +19,7 @@ import mlx.core as mx
 from chai_mlx import ChaiMLX, InferenceOutputs
 from chai_mlx.config import ChaiConfig
 from chai_mlx.data.types import FeatureContext
+from chai_mlx.model.core import _cast_weights
 
 from tests.helpers import make_structure_inputs
 
@@ -112,3 +113,17 @@ def test_run_inference_tiny_smoke() -> None:
         result.confidence.plddt_logits,
         result.ranking.aggregate_score,
     )
+
+
+def test_run_inference_tiny_smoke_mixed_precision_keeps_diffusion_fp32() -> None:
+    cfg = ChaiConfig(compute_dtype="bfloat16")
+    model = ChaiMLX(cfg)
+    _cast_weights(model, mx.bfloat16)
+    ctx = _tiny_context(cfg)
+
+    result = model.run_inference(ctx, recycles=1, num_samples=1, num_steps=2)
+    mx.eval(result.coords)
+
+    assert isinstance(result, InferenceOutputs)
+    assert result.coords.shape == (1, 1, 32, 3)
+    assert result.coords.dtype == mx.float32

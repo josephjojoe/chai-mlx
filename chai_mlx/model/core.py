@@ -44,11 +44,18 @@ def _preserve_fp32_param_keys(model: nn.Module) -> set[str]:
 
     TorchScript keeps affine parameters for FP32 layer norms in float32 and
     also uses float32 ``query_bias`` / ``out_scalers`` parameters without an
-    explicit cast to bf16 before applying them.
+    explicit cast to bf16 before applying them. The scripted diffusion bundle
+    also runs end-to-end in float32, so we keep that whole subtree in fp32.
     """
+    from mlx.utils import tree_flatten
+
     keep: set[str] = set()
     for path, module in model.named_modules():
         prefix = f"{path}." if path else ""
+        if isinstance(module, DiffusionModule):
+            for name, value in tree_flatten(module.parameters()):
+                if isinstance(value, mx.array):
+                    keep.add(f"{prefix}{name}")
         if isinstance(module, FP32LayerNorm):
             for name in ("weight", "bias"):
                 if hasattr(module, name):
