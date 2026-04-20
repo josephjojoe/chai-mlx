@@ -38,9 +38,19 @@ Usage
         --npz /tmp/chai_mlx_cuda/intermediates/1L2Y/seed_42.npz \\
         --compute-dtype bfloat16
 
-If you run with ``--compute-dtype float32`` the embedding/trunk checks
-use fp32 throughout and should show ~0 error on the algorithmic ops that
-are bit-identical across MLX and CUDA in fp32.
+Precision notes: the reference trunk / token embedder / confidence
+head graphs bake in ``torch.autocast("cuda", dtype=torch.bfloat16)``
+as explicit ``aten::to`` casts around every linear (bf16) and every
+layer_norm / softmax (fp32). The reference diffusion module runs in
+pure fp32. See ``cuda_harness.run_intermediates`` for the full
+precision write-up.
+
+``--compute-dtype bfloat16`` matches the reference's dtype policy
+directly for the trunk and confidence stages. ``--compute-dtype
+float32`` is useful as a diagnostic (it rules out MLX-side bf16
+accumulation as a cause) but is *not* bit-identical against CUDA
+even on algorithmic ops: CUDA's scripted module still casts to bf16
+inside the graph before every linear, while MLX at float32 does not.
 """
 
 from __future__ import annotations

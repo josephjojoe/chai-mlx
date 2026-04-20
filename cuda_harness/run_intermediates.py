@@ -38,17 +38,42 @@ Usage
 Notes
 -----
 
-This captures intermediates under **chai-lab's default runtime
-precision policy**, which is fp32 end-to-end: chai-lab's
-``chai1.py`` has no ``torch.autocast`` and no bf16 casts, and the
-exported ``trunk.pt`` / ``diffusion_module.pt`` graphs are
-1398/1398 and 343/343 fp32 tensors respectively (see HANDOFF.md
-§3.4).  The tensors you diff against on MLX are therefore what
-CUDA produces in a real inference: fp32 activations × fp32
-weights, including whatever intra-kernel bf16 or TF32 reductions
-cuBLAS/cuDNN silently apply on Ampere/Hopper.  (The precision
-policy knob controls *those* silent reductions via TF32 flags;
-it does not change the activation or weight dtype.)
+Precision policy of the reference implementation (verified from the
+exported TorchScript graphs in ``findings/graphs/`` and cross-checked
+with ``cuda_harness._probe_jit_precision``):
+
+* All model parameters ship as **fp32** on disk (``*.pt`` bundles).
+* The trunk, token embedder and confidence head graphs bake in an
+  autocast-equivalent cast chain: every ``aten::linear`` /
+  ``aten::einsum`` is preceded by ``weight.to(bfloat16)`` and
+  ``input.to(bfloat16)`` (``aten::to`` with scalar-type constant 15),
+  while every ``aten::layer_norm`` / ``aten::softmax`` is preceded by
+  ``aten::to`` with scalar-type 6 (fp32). Concretely, the trunk graph
+  alone contains ~18k bf16 casts vs ~5k fp32 casts, i.e. matmuls run
+  in bf16 and the layer norms / softmaxes compute their reductions
+  in fp32. Functionally this is ``torch.autocast("cuda",
+  dtype=torch.bfloat16)`` with an explicit fp32 fallback around
+  normalisation-like ops, compiled into the scripted module.
+* The diffusion module graph has **zero bf16 casts** and runs in pure
+  fp32 end-to-end (``static_diffusion_inputs`` are explicitly
+  ``.float()``'d just above).
+* The feature embedding and bond projection run in fp32; they are
+  tiny feature-generator stubs with no reduced-precision constants.
+
+In short: "chai-lab precision" is bf16 autocast for the trunk + token
+embedder + confidence head (fp32 weights, bf16 activations/matmuls,
+fp32 layer-norm / softmax reductions), and fp32 for the diffusion
+module. The ``--precision`` knob below only toggles TF32 / cuDNN
+atomics; it does *not* move anything between bf16 and fp32.
+
+Implications for the MLX parity experiments:
+
+* At ``--compute-dtype bfloat16`` the MLX trunk and confidence head
+  match the reference's dtype policy directly.
+* At ``--compute-dtype float32`` the MLX side runs matmuls in fp32
+  while CUDA's scripted graph still casts to bf16 inside the module
+  before every linear. Non-zero error at the trunk boundary is
+  expected even though both sides nominally ingest fp32 tensors.
 
 We reproduce the main chai-lab inference flow explicitly rather than
 monkey-patching ``run_folding_on_context``.  This is intentional: the
