@@ -218,7 +218,14 @@ def test_covalent_restraint_populates_bond_adjacency(tmp_path: Path) -> None:
 
 
 def test_protein_plus_ligand_featurize(tmp_path: Path) -> None:
-    """Protein + ligand FASTA round-trips without the RDKit timeout bug."""
+    """Protein + ligand FASTA round-trips without the RDKit timeout bug.
+
+    Under the default ``pad_strategy="exact"`` the token axis is padded
+    to exactly ``num_tokens`` (46 protein residues + 2 ligand atoms = 48
+    tokens for 1CRN + methanethiol) and the atom axis to the next
+    multiple of 32 -- *not* to chai-lab's 256-token bucket. This is the
+    main wall-clock win the exact-length path provides.
+    """
     from chai_mlx.data.featurize import featurize_fasta
 
     fasta_path = tmp_path / "1crn_with_ligand.fasta"
@@ -233,10 +240,53 @@ def test_protein_plus_ligand_featurize(tmp_path: Path) -> None:
     )
 
     si = ctx.structure_inputs
-    # Token count = 46 residues + ligand atoms, then chai-lab rounds up
-    # to the next supported crop (256 here).
-    assert si.token_entity_type.shape[1] == 256, (
-        f"unexpected token dim {si.token_entity_type.shape}"
+    n_tokens = si.token_entity_type.shape[1]
+    n_atoms = si.atom_exists_mask.shape[1]
+
+    # 1CRN has 46 residues; methanethiol ("CS") contributes 2 heavy-atom
+    # ligand tokens. Exact-length padding never exceeds this, and never
+    # pads up to chai-lab's 256 bucket.
+    assert n_tokens == 48, (
+        f"expected exact-length token dim 48 (46 residues + 2 ligand atoms); "
+        f"got {n_tokens}. If you changed the pad-strategy default, also "
+        f"update this assertion -- the point of this test is to catch "
+        f"silent reversion to bucketed padding."
     )
-    # Atom count should be non-zero and include ligand heavy atoms.
-    assert si.atom_exists_mask.shape[1] > 0
+    # Atom axis is padded to the next multiple of 32 (the local-atom-
+    # attention query-block stride). Count should be > num_tokens (each
+    # residue has multiple atoms) and divisible by 32.
+    assert n_atoms > 0 and n_atoms % 32 == 0, (
+        f"n_atoms={n_atoms} violates the mandatory %32==0 constraint from "
+        f"chai_lab.model.utils.get_qkv_indices_for_blocks"
+    )
+
+
+def test_protein_plus_ligand_featurize_bucket_mode(tmp_path: Path) -> None:
+    """Bucket-mode opt-in: reproduces chai-lab's 256-token rounding.
+
+    Kept as a regression guard for the parity path that compares against
+    the CUDA reference TorchScript artefacts (which were traced at
+    exactly those seven sizes).
+    """
+    from chai_mlx.data.featurize import featurize_fasta
+
+    fasta_path = tmp_path / "1crn_with_ligand.fasta"
+    _write_fasta(fasta_path, with_ligand=True)
+
+    ctx = featurize_fasta(
+        fasta_path,
+        output_dir=tmp_path / "features",
+        esm_backend="off",
+        use_msa_server=False,
+        use_templates_server=False,
+        pad_strategy="bucket",
+    )
+
+    si = ctx.structure_inputs
+    # 48 tokens -> smallest chai-lab bucket (256).
+    assert si.token_entity_type.shape[1] == 256, (
+        f"unexpected token dim under pad_strategy='bucket': "
+        f"{si.token_entity_type.shape}"
+    )
+    # n_atoms = 23 * n_tokens under bucket mode.
+    assert si.atom_exists_mask.shape[1] == 23 * 256

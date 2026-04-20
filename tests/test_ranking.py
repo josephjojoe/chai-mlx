@@ -365,3 +365,139 @@ def test_ranker_multi_sample_stacking() -> None:
     _assert_close(out.aggregate_score.reshape(-1), np.array(ref_agg), "aggregate_score_stack")
     _assert_close(out.ptm.reshape(-1), np.array(ref_ptm), "ptm_stack")
     assert out.aggregate_score.shape == (1, S)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 7])
+def test_ranker_padding_invariance(seed: int) -> None:
+    """Scores must be invariant to trailing padding.
+
+    Takes a tight two-chain scenario, then builds a padded "bucket" copy
+    that adds 20 unused token slots and 40 unused atom slots at the
+    tail.  Every score in :class:`RankingOutputs` should come out
+    identical (pTM / ipTM / complex_plddt / clashes / aggregate_score):
+    the ranker is supposed to consult ``token_exists_mask`` /
+    ``atom_exists_mask`` and ignore everything else.
+
+    This is what lets chai-mlx's ``--pad-strategy exact`` produce the
+    same scores as ``--pad-strategy bucket`` on the same inputs, and
+    catches any future refactor that accidentally averages over padded
+    slots.  Live-slot ``per_atom_plddt`` values must also match, with
+    the padded tail landing on whatever unmasked expectation the head
+    happens to produce (we assert masked slots are *ignored*, not that
+    they hold any particular value).
+    """
+    data = _two_chain_scenario(seed, with_clash=(seed % 2 == 0))
+
+    tight_struct = _make_structure(
+        asym=data["asym"],
+        entity_type=data["entity_type"],
+        residue_index=data["residue_index"],
+        bb_mask=data["bb_mask"],
+        centre_idx=data["centre_idx"],
+        atom_token=data["atom_token"],
+        atom_exists=data["atom_exists"],
+        tok_exists=data["tok_exists"],
+        is_polymer_by_token=data["is_polymer"],
+    )
+    tight_conf = ConfidenceOutputs(
+        pae_logits=mx.array(data["pae_logits"]),
+        pde_logits=mx.array(data["pde_logits"]),
+        plddt_logits=mx.array(data["plddt_logits"]),
+    )
+    ranker = Ranker(ChaiConfig())
+    tight_out = ranker(tight_conf, mx.array(data["coords"]), tight_struct)
+
+    # --- Build a padded replica: 20 extra tokens + 40 extra atoms ---
+    n_tok_pad = 20
+    n_atom_pad = 40
+    B, N = data["tok_exists"].shape
+    _, A = data["atom_exists"].shape
+    Np = N + n_tok_pad
+    Ap = A + n_atom_pad
+
+    def _pad_token(x: np.ndarray, fill: int = 0) -> np.ndarray:
+        out = np.full((B, Np) + x.shape[2:], fill, dtype=x.dtype)
+        out[:, :N] = x
+        return out
+
+    def _pad_atom(x: np.ndarray, fill: int = 0) -> np.ndarray:
+        out = np.full((B, Ap) + x.shape[2:], fill, dtype=x.dtype)
+        out[:, :A] = x
+        return out
+
+    def _pad_pair_4d(x: np.ndarray) -> np.ndarray:
+        out = np.zeros((B, Np, Np, x.shape[-1]), dtype=x.dtype)
+        out[:, :N, :N] = x
+        return out
+
+    def _pad_atom_bin_3d(x: np.ndarray) -> np.ndarray:
+        out = np.zeros((B, Ap, x.shape[-1]), dtype=x.dtype)
+        out[:, :A] = x
+        return out
+
+    # Structure fields: pad token-level things, atom-level things, and
+    # keep the live mask slots True while the padded tail is False.
+    padded_struct = _make_structure(
+        asym=_pad_token(data["asym"]),
+        entity_type=_pad_token(data["entity_type"]),
+        residue_index=_pad_token(data["residue_index"]),
+        bb_mask=_pad_token(data["bb_mask"].astype(np.int64)).astype(bool),
+        centre_idx=_pad_token(data["centre_idx"]),
+        atom_token=_pad_atom(data["atom_token"]),
+        atom_exists=_pad_atom(data["atom_exists"].astype(np.int64)).astype(bool),
+        tok_exists=_pad_token(data["tok_exists"].astype(np.int64)).astype(bool),
+        is_polymer_by_token=_pad_token(data["is_polymer"].astype(np.int64)).astype(bool),
+    )
+    padded_coords = np.zeros((B, Ap, 3), dtype=np.float32)
+    padded_coords[:, :A] = data["coords"]
+    padded_conf = ConfidenceOutputs(
+        pae_logits=mx.array(_pad_pair_4d(data["pae_logits"])),
+        pde_logits=mx.array(_pad_pair_4d(data["pde_logits"])),
+        plddt_logits=mx.array(_pad_atom_bin_3d(data["plddt_logits"])),
+    )
+    padded_out = ranker(padded_conf, mx.array(padded_coords), padded_struct)
+
+    # --- Assert every scalar / per-chain score is bit-exact ---
+    def _same(attr: str) -> None:
+        tight_v = getattr(tight_out, attr)
+        padded_v = getattr(padded_out, attr)
+        if tight_v is None and padded_v is None:
+            return
+        tight_np = np.array(tight_v.astype(mx.float32))
+        padded_np = np.array(padded_v.astype(mx.float32))
+        assert tight_np.shape == padded_np.shape, (
+            f"{attr}: shape changed under padding "
+            f"(tight={tight_np.shape}, padded={padded_np.shape})"
+        )
+        np.testing.assert_array_equal(
+            tight_np, padded_np,
+            err_msg=f"{attr} drifted between tight and padded inputs",
+        )
+
+    for attr in (
+        "aggregate_score",
+        "ptm",
+        "iptm",
+        "has_inter_chain_clashes",
+        "complex_plddt",
+        "per_chain_ptm",
+        "per_chain_pair_iptm",
+        "per_chain_plddt",
+        "total_clashes",
+        "total_inter_chain_clashes",
+        "chain_chain_clashes",
+    ):
+        _same(attr)
+
+    # per_atom_plddt is unmasked (per-atom expectation over bins).
+    # Bit-exact match on the *live* slice is the real requirement;
+    # the padded tail may hold whatever the head happened to output
+    # for untrained slots.
+    pa_tight = np.array(tight_out.per_atom_plddt.astype(mx.float32))
+    pa_padded = np.array(padded_out.per_atom_plddt.astype(mx.float32))
+    assert pa_tight.shape[-1] == A
+    assert pa_padded.shape[-1] == Ap
+    np.testing.assert_array_equal(
+        pa_tight, pa_padded[..., :A],
+        err_msg="per_atom_plddt live slice drifted under padding",
+    )

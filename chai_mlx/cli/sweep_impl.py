@@ -91,6 +91,16 @@ def main() -> None:
     p.add_argument("--feature-dir", type=Path, required=True)
     p.add_argument("--esm-backend", choices=["off", "mlx", "mlx_cache"], required=True)
     p.add_argument("--esm-cache-dir", type=Path, default=None)
+    p.add_argument(
+        "--pad-strategy",
+        choices=["exact", "bucket"],
+        default="bucket",
+        help="Token/atom padding. 'bucket' (default for the sweep) matches "
+             "the CUDA reference bundle's seven crop sizes for cross-backend "
+             "parity; 'exact' pads to the tightest MLX-accepted shape "
+             "(num_tokens verbatim, n_atoms rounded to the next multiple of "
+             "32). See chai_mlx/data/featurize.py for details.",
+    )
     args = p.parse_args()
 
     target = DEFAULT_TARGETS[args.target]
@@ -109,8 +119,11 @@ def main() -> None:
         use_templates_server=False,
         esm_device=torch.device("cpu"),
     )
+    from chai_mlx.data.featurize import _override_pad_strategy
+
     collator = Collate(feature_factory=feature_factory, num_key_atoms=128, num_query_atoms=32)
-    output_batch = collator([ref_ctx])["inputs"]
+    with _override_pad_strategy(args.pad_strategy):
+        output_batch = collator([ref_ctx])["inputs"]
     asym_entity_names = {i: get_chain_letter(i) for i, _ in enumerate(ref_ctx.chains, start=1)}
 
     ctx = featurize_fasta(
@@ -120,6 +133,7 @@ def main() -> None:
         esm_cache_dir=args.esm_cache_dir,
         use_msa_server=False,
         use_templates_server=False,
+        pad_strategy=args.pad_strategy,
     )
 
     mx.random.seed(args.seed)

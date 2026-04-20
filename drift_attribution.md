@@ -24,6 +24,36 @@ keeping track of which probes answer which question.
 5. Which target classes in `DEFAULT_TARGETS` still need refreshed
    structural comparisons?
 
+## `--pad-strategy` and parity runs
+
+The `chai-mlx-infer` CLI now defaults to `--pad-strategy exact`, which
+pads `n_tokens` to the real token count (rather than up to one of
+chai-lab's seven `[256, 384, 512, 768, 1024, 1536, 2048]` buckets) and
+`n_atoms` to the next multiple of 32 (the local-atom-attention query-
+block stride, which is the only real shape constraint the MLX kernels
+have). This skips the hundreds of tokens of dead padding that typical
+inputs pay under the legacy path.
+
+Every comparison-vs-CUDA workflow in this file **must** use
+`--pad-strategy bucket` (and, for callers that go through
+`featurize_fasta` directly, `pad_strategy="bucket"`). The CUDA reference
+bundle is a set of TorchScript artefacts exported at the seven bucket
+sizes; the saved intermediates under `cuda_harness/` and the probes
+listed in the next section all expect bucketed shapes. Running MLX at
+exact length against a bucketed CUDA probe compares different
+computations — the two attention passes see different counts of padded
+rows, so even perfect ports would not agree at the bit level.
+
+`chai-mlx-sweep` defaults to `--pad-strategy bucket` for the same
+reason (the sweep exists to compare against the CUDA reference), but
+accepts `exact` for exact-length throughput measurement. Pinning the
+strategy in the manifest (`manifest.json::pad_strategy`) lets
+downstream analysis filter mixed-strategy runs out.
+
+When interpreting divergence between an exact-length MLX run and a
+bucketed CUDA run, attribute the gap to padding first. Only dig into
+the probes below once both sides have been rerun at the same padding.
+
 ## Probe inventory
 
 The following probes and reports are the main pieces of the attribution

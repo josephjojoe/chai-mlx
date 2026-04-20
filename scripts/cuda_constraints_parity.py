@@ -322,6 +322,10 @@ def main(argv: Iterable[str] | None = None) -> None:
         local_csv.write_bytes(args.constraint_csv.read_bytes())
 
         print(f"[mlx] featurizing {args.target} with constraints={args.constraint_csv}")
+        # Compared against the CUDA intermediates NPZ, which chai-lab
+        # wrote at bucketed shapes. Pin pad_strategy="bucket" so the
+        # raw_features tensors this script diffs are the exact same
+        # shape as the CUDA-saved ones.
         mlx_ctx = featurize_fasta(
             fasta_path,
             output_dir=args.feature_dir / "mlx_features",
@@ -329,6 +333,7 @@ def main(argv: Iterable[str] | None = None) -> None:
             esm_backend="off",
             use_msa_server=False,
             use_templates_server=False,
+            pad_strategy="bucket",
         )
         if mlx_ctx.raw_features is None:
             raise RuntimeError(

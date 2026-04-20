@@ -109,6 +109,19 @@ def _parse_args(argv: "list[str] | None" = None) -> argparse.Namespace:
     model.add_argument("--seed", type=int, default=42)
     model.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False,
                        help="Use the debug inference path and retain full intermediates.")
+    model.add_argument(
+        "--pad-strategy",
+        choices=["exact", "bucket"],
+        default="exact",
+        help="How to pad the token/atom axes before inference. "
+             "'exact' (default) pads to num_tokens verbatim with n_atoms "
+             "rounded up to the next multiple of 32 -- the tightest shape "
+             "the MLX kernels accept. 'bucket' pads up to the smallest of "
+             "chai-lab's seven reference crop sizes "
+             "[256, 384, 512, 768, 1024, 1536, 2048] with n_atoms = 23 * "
+             "n_tokens; use this only for parity comparisons against the "
+             "CUDA reference bundle (see drift_attribution.md).",
+    )
 
     constraints = parser.add_argument_group("constraints")
     constraints.add_argument("--constraint-path", type=Path, default=None,
@@ -223,6 +236,7 @@ def _save_cifs(
     fasta_path: Path,
     feature_dir: Path,
     entity_name_as_subchain: bool,
+    pad_strategy: str = "exact",
 ) -> list[Path]:
     """Write one chai-lab-format CIF per diffusion sample.
 
@@ -237,6 +251,13 @@ def _save_cifs(
     or constraint restraints. So we skip those knobs for the ref
     pass, which keeps this path fast and immune to the caller's
     MSA / template configuration.
+
+    ``pad_strategy`` MUST match the value passed to
+    :func:`featurize_fasta` for the same run -- the MLX coords tensor
+    has ``A = pad_strategy_padded_n_atoms`` and ``save_to_cif`` walks
+    ``output_batch['atom_exists_mask']`` of the same length. Mismatched
+    strategies produce either an ``IndexError`` or CIFs with nonsense
+    atom indices.
 
     If ``per_atom_plddt_np`` is provided (shape ``(B, S, A)`` in [0, 1]),
     we pass ``bfactors=per_atom_plddt * 100`` through to
@@ -255,6 +276,7 @@ def _save_cifs(
 
     from chai_lab.chai1 import Collate, feature_factory, make_all_atom_feature_context
     from chai_lab.data.io.cif_utils import get_chain_letter, save_to_cif
+    from chai_mlx.data.featurize import _override_pad_strategy
 
     ref_feature_dir = feature_dir / "ref_features"
     ref_ctx = make_all_atom_feature_context(
@@ -267,7 +289,8 @@ def _save_cifs(
         esm_device=torch.device("cpu"),
     )
     collator = Collate(feature_factory=feature_factory, num_key_atoms=128, num_query_atoms=32)
-    output_batch = collator([ref_ctx])["inputs"]
+    with _override_pad_strategy(pad_strategy):
+        output_batch = collator([ref_ctx])["inputs"]
     asym_entity_names = {
         i: get_chain_letter(i) for i, _ in enumerate(ref_ctx.chains, start=1)
     }
@@ -477,6 +500,8 @@ def _write_per_sample_scores(
       ``total_clashes``, ``total_inter_chain_clashes`` — MLX
       supersets (chai-lab does not emit these scalars directly, but
       downstream readers that only look up the shared keys still work).
+      ``per_atom_plddt`` is zero at padding-atom slots (live slots
+      carry the per-atom pLDDT expectation).
     * ``pae`` ``(n_tokens, n_tokens)``, ``pde`` ``(n_tokens,
       n_tokens)``, ``plddt`` ``(n_tokens,)`` — per-token tensors that
       match :class:`chai_lab.chai1.StructureCandidates`'s ``pae`` /
@@ -502,6 +527,26 @@ def _write_per_sample_scores(
     complex_plddt = _to_np(ranking.complex_plddt)
     per_chain_plddt = _to_np(ranking.per_chain_plddt)
     per_atom_plddt = _to_np(ranking.per_atom_plddt)
+    # ``RankingOutputs.per_atom_plddt`` carries an unmasked per-bin
+    # expectation over the full ``(..., A_padded)`` tensor.  In bucket
+    # mode the padded slots hold softmax expectations over logits the
+    # model never trained for, which contaminates any downstream
+    # ``.mean()`` / residue-averaging that callers run on this array.
+    # Zero-mask the padding slots so ``per_atom_plddt`` is safe to
+    # average, sum, or plot without extra masking, matching the
+    # zero-padding convention we already use for ``pae`` / ``pde`` /
+    # ``plddt`` per-token.  In exact mode this is a no-op since
+    # every slot in the tensor is already live.
+    if per_atom_plddt is not None:
+        atom_mask_np = np.array(
+            structure.atom_exists_mask.astype(mx.float32)
+        ).astype(bool)
+        if atom_mask_np.ndim >= 1 and atom_mask_np.shape[0] == 1:
+            atom_mask_np = atom_mask_np[0]
+        # Broadcast the atom mask across leading batch/sample axes.
+        broadcast_shape = per_atom_plddt.shape[:-1] + atom_mask_np.shape
+        atom_mask_b = np.broadcast_to(atom_mask_np, broadcast_shape)
+        per_atom_plddt = np.where(atom_mask_b, per_atom_plddt, 0.0)
     total_clashes = (
         np.array(ranking.total_clashes.astype(mx.int32))
         if ranking.total_clashes is not None
@@ -677,6 +722,7 @@ def _fold_one_fasta(
         esm_cache_dir=args.esm_cache_dir,
         msa_plot_path=msa_plot_path_arg,
         entity_name_as_subchain=effective_fasta_chain_names,
+        pad_strategy=args.pad_strategy,
     )
 
     # Loop over trunk samples (chai-1 'num_trunk_samples' parity).
@@ -761,6 +807,7 @@ def _fold_one_fasta(
                     fasta_path=fasta_path,
                     feature_dir=feature_dir,
                     entity_name_as_subchain=effective_fasta_chain_names,
+                    pad_strategy=args.pad_strategy,
                 )
             except Exception as exc:  # pragma: no cover - surfaced to the user
                 print(
@@ -860,6 +907,7 @@ def _fold_one_fasta(
         "num_samples": args.num_samples,
         "num_trunk_samples": num_trunk_samples,
         "recycle_msa_subsample": int(args.recycle_msa_subsample),
+        "pad_strategy": args.pad_strategy,
         "esm_backend": args.esm_backend,
         "esm_cache_dir": str(args.esm_cache_dir) if args.esm_cache_dir else None,
         "constraint_path": str(args.constraint_path) if args.constraint_path else None,

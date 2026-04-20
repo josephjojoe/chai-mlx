@@ -139,12 +139,19 @@ def _bench_target(
 
     n_poly = target.n_protein_residues + target.n_nucleic_residues
     print(f"[mlx] featurizing {target.name} ({n_poly} polymer residues)")
+    # This script's outputs are merged with cuda_harness.bench_throughput
+    # results by scripts/report_throughput_comparison.py. The CUDA side
+    # runs bucketed TorchScript artefacts, so pin pad_strategy="bucket"
+    # here for apples-to-apples timings. To measure exact-length MLX
+    # throughput on its own, use chai-mlx-infer with --pad-strategy exact
+    # (the new default) and read the per-stage timings out of manifest.json.
     ctx = featurize_fasta(
         fasta_path,
         output_dir=feature_dir / "mlx_features",
         esm_backend=esm_backend,
         use_msa_server=False,
         use_templates_server=False,
+        pad_strategy="bucket",
     )
 
     feat_times: list[float] = []

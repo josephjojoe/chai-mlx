@@ -52,6 +52,36 @@ def test_parser_accepts_minimal_args(tiny_fasta: Path) -> None:
     assert args.use_msa_server is False
     assert args.use_templates_server is False
     assert args.constraint_path is None
+    # Exact-length is the default padding strategy.  See
+    # ``chai_mlx.data.featurize.featurize_fasta`` for the rationale:
+    # the MLX model forward is shape-agnostic in N, so the 7 static
+    # chai-lab buckets only exist for parity with the CUDA reference
+    # TorchScript artefacts -- not for correctness.
+    assert args.pad_strategy == "exact"
+
+
+def test_parser_accepts_pad_strategy_bucket(tiny_fasta: Path) -> None:
+    args = _parse(
+        [
+            "--weights-dir", "weights",
+            "--fasta", str(tiny_fasta),
+            "--output-dir", "/tmp/out",
+            "--pad-strategy", "bucket",
+        ],
+    )
+    assert args.pad_strategy == "bucket"
+
+
+def test_parser_rejects_invalid_pad_strategy(tiny_fasta: Path) -> None:
+    with pytest.raises(SystemExit):
+        _parse(
+            [
+                "--weights-dir", "weights",
+                "--fasta", str(tiny_fasta),
+                "--output-dir", "/tmp/out",
+                "--pad-strategy", "nonsense",
+            ],
+        )
 
 
 def test_parser_rejects_mlx_cache_without_dir(tiny_fasta: Path) -> None:

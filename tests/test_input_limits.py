@@ -5,7 +5,11 @@ Chai-mlx mirrors chai-lab's three hard input limits via
 
 * ``MAX_MSA_DEPTH`` (16384 at the pinned commit)
 * ``MAX_NUM_TEMPLATES`` (4 at the pinned commit)
-* Crop size upper bound (``max(AVAILABLE_MODEL_SIZES) = 2048``)
+* Architectural token ceiling (``max(AVAILABLE_MODEL_SIZES) = 2048``).
+  The MLX port runs at the exact input length (see ``pad_strategy``
+  in :func:`chai_mlx.data.featurize.featurize_fasta`), so the seven
+  intermediate crop sizes are informational only; the hard stop is
+  the largest value.
 
 These tests use a lightweight stand-in feature-context so they pass
 without the ``[featurize]`` extra. The helper's error messages must
@@ -62,8 +66,26 @@ def test_too_many_tokens_raises() -> None:
     msg = str(exc.value)
     assert "3000" in msg
     assert "Too many tokens" in msg
-    # The message should list the supported crops so users can pick one.
+    # The ceiling is the largest chai-lab crop size (2048); the message
+    # should surface it so users can see the hard limit. The seven
+    # intermediate sizes are listed as a hint because they explain
+    # where 2048 comes from (the traced TorchScript export grid).
+    assert "2048" in msg
     assert "256" in msg
+
+
+def test_tokens_at_ceiling_pass() -> None:
+    # 2048 tokens is the exact upper bound; the MLX port accepts it
+    # because pad_strategy='exact' means no further padding is needed.
+    _enforce_input_limits(_ctx(n_tokens=2048))
+
+
+def test_tokens_inside_ceiling_at_odd_length_pass() -> None:
+    # Under pad_strategy='exact' any integer N <= 2048 is legal. The
+    # limit check shouldn't care whether N happens to land on a bucket
+    # boundary (137, 259, 1000 are all fine).
+    for n in (137, 259, 1000):
+        _enforce_input_limits(_ctx(n_tokens=n))
 
 
 def test_too_many_templates_raises() -> None:

@@ -170,6 +170,9 @@ Common flags:
 - `--recycles 3 --num-steps 200` — chai-1 defaults
 - `--dtype reference|float32` — reference mixed precision (bf16 trunk /
   confidence, fp32 diffusion) vs all-fp32
+- `--pad-strategy exact|bucket` — exact-length inference (default) vs
+  chai-lab's seven TorchScript buckets; see
+  [Pad strategy](#pad-strategy) below
 - `--constraint-path restraints.csv` — chai-lab contact + pocket +
   covalent-bond restraints
 - `--use-msa-server` / `--msa-directory <dir>` — online ColabFold vs
@@ -183,6 +186,52 @@ Common flags:
   active
 
 Run `chai-mlx-infer --help` for the exhaustive list.
+
+### Pad strategy
+
+Chai-1's reference bundle is a set of TorchScript artefacts exported at
+seven fixed token lengths (`256, 384, 512, 768, 1024, 1536, 2048`), with
+the atom axis slaved to `23 × n_tokens`. Any FASTA gets padded up to the
+smallest bucket that fits — so a 137-residue monomer pays the cost of a
+256-token forward pass and a 5888-atom forward pass.
+
+The MLX port's model forward is shape-agnostic in the token and atom
+axes — it reads them dynamically from the input tensor shapes. The only
+structural constraint is `n_atoms % 32 == 0` (the query-block stride of
+the local atom attention in
+[`get_qkv_indices_for_blocks`](chai-lab/chai_lab/model/utils.py)). So
+`chai-mlx-infer` defaults to **`--pad-strategy exact`**, which pads
+`n_tokens` to the real token count and `n_atoms` to the next multiple
+of 32. For a single 18-residue monomer on an M-series Mac this gives
+`coords.shape = (1, 1, 160, 3)` instead of `(1, 1, 5888, 3)` — a ~9×
+wall-clock speedup on the diffusion sweep and a ~36× reduction in atom
+tensor footprint.
+
+Pass `--pad-strategy bucket` to restore chai-lab's original rounding.
+This is **required** for tensor-level parity with the CUDA reference
+bundle (the scripts under `cuda_harness/` expect bucketed shapes so
+they can diff against saved TorchScript intermediates). At the raw
+tensor level, exact-length and bucketed runs disagree bit-for-bit,
+because the attention masks see a different count of padded rows;
+see [`drift_attribution.md`](drift_attribution.md) for details.
+
+**User-facing outputs are pad-invariant.** Every aggregation in the
+ranking and confidence stack (pTM, ipTM, complex pLDDT, per-chain
+pLDDT, clash counts, and the final aggregate score) multiplies through
+`token_exists_mask` / `atom_exists_mask` before summing, so the live
+tokens / live atoms contribute the same value in either mode. This is
+locked in by `tests/test_ranking.py::test_ranker_padding_invariance`,
+which rebuilds a tight scenario and a padded replica with arbitrary
+garbage in the padding slots and bit-exact compares every scalar and
+per-chain score. The per-atom pLDDT written to `scores.*.npz` is also
+masked to zero in padding slots so it can be averaged safely
+downstream. CIF output already skipped non-existent atoms upstream.
+
+Diffusion samples **can** differ between exact and bucket for the
+same seed — the sampler is deterministic given its inputs, but the
+upstream PRNG streams are shape-dependent, and in low-confidence
+regions a different noise trajectory lands in a different local
+minimum. Scores, pLDDT, and the final ranking are unaffected.
 
 ### FASTA format
 

@@ -25,15 +25,46 @@ embeddings are obtained:
 * ``"mlx"``: pre-compute embeddings with ``esm-mlx`` on Apple silicon
   and inject them into the chai-lab featurization pipeline.  Requires
   the ``[esm]`` extra.
+
+The ``pad_strategy`` knob on :func:`featurize_fasta` (and on the
+matching helpers in :mod:`chai_mlx.cli`) selects how the token / atom
+axes are padded:
+
+* ``"exact"`` (default): pad to the smallest shape the MLX kernels
+  accept — ``n_tokens = num_tokens`` exactly, and ``n_atoms`` rounded
+  up to the next multiple of 32 (the query-block stride of the local
+  atom attention; see ``chai_lab.model.utils.get_qkv_indices_for_blocks``).
+  This skips the multi-hundred-token padding that chai-lab's seven
+  static buckets impose on shorter inputs.
+* ``"bucket"``: legacy chai-lab behaviour — pad ``n_tokens`` up to the
+  smallest value in ``AVAILABLE_MODEL_SIZES = [256, 384, 512, 768, 1024,
+  1536, 2048]`` that fits, and set ``n_atoms = 23 * n_tokens``. Necessary
+  for parity comparisons with the CUDA reference bundle's traced
+  TorchScript artefacts (which were exported at those seven sizes; see
+  ``drift_attribution.md``).
+
+The MLX model forward itself does not depend on either choice — it reads
+``num_tokens`` and ``num_atoms`` from the input tensor shapes at call
+time. The only hard constraint is ``n_atoms % 32 == 0``.
 """
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 
 from .types import FeatureContext, InputBundle, StructureInputs
+
+# Query-block stride of the local atom attention. Any padded atom count
+# must be a multiple of this -- see ``chai_lab.model.utils``
+# ``get_qkv_indices_for_blocks``'s ``sequence_length % stride == 0``
+# assertion, and ``chai_mlx/nn/layers/atom_attention.py``'s
+# ``num_blocks = a // 32`` reshape.
+_ATOM_BLOCK_STRIDE: int = 32
+
+PadStrategy = Literal["exact", "bucket"]
 
 _REQUIRED_KEYS = {
     "token_features",
@@ -102,6 +133,11 @@ def _enforce_input_limits(feature_context) -> None:
     :func:`raise_if_too_many_templates`, and
     :func:`raise_if_msa_too_deep` so users see the same "fail fast at
     featurize" behaviour regardless of which side is running.
+
+    The token-count check only enforces the architectural upper bound
+    (``max(AVAILABLE_MODEL_SIZES) = 2048``) -- chai-lab's intermediate
+    crop sizes are padding targets for its traced TorchScript artefacts
+    and are listed only as a hint when the error fires.
     """
     max_msa, max_templates, crop_sizes = _chai_lab_limits()
 
@@ -110,8 +146,10 @@ def _enforce_input_limits(feature_context) -> None:
     if n_tokens > largest_crop:
         raise UnsupportedInputError(
             f"Too many tokens in input: {n_tokens} > {largest_crop}. "
-            "Please limit the length of the input sequence. Supported "
-            f"crop sizes: {sorted(crop_sizes)}."
+            "Please limit the length of the input sequence. "
+            "(The MLX port runs at the exact input length; this ceiling "
+            "comes from chai-1's reference bundle, which was traced at "
+            f"crop sizes {sorted(crop_sizes)} with 2048 as the largest.)"
         )
 
     n_templates = feature_context.template_context.num_templates
@@ -128,6 +166,100 @@ def _enforce_input_limits(feature_context) -> None:
             "Please limit the MSA depth (consider setting "
             "recycle_msa_subsample to subsample at recycle time)."
         )
+
+
+# ---------------------------------------------------------------------------
+# Pad-size override for exact-length inference
+# ---------------------------------------------------------------------------
+
+
+def _exact_pad_size(n_tokens: int, n_atoms: int) -> tuple[int, int]:
+    """Return the tightest ``(n_tokens, n_atoms)`` the MLX stack accepts.
+
+    * Token axis: no divisibility constraint in the MLX forward path --
+      pair-feature chunks loop dynamically and atom-token segment_mean
+      reads the count at call time -- so we pick ``n_tokens`` exactly.
+    * Atom axis: ``get_qkv_indices_for_blocks`` asserts
+      ``sequence_length % 32 == 0`` and the local atom-attention blocks
+      reshape ``a`` into ``a // 32`` groups of 32, so pad up to the next
+      multiple of 32.
+    """
+    stride = _ATOM_BLOCK_STRIDE
+    padded_atoms = ((n_atoms + stride - 1) // stride) * stride
+    return n_tokens, max(padded_atoms, stride)
+
+
+@contextmanager
+def _override_pad_strategy(strategy: PadStrategy) -> Iterator[None]:
+    """Context manager that patches chai-lab's pad selector for exact-length.
+
+    When ``strategy == "exact"`` we replace
+    ``chai_lab.data.collate.utils.get_pad_sizes`` with a shim that reads
+    the real structure sizes off each ``AllAtomFeatureContext`` and
+    returns the tightest shape the MLX stack accepts (``n_tokens``
+    verbatim, ``n_atoms`` rounded up to the next multiple of 32).
+
+    When ``strategy == "bucket"`` this is a no-op and the original
+    chai-lab selector runs, matching the reference bundle's seven
+    TorchScript sizes and the ``23 * n_tokens`` atom bound.
+
+    Both ``Collate._collate`` (in :func:`featurize_fasta`) and the
+    CIF-writer ref context in :func:`chai_mlx.cli.infer._save_cifs` /
+    :mod:`chai_mlx.cli.sweep_impl` must use the same strategy so the
+    coords array emitted by the MLX model lines up with the atom
+    bookkeeping that ``save_to_cif`` walks.
+    """
+    if strategy not in ("exact", "bucket"):
+        raise ValueError(
+            f"pad_strategy must be 'exact' or 'bucket'; got {strategy!r}"
+        )
+    if strategy == "bucket":
+        yield
+        return
+
+    from chai_lab.data.collate import utils as collate_utils
+
+    # CRITICAL: import ``collate`` BEFORE we patch ``utils.get_pad_sizes``.
+    # ``chai_lab.data.collate.collate`` does ``from chai_lab.data.collate.utils
+    # import get_pad_sizes`` at module-load time, so whatever value
+    # ``collate_utils.get_pad_sizes`` has when ``collate.py`` is first
+    # imported is what gets bound into ``collate_mod.get_pad_sizes`` --
+    # and that binding is what ``Collate._collate`` actually resolves
+    # at call time (via its ``__globals__``).  If we patched ``utils``
+    # first and then triggered a lazy import of ``collate``, the
+    # ``original_collate_ref`` we captured would be our patched shim,
+    # and the ``finally`` restore would leave ``collate_mod`` stuck on
+    # the patched function forever -- silently breaking every
+    # subsequent bucket-mode call in the same process.
+    try:
+        from chai_lab.data.collate import collate as collate_mod
+        collate_mod_had_ref = hasattr(collate_mod, "get_pad_sizes")
+        original_collate_ref = (
+            collate_mod.get_pad_sizes if collate_mod_had_ref else None
+        )
+    except ImportError:
+        collate_mod = None  # type: ignore[assignment]
+        collate_mod_had_ref = False
+        original_collate_ref = None
+
+    original = collate_utils.get_pad_sizes
+
+    def _exact_get_pad_sizes(contexts):
+        max_n_tokens = max(c.num_tokens for c in contexts)
+        max_n_atoms = max(c.num_atoms for c in contexts)
+        n_tokens, n_atoms = _exact_pad_size(max_n_tokens, max_n_atoms)
+        return collate_utils.PadSizes(n_tokens=n_tokens, n_atoms=n_atoms)
+
+    collate_utils.get_pad_sizes = _exact_get_pad_sizes
+    if collate_mod_had_ref:
+        collate_mod.get_pad_sizes = _exact_get_pad_sizes
+
+    try:
+        yield
+    finally:
+        collate_utils.get_pad_sizes = original
+        if collate_mod_had_ref:
+            collate_mod.get_pad_sizes = original_collate_ref
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +425,7 @@ def featurize_fasta(
     templates_path: Path | None = None,
     msa_plot_path: Path | None = None,
     entity_name_as_subchain: bool | None = None,
+    pad_strategy: PadStrategy = "exact",
 ) -> FeatureContext:
     """Full FASTA-to-FeatureContext entry point using chai-lab's pipeline.
 
@@ -324,6 +457,22 @@ def featurize_fasta(
         that pass this boolean.  ``True`` is equivalent to
         ``esm_backend="chai"``; ``False`` is equivalent to the default
         ``esm_backend="off"``.  Passing both raises ``ValueError``.
+
+    pad_strategy:
+        * ``"exact"`` (default) — pad the token axis to exactly
+          ``num_tokens`` and the atom axis to the smallest multiple of
+          32 that fits. Recommended for all MLX-only workflows: skips
+          the 100–400 tokens of dead padding that chai-lab's seven
+          static buckets impose on typical inputs.
+        * ``"bucket"`` — pad up to the smallest value in
+          ``chai_lab.data.collate.utils.AVAILABLE_MODEL_SIZES``
+          (``[256, 384, 512, 768, 1024, 1536, 2048]``), with
+          ``n_atoms = 23 * n_tokens``. Necessary for parity comparisons
+          with the CUDA reference bundle's TorchScript artefacts, which
+          were traced at those exact seven sizes. Downstream helpers
+          (``chai_mlx.cli.infer._save_cifs``,
+          :mod:`chai_mlx.cli.sweep_impl`) must be told the same value
+          so the CIF atom-indexing matches the MLX coords tensor.
     """
     import tempfile
 
@@ -429,9 +578,14 @@ def featurize_fasta(
         num_key_atoms=128,
         num_query_atoms=32,
     )
-    batch = collator([feature_context])
+    with _override_pad_strategy(pad_strategy):
+        batch = collator([feature_context])
 
-    bond_ft = TokenBondRestraint().generate(batch=batch).data
+        # ``TokenBondRestraint.generate`` doesn't itself call
+        # ``get_pad_sizes``, but it reads ``batch["inputs"][...]`` whose
+        # shapes depend on the collator above. Keep it inside the
+        # override scope for safety.
+        bond_ft = TokenBondRestraint().generate(batch=batch).data
 
     return _batch_to_feature_context(batch, bond_ft)
 

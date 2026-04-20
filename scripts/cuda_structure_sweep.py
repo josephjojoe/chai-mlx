@@ -376,12 +376,18 @@ def _mlx_run(
     output_batch = collator([ref_ctx])["inputs"]
     asym_entity_names = {i: get_chain_letter(i) for i, _ in enumerate(ref_ctx.chains, start=1)}
 
+    # This sweep compares against the CUDA reference bundle's
+    # TorchScript artefacts, which are traced at chai-lab's seven
+    # bucket sizes. Stick with pad_strategy="bucket" so the MLX coords
+    # tensors emitted here align with saved CUDA intermediates; see
+    # drift_attribution.md.
     ctx = featurize_fasta(
         fasta_path,
         output_dir=feature_dir / "mlx_features",
         esm_backend=esm_backend,
         use_msa_server=False,
         use_templates_server=False,
+        pad_strategy="bucket",
     )
 
     mx.random.seed(seed)
