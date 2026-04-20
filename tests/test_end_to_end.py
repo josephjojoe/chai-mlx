@@ -12,16 +12,24 @@ assert that the call completes and returns the expected dataclass shapes.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from dataclasses import replace as dc_replace
+from pathlib import Path
 
 import mlx.core as mx
 
+import chai_mlx
 from chai_mlx import ChaiMLX, InferenceOutputs
 from chai_mlx.config import ChaiConfig
 from chai_mlx.data.types import FeatureContext
 from chai_mlx.model.core import _cast_weights
 
 from tests.helpers import make_structure_inputs
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_BASIC_INFERENCE_EXAMPLE = _REPO_ROOT / "examples" / "basic_inference.py"
 
 
 def _tiny_context(cfg: ChaiConfig) -> FeatureContext:
@@ -127,3 +135,41 @@ def test_run_inference_tiny_smoke_reference_mode_keeps_diffusion_fp32() -> None:
     assert isinstance(result, InferenceOutputs)
     assert result.coords.shape == (1, 1, 32, 3)
     assert result.coords.dtype == mx.float32
+
+
+def test_basic_inference_example_runs_as_subprocess() -> None:
+    """``python examples/basic_inference.py`` must stay runnable.
+
+    The README's "Local workflows" section lists this file as the first
+    suggested smoke. The previous in-process test above only covers
+    :meth:`ChaiMLX.run_inference` directly, so a regression in the
+    example file's dummy-input builder (e.g. missing ``msa_mask`` /
+    ``template_input_masks`` in ``structure_inputs``, which crashes the
+    trunk's default MSA-subsample path) would not be caught otherwise.
+    Invoke the file as a subprocess so we exercise the exact ``python
+    examples/basic_inference.py`` command the README documents.
+    """
+    result = subprocess.run(
+        [sys.executable, str(_BASIC_INFERENCE_EXAMPLE)],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, (
+        f"examples/basic_inference.py failed (rc={result.returncode}):\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+
+
+def test_package_exposes_version_string() -> None:
+    """``chai_mlx.__version__`` must resolve to a non-empty string.
+
+    Packagers, reproducibility manifests, and issue templates all rely
+    on ``python -c "import chai_mlx; print(chai_mlx.__version__)"``
+    working. Guard against a future ``__init__.py`` cleanup dropping
+    the attribute.
+    """
+    assert isinstance(chai_mlx.__version__, str)
+    assert chai_mlx.__version__

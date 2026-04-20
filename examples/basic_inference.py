@@ -28,6 +28,14 @@ def build_dummy_inputs(
     fields used by the ranker (``token_centre_atom_index``,
     ``token_residue_index``, etc.) are populated with reasonable defaults
     so ``rank_outputs`` runs cleanly; the numeric values are not meaningful.
+
+    ``structure_inputs`` must include ``msa_mask`` and
+    ``template_input_masks``: the trunk reads both via ``StructureInputs``
+    (see ``chai_mlx/model/trunk.py`` — the MSA-subsample path needs
+    ``msa_mask`` and the template embedder needs ``template_input_masks``).
+    Omitting them leaves the fields at their ``Optional`` default of
+    ``None`` and the first ``.astype(...)`` call inside the trunk fails
+    with ``AttributeError: 'NoneType' object has no attribute 'astype'``.
     """
     n_atoms = 23 * n_tokens
     num_blocks = n_atoms // 32
@@ -44,6 +52,10 @@ def build_dummy_inputs(
         n_atoms - 1,
     )
     block_mask = mx.ones((batch_size, num_blocks, 32, 128), dtype=mx.bool_)
+    msa_mask = mx.ones((batch_size, msa_depth, n_tokens), dtype=mx.float32)
+    template_input_masks = mx.ones(
+        (batch_size, n_templates, n_tokens, n_tokens), dtype=mx.float32
+    )
 
     return {
         "token_features": mx.random.normal((batch_size, n_tokens, 2638)),
@@ -73,6 +85,8 @@ def build_dummy_inputs(
             "atom_q_indices": q_idx,
             "atom_kv_indices": kv_idx,
             "block_atom_pair_mask": block_mask,
+            "msa_mask": msa_mask,
+            "template_input_masks": template_input_masks,
         },
     }
 
