@@ -141,7 +141,15 @@ def build_embedding_context(
     from chai_lab.data.dataset.embeddings.embedding_context import EmbeddingContext
     from chai_lab.data.parsing.structure.entity_type import EntityType
 
-    from esm_mlx import ESM2, Tokenizer
+    try:
+        from esm_mlx import ESM2, Tokenizer
+    except ImportError as exc:
+        raise RuntimeError(
+            "esm_backend='mlx' requires the esm_mlx package. Install with:\n"
+            "    pip install 'chai-mlx[esm]'\n"
+            "(or pre-compute embeddings with scripts/precompute_esm_mlx.py "
+            "and pass esm_backend='mlx_cache' + esm_cache_dir= instead)."
+        ) from exc
 
     protein_sequences: set[str] = {
         chain.entity_data.sequence

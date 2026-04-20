@@ -46,6 +46,165 @@ _REQUIRED_KEYS = {
 }
 
 
+# Input-space ceilings enforced by chai-1 upstream (see
+# ``chai_lab.data.dataset.all_atom_feature_context.MAX_MSA_DEPTH`` and
+# ``MAX_NUM_TEMPLATES``, plus ``chai_lab.data.collate.utils.AVAILABLE_MODEL_SIZES``).
+# Mirrored here so callers get a loud ``UnsupportedInputError`` at
+# featurize time instead of a cryptic OOM or shape-mismatch inside
+# the trunk. We pull the live values from chai-lab when it's
+# importable and fall back to the literal constants if not (the
+# fallback is only exercised when someone calls ``featurize()`` on
+# precomputed tensors without chai-lab installed; the numbers are the
+# same constants chai-lab ships).
+_MAX_MSA_DEPTH_FALLBACK: int = 16_384
+_MAX_NUM_TEMPLATES_FALLBACK: int = 4
+_SUPPORTED_CROP_SIZES_FALLBACK: tuple[int, ...] = (
+    256, 384, 512, 768, 1024, 1536, 2048,
+)
+
+
+class UnsupportedInputError(ValueError):
+    """Raised when a FASTA exceeds chai-1's hard input-space limits.
+
+    Matches the name chai-1 upstream uses so callers catching it
+    don't need to distinguish ``chai_lab`` vs ``chai_mlx`` sources.
+    """
+
+
+def _chai_lab_limits() -> tuple[int, int, tuple[int, ...]]:
+    """Return ``(MAX_MSA_DEPTH, MAX_NUM_TEMPLATES, AVAILABLE_MODEL_SIZES)``.
+
+    Prefers the live values from chai-lab; falls back to the constants
+    that shipped at the pinned commit if chai-lab is unimportable.
+    """
+    try:
+        from chai_lab.data.dataset.all_atom_feature_context import (
+            MAX_MSA_DEPTH, MAX_NUM_TEMPLATES,
+        )
+        from chai_lab.data.collate.utils import AVAILABLE_MODEL_SIZES
+        return int(MAX_MSA_DEPTH), int(MAX_NUM_TEMPLATES), tuple(AVAILABLE_MODEL_SIZES)
+    except ImportError:
+        return (
+            _MAX_MSA_DEPTH_FALLBACK,
+            _MAX_NUM_TEMPLATES_FALLBACK,
+            _SUPPORTED_CROP_SIZES_FALLBACK,
+        )
+
+
+def _enforce_input_limits(feature_context) -> None:
+    """Raise :class:`UnsupportedInputError` if *feature_context* exceeds
+    chai-1's hard input-space limits.
+
+    Called inside :func:`featurize_fasta` immediately after chai-lab
+    produces its ``AllAtomFeatureContext`` and before the MLX-side
+    collate step. The three checks mirror
+    :func:`chai_lab.chai1.raise_if_too_many_tokens`,
+    :func:`raise_if_too_many_templates`, and
+    :func:`raise_if_msa_too_deep` so users see the same "fail fast at
+    featurize" behaviour regardless of which side is running.
+    """
+    max_msa, max_templates, crop_sizes = _chai_lab_limits()
+
+    n_tokens = feature_context.structure_context.num_tokens
+    largest_crop = max(crop_sizes)
+    if n_tokens > largest_crop:
+        raise UnsupportedInputError(
+            f"Too many tokens in input: {n_tokens} > {largest_crop}. "
+            "Please limit the length of the input sequence. Supported "
+            f"crop sizes: {sorted(crop_sizes)}."
+        )
+
+    n_templates = feature_context.template_context.num_templates
+    if n_templates > max_templates:
+        raise UnsupportedInputError(
+            f"Too many templates in input: {n_templates} > {max_templates}. "
+            "Please limit the number of templates."
+        )
+
+    msa_depth = feature_context.msa_context.depth
+    if msa_depth > max_msa:
+        raise UnsupportedInputError(
+            f"MSA too deep: {msa_depth} > {max_msa}. "
+            "Please limit the MSA depth (consider setting "
+            "recycle_msa_subsample to subsample at recycle time)."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Optional-dependency error surface helpers
+# ---------------------------------------------------------------------------
+
+def _require_chai_lab():
+    """Import ``chai_lab.chai1`` or raise a readable RuntimeError.
+
+    The bare ``ImportError`` from the inline ``from chai_lab.chai1
+    import ...`` is unhelpful for users who forgot the ``[featurize]``
+    extra. This helper re-raises with installation instructions.
+    """
+    try:
+        import chai_lab.chai1 as chai1  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(
+            "featurize_fasta requires chai_lab. Install with:\n"
+            "    pip install 'chai-mlx[featurize]'\n"
+            "(or run from a git clone with the submodule checked out)."
+        ) from exc
+    return chai1
+
+
+def _require_torch():
+    """Import ``torch`` or raise a readable RuntimeError.
+
+    ``torch`` is pulled in through the same ``[featurize]`` extra as
+    chai_lab; surfacing the same instruction keeps the failure mode
+    uniform.
+    """
+    try:
+        import torch  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(
+            "featurize_fasta requires torch. Install with:\n"
+            "    pip install 'chai-mlx[featurize]'"
+        ) from exc
+    return torch
+
+
+# 20 GB captures the "16 GB unified memory Mac" OOM case from HANDOFF
+# §2.2 while leaving comfortable headroom on machines just above. ESM-2
+# 3B resident at fp32 is ~11 GB; add chai-mlx's ~1.2 GB weights and
+# several GB of trunk activations and we're well past 16 GB. Users who
+# know better can ignore the warning -- this is print-only, never raise.
+_ESM_MLX_MIN_RAM_BYTES: int = 20 * 1024 ** 3
+
+
+def _warn_if_insufficient_ram_for_esm_mlx() -> None:
+    """Print a stderr warning if this host probably can't hold ESM-3B.
+
+    ``psutil`` is a soft dep -- installed on most dev machines but not
+    in the hard-required list. Missing ``psutil`` silently skips the
+    check; the user will still see a Metal allocator abort if they OOM.
+    """
+    import sys
+    try:
+        import psutil
+    except ImportError:
+        return
+    try:
+        total = int(psutil.virtual_memory().total)
+    except Exception:  # pragma: no cover - defensive
+        return
+    if total < _ESM_MLX_MIN_RAM_BYTES:
+        gib = total / (1024 ** 3)
+        print(
+            f"[chai-mlx] warning: esm_backend='mlx' loads ~11 GB of ESM-2 3B "
+            f"weights in-process; this machine has {gib:.1f} GiB total RAM. "
+            "Prefer esm_backend='mlx_cache' after pre-computing embeddings "
+            "with scripts/precompute_esm_mlx.py (see HANDOFF.md §2.2).",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 def _coerce_structure_inputs(obj: Any) -> StructureInputs:
     if isinstance(obj, StructureInputs):
         return obj
@@ -92,6 +251,33 @@ def featurize(inputs: FeatureContext | InputBundle | dict[str, Any]) -> FeatureC
 # FASTA-based featurization via chai-lab
 # ---------------------------------------------------------------------------
 
+
+def reuse_msa_dir_if_present(output_dir: str | Path) -> Path | None:
+    """Return the chai-lab MSA cache directory under *output_dir* if it exists.
+
+    ``chai_lab.chai1.make_all_atom_feature_context`` creates
+    ``<output_dir>/msas`` with ``exist_ok=False`` whenever
+    ``use_msa_server=True``, so the second call for the same output
+    directory crashes. Callers can use this helper to detect a prior
+    cache and pass it as ``msa_directory=`` instead of setting
+    ``use_msa_server=True`` again::
+
+        cached = reuse_msa_dir_if_present(output_dir)
+        ctx = featurize_fasta(
+            fasta,
+            output_dir=output_dir,
+            msa_directory=cached,             # offline reuse when available
+            use_msa_server=(cached is None),  # otherwise online fetch
+        )
+
+    Returns ``None`` if no cache exists or the directory is empty.
+    """
+    msa_dir = Path(output_dir) / "msas"
+    if msa_dir.is_dir() and any(msa_dir.iterdir()):
+        return msa_dir
+    return None
+
+
 def featurize_fasta(
     fasta_file: str | Path,
     *,
@@ -105,6 +291,8 @@ def featurize_fasta(
     msa_server_url: str = "https://api.colabfold.com",
     use_templates_server: bool = False,
     templates_path: Path | None = None,
+    msa_plot_path: Path | None = None,
+    entity_name_as_subchain: bool | None = None,
 ) -> FeatureContext:
     """Full FASTA-to-FeatureContext entry point using chai-lab's pipeline.
 
@@ -167,21 +355,30 @@ def featurize_fasta(
     if esm_backend == "mlx_cache" and esm_cache_dir is None:
         raise ValueError("esm_backend='mlx_cache' requires esm_cache_dir=")
 
-    from chai_lab.chai1 import (
-        Collate,
-        TokenBondRestraint,
-        feature_factory,
-        make_all_atom_feature_context,
-    )
+    if esm_backend == "mlx":
+        _warn_if_insufficient_ram_for_esm_mlx()
+
+    # ``entity_name_as_subchain`` toggles whether chai-lab uses FASTA
+    # entity names as chain IDs.  Chai-1 upstream defaults to False
+    # (sequential A/B/C... labels in the output CIF); constraint CSVs
+    # reference chains *by FASTA name*, so when the user attaches a
+    # CSV we force it to True so the restraint lookups line up with
+    # what the user wrote in the FASTA.  Outside the CSV case we
+    # match chai-1's default for drop-in compatibility with downstream
+    # tooling that expects A/B/C... chain IDs.
+    if entity_name_as_subchain is None:
+        entity_name_as_subchain = constraint_path is not None
+
+    chai1 = _require_chai_lab()
+    Collate = chai1.Collate
+    TokenBondRestraint = chai1.TokenBondRestraint
+    feature_factory = chai1.feature_factory
+    make_all_atom_feature_context = chai1.make_all_atom_feature_context
 
     feature_context = make_all_atom_feature_context(
         fasta_file,
         output_dir=output_dir,
-        # Use the FASTA entity names as chain IDs so constraint CSVs can
-        # reference chains by the same label the user wrote in the FASTA
-        # header.  Without this, chai-lab auto-assigns A/B/C... and
-        # constraint lookups silently return zero matches.
-        entity_name_as_subchain=True,
+        entity_name_as_subchain=entity_name_as_subchain,
         use_esm_embeddings=(esm_backend == "chai"),
         use_msa_server=use_msa_server,
         msa_server_url=msa_server_url,
@@ -190,6 +387,11 @@ def featurize_fasta(
         use_templates_server=use_templates_server,
         templates_path=templates_path,
     )
+
+    # Enforce chai-1's hard input-space limits up-front so users see a
+    # loud UnsupportedInputError here rather than a cryptic OOM or
+    # shape-mismatch inside the trunk.
+    _enforce_input_limits(feature_context)
 
     if esm_backend == "mlx":
         from chai_mlx.data.esm_mlx_adapter import build_embedding_context
@@ -203,6 +405,24 @@ def featurize_fasta(
         feature_context.embedding_context = build_embedding_context_from_cache(
             feature_context.chains, cache_dir=esm_cache_dir
         )
+
+    # Optional MSA coverage plot (matches chai-lab's ``chai1.run_inference``
+    # behaviour). Only drawn when the MSA is non-empty; skipped silently
+    # when matplotlib is not installed so the plot flag is safe to pass
+    # even on slim envs.
+    if msa_plot_path is not None and feature_context.msa_context.mask.any():
+        try:
+            from chai_lab.utils.plot import plot_msa
+            msa_plot_path = Path(msa_plot_path)
+            msa_plot_path.parent.mkdir(parents=True, exist_ok=True)
+            plot_msa(
+                input_tokens=feature_context.structure_context.token_residue_type,
+                msa_tokens=feature_context.msa_context.tokens,
+                out_fname=msa_plot_path,
+            )
+        except ImportError:
+            # matplotlib not installed; silently skip.
+            pass
 
     collator = Collate(
         feature_factory=feature_factory,
@@ -235,11 +455,11 @@ def _batch_to_feature_context(
     The wide ``*_features`` fields are set to zero-sized placeholders since
     they are unused when ``raw_features`` is present.
     """
-    import torch
+    torch = _require_torch()
+    chai1 = _require_chai_lab()
+    feature_generators = chai1.feature_generators
 
     import mlx.core as mx
-
-    from chai_lab.chai1 import feature_generators
 
     features = batch["features"]
     inputs = batch["inputs"]
