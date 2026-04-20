@@ -86,18 +86,44 @@ def load_pretrained_config(
     if not path.is_dir():
         try:
             from huggingface_hub import snapshot_download
-
-            path = Path(snapshot_download(str(path_or_repo)))
         except ImportError:
             raise ValueError(
                 f"{path_or_repo} is not a local directory and "
                 "huggingface_hub is not installed for remote download"
             )
+        import sys as _sys
+        print(
+            f"[chai-mlx] downloading weights from HF ({path_or_repo}); "
+            "~1.2 GB on first call. Subsequent calls reuse the HF cache.",
+            file=_sys.stderr,
+            flush=True,
+        )
+        path = Path(snapshot_download(str(path_or_repo)))
 
     config_path = path / "config.json"
     if config_path.exists():
         with open(config_path) as f:
             raw = json.load(f)
+
+        # ``config_version`` is optional in older checkpoints; missing
+        # means v1 (the pre-versioning schema). Warn loudly before the
+        # ``ChaiConfig(**raw)`` call below if the on-disk version differs
+        # from the class default so a future mismatch is visible rather
+        # than surfacing as a 200-line-deep safetensors error.
+        default_version = ChaiConfig().config_version
+        on_disk_version = raw.get("config_version", "1")
+        if on_disk_version != default_version:
+            import sys as _sys
+            print(
+                f"[chai-mlx] warning: loaded config.json at {config_path} "
+                f"has config_version={on_disk_version!r}, but this chai-mlx "
+                f"version expects {default_version!r}. Continuing; if "
+                "parameter loading fails below, your checkpoint is likely "
+                "from a different chai-mlx release.",
+                file=_sys.stderr,
+                flush=True,
+            )
+
         _NESTED = {
             "feature_dims": FeatureDims,
             "hidden": HiddenDims,
@@ -204,8 +230,18 @@ class ChaiMLX(nn.Module):
     def embed_inputs(self, ctx: FeatureContext) -> EmbeddingOutputs:
         return self.input_embedder(ctx)
 
-    def trunk(self, emb: EmbeddingOutputs, *, recycles: int = 3) -> TrunkOutputs:
-        return self.trunk_module(emb, recycles=recycles)
+    def trunk(
+        self,
+        emb: EmbeddingOutputs,
+        *,
+        recycles: int = 3,
+        recycle_msa_subsample: int = 4096,
+    ) -> TrunkOutputs:
+        return self.trunk_module(
+            emb,
+            recycles=recycles,
+            recycle_msa_subsample=recycle_msa_subsample,
+        )
 
     def prepare_diffusion_cache(
         self,
@@ -287,8 +323,14 @@ class ChaiMLX(nn.Module):
         recycles: int = 3,
         num_samples: int = 5,
         num_steps: int | None = None,
+        recycle_msa_subsample: int = 4096,
     ) -> InferenceOutputs:
-        """Run production inference (no intermediate retention)."""
+        """Run production inference (no intermediate retention).
+
+        ``recycle_msa_subsample`` rows are randomly subsampled from the
+        MSA each trunk recycle for chai-1 parity (see ``Trunk.__call__``).
+        Pass ``recycle_msa_subsample=0`` to use the full MSA every recycle.
+        """
         ctx = self.featurize(inputs)
         emb = self.embed_inputs(ctx)
         # Raw features are only needed during embedding.
@@ -298,7 +340,11 @@ class ChaiMLX(nn.Module):
         del ctx
         mx.clear_cache()
 
-        trunk_out = self.trunk(emb, recycles=recycles)
+        trunk_out = self.trunk(
+            emb,
+            recycles=recycles,
+            recycle_msa_subsample=recycle_msa_subsample,
+        )
         cache = self.prepare_diffusion_cache(trunk_out)
         mx.eval(cache.s_static, cache.z_cond, cache.blocked_pair_base,
                 cache.atom_cond, cache.atom_single_cond, *cache.pair_biases)
@@ -341,11 +387,21 @@ class ChaiMLX(nn.Module):
         recycles: int = 3,
         num_samples: int = 5,
         num_steps: int | None = None,
+        recycle_msa_subsample: int = 4096,
     ) -> FoldOutputs:
-        """Run debug inference and return full intermediate tensors."""
+        """Run debug inference and return full intermediate tensors.
+
+        ``recycle_msa_subsample`` forwarded to :meth:`Trunk.__call__`
+        for chai-1 parity (see :meth:`run_inference`).
+        Pass ``recycle_msa_subsample=0`` to use the full MSA every recycle.
+        """
         ctx = self.featurize(inputs)
         emb = self.embed_inputs(ctx)
-        trunk_out = self.trunk(emb, recycles=recycles)
+        trunk_out = self.trunk(
+            emb,
+            recycles=recycles,
+            recycle_msa_subsample=recycle_msa_subsample,
+        )
         cache = self.prepare_diffusion_cache(trunk_out)
         mx.eval(cache.s_static, cache.z_cond, cache.blocked_pair_base,
                 cache.atom_cond, cache.atom_single_cond, *cache.pair_biases)

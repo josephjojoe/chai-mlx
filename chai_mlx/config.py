@@ -118,6 +118,19 @@ class ConfidenceConfig:
 
 @dataclass(frozen=True)
 class ChaiConfig:
+    # Versions the on-disk ``config.json`` schema. Bump when adding
+    # required fields that older checkpoints cannot supply. Older
+    # checkpoints without this field are assumed to be ``"1"`` so
+    # ``from_pretrained`` stays backwards-compatible with every
+    # chai-mlx weight release to date; any future bump should print
+    # a diagnostic via ``load_pretrained_config``.
+    #
+    # Kept as a public (non-underscored) name because it is a field
+    # that must be written to the on-disk ``config.json`` alongside
+    # every other hyperparameter. A leading underscore would make
+    # the JSON key awkward (``_config_version``) and break any
+    # downstream tooling that does ``json.load(...)["config_version"]``.
+    config_version: str = "1"
     feature_dims: FeatureDims = field(default_factory=FeatureDims)
     hidden: HiddenDims = field(default_factory=HiddenDims)
     atom_blocks: AtomBlockConfig = field(default_factory=AtomBlockConfig)

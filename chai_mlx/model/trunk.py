@@ -11,6 +11,73 @@ from chai_mlx.data.types import EmbeddingOutputs, TrunkOutputs
 from chai_mlx.utils import masked_mean
 
 
+def _subsample_and_reorder_msa(
+    feats: mx.array,
+    mask: mx.array,
+    *,
+    select_n_rows: int = 4096,
+) -> tuple[mx.array, mx.array]:
+    """MLX port of :func:`chai_lab.data.dataset.msas.utils.subsample_and_reorder_msa_feats_n_mask`.
+
+    Produces a size-1-biased random subsample of the MSA, reordered so
+    the selected rows are first and the rest follow; the mask is
+    zero-padded to the original depth. Called once per trunk recycle
+    when ``recycle_msa_subsample > 0`` (the default 0 skips this).
+
+    Parameters
+    ----------
+    feats : ``(1, depth, tokens, dim)`` MSA features.
+    mask  : ``(1, depth, tokens)`` non-pad mask; a row is "nonnull"
+            if any position is unmasked.
+    select_n_rows : how many rows to retain (default 4096, matches
+            chai-lab).
+
+    Returns
+    -------
+    (feats_sampled, mask_sampled) with the same shape as the inputs,
+    or the originals unchanged when the depth is already ≤
+    ``select_n_rows``.
+    """
+    # Count nonnull tokens per row: shape (depth,)
+    msa_sizes = mx.sum(mask.astype(mx.float32), axis=(0, 2))
+    nonnull_rows_mask = msa_sizes > 0
+    input_depth = int(mx.sum(nonnull_rows_mask.astype(mx.int32)))
+    if select_n_rows <= 0 or input_depth <= select_n_rows:
+        return feats, mask
+
+    # Bias towards bigger-hit rows: rank = size * uniform(0, 1). Cast to
+    # fp16 to mirror chai-lab's tie-breaking quirk (chai-lab uses
+    # torch.float16 here so the sort order is identical on edge cases).
+    rand = mx.random.uniform(shape=msa_sizes.shape).astype(mx.float16)
+    mask_ranking = msa_sizes.astype(mx.float16) * rand
+    # argsort ascending, take the tail (highest-ranked rows). The
+    # "unselected" rows are the lower tail in the same argsort, which
+    # we then re-sort by original row position to match chai-lab's
+    # ``torch.where(~selection_mask)`` output (which returns indices
+    # in ascending-by-position order). MLX does not support boolean
+    # indexing so we use a sort over indices to recover that order.
+    order = mx.argsort(mask_ranking)
+    depth = feats.shape[1]
+    selection_idx = order[depth - select_n_rows : depth]
+    unselected_idx = mx.sort(order[: depth - select_n_rows])
+    combo_idx = mx.concatenate([selection_idx, unselected_idx], axis=0)
+
+    # index-select along depth (axis=1)
+    feats_sampled = mx.take(feats, combo_idx, axis=1)
+    mask_sampled = mx.take(mask, selection_idx, axis=1)
+
+    # Zero-pad mask back to original depth so downstream shapes are
+    # stable (the pair-weighted averaging op tolerates the padding).
+    n_pad = depth - mask_sampled.shape[1]
+    if n_pad > 0:
+        pad = mx.zeros(
+            (mask_sampled.shape[0], n_pad, mask_sampled.shape[2]),
+            dtype=mask_sampled.dtype,
+        )
+        mask_sampled = mx.concatenate([mask_sampled, pad], axis=1)
+    return feats_sampled, mask_sampled
+
+
 class RecycleProjection(nn.Module):
     def __init__(self, dim: int, *, eps: float = 1e-5) -> None:
         super().__init__()
@@ -266,7 +333,17 @@ class Trunk(nn.Module):
         emb: EmbeddingOutputs,
         *,
         recycles: int = 3,
+        recycle_msa_subsample: int = 4096,
     ) -> TrunkOutputs:
+        """Run the trunk for ``recycles`` iterations.
+
+        ``recycle_msa_subsample`` rows are randomly subsampled from the
+        MSA on each recycle via :func:`_subsample_and_reorder_msa`,
+        matching chai-lab's behaviour (``chai1.py:750``). This
+        decorrelates the pair tensor across recycles on deep MSAs. Pass
+        ``recycle_msa_subsample=0`` to use the full MSA every recycle
+        (reproduces pre-4096-default validation runs).
+        """
         single_init = emb.single_initial
         pair_init = emb.pair_initial
         si = emb.structure_inputs
@@ -289,12 +366,25 @@ class Trunk(nn.Module):
                 token_pair_mask=token_pair_mask,
             )
             mx.eval(pair)
+
+            # Per-recycle MSA subsampling (chai-1 parity).
+            if recycle_msa_subsample > 0:
+                msa_input_recycle, msa_mask_recycle = _subsample_and_reorder_msa(
+                    emb.msa_input,
+                    msa_mask.astype(mx.bool_),
+                    select_n_rows=recycle_msa_subsample,
+                )
+                msa_mask_recycle = msa_mask_recycle.astype(msa_mask.dtype)
+            else:
+                msa_input_recycle = emb.msa_input
+                msa_mask_recycle = msa_mask
+
             pair = self.msa_module(
                 single,
                 pair,
-                emb.msa_input,
+                msa_input_recycle,
                 token_pair_mask=token_pair_mask,
-                msa_mask=msa_mask,
+                msa_mask=msa_mask_recycle,
             )
             mx.eval(pair)
             single, pair = self.pairformer_stack(
