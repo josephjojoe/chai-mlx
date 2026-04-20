@@ -22,37 +22,15 @@ took to prove that the port is actually faithful.
 
 ## Status
 
-- Structurally faithful end-to-end. The diffusion sampler is bit-for-bit
-  exact given correct trunk outputs and now runs in fp32 to match the
-  TorchScript reference bundle.
-- On 1L2Y (Trp-cage, 20 residues), MLX vs CUDA (H100, bf16) Cα RMSD is
-  **0.75 Å mean** across 15 sample pairs (3 seeds × 5 diffusion samples),
-  vs **0.57 Å** for CUDA against the NMR ground truth. MLX sits ~0.26 Å
-  further from experimental truth than CUDA on average, with
-  **GDT-TS = 95.1%** and **Cα lDDT = 89.8%** between the two implementations.
-- The remaining gap is dominated by TorchScript kernel-fusion differences
-  in the chai-lab scripted `trunk.pt`, not by the MLX port. An eager
-  PyTorch reimplementation of the exact same chai-lab module tree (same
-  weights, same layout) at bf16 is 19.7% away from scripted-CUDA on the
-  trunk pair tensor and 44% away on the single tensor, while MLX-fp32
-  sits inside that envelope (14.9% and 42.2% from scripted-CUDA on the
-  same tensors). Both eager-CUDA at fp32 and bf16 land in essentially
-  the same place as MLX (1.3% between each other), and MLX → eager-CUDA
-  is 12% on the full 48-block trunk at bf16. The full attribution — with
-  per-round MSA-module intermediates, per-block pairformer intermediates,
-  isolated tri-attention drift, and SDPA-variant analysis — lives in
-  [`findings/drift_attribution.md`](findings/drift_attribution.md).
-  Running MLX at `compute_dtype="float32"` does not meaningfully shrink
-  the gap against scripted-CUDA, because scripted-CUDA itself is the
-  outlier relative to both eager paths.
-
-Numerically validated so far: monomers up to 76 residues
-(1L2Y, 1VII, 1CRN, 1UBQ). The expanded validation slate (multimer,
-ligand, >200 residue, nucleic acid, ESM, constraints) is wired up
-end-to-end through the harnesses; the Modal sweep that populates its
-numbers has not been run against the current checkpoint yet. See
-[Validation coverage](#validation-coverage) for the target matrix and
-how to reproduce each axis.
+- End-to-end MLX inference is wired up through staged APIs, a FASTA CLI,
+  and CUDA comparison harnesses.
+- The diffusion path now runs in fp32 to match the reference precision
+  boundary. The public runtime precision policies are `reference`
+  (mixed bf16/fp32) and `float32` (all-fp32).
+- Historical comparison and validation numbers have been intentionally
+  removed after recent changes to the port. Use the workflows below to
+  regenerate current parity, structural, and throughput results. The
+  supporting probe inventory lives in [`drift_attribution.md`](drift_attribution.md).
 
 ## Requirements
 
@@ -466,29 +444,25 @@ python scripts/report_throughput_comparison.py \
     --cuda-dir /tmp/chai_mlx_cuda/throughput
 ```
 
-## Validation coverage
+## Comparison Target Matrix
 
 The target slate in `cuda_harness/modal_common.py::DEFAULT_TARGETS` is
-the single source of truth for "what has chai-mlx been pointed at?".
-Each target is tagged with one or more `kinds`, and harnesses accept a
+the single source of truth for the current comparison matrix. Each
+target is tagged with one or more `kinds`, and harnesses accept a
 `--target-kinds` filter so you can sweep a single axis at a time.
 
-| Target        | Kind(s)              | Entities                                 | What it exercises                                        | MLX vs CUDA      |
-| ------------- | -------------------- | ---------------------------------------- | -------------------------------------------------------- | ---------------- |
-| `1L2Y`        | monomer              | 1 protein (20 aa)                        | Baseline Cα RMSD / GDT / lDDT                            | **0.75 Å**, 95.1% GDT |
-| `1VII`        | monomer              | 1 protein (35 aa)                        | Small α-helical fold                                     | measured         |
-| `1CRN`        | monomer              | 1 protein (46 aa)                        | Crambin, tight 2.0 Å PDB reference                       | measured         |
-| `1UBQ`        | monomer              | 1 protein (76 aa)                        | Mid-size α/β monomer; previous ceiling                   | measured         |
-| `1BRS`        | multimer             | 2 proteins (barnase + barstar, 199 aa)   | Multi-chain featurizer, interface Cα RMSD, iPTM          | scaffolded       |
-| `1FKB`        | ligand               | FKBP-12 + FK506 SMILES                   | `EntityType.LIGAND` path, ligand heavy-atom RMSD         | scaffolded       |
-| `7TIM`        | long                 | 1 protein (248 aa, TIM barrel)           | >200 residue ceiling, bf16 error growth                  | scaffolded       |
-| `1BNA`        | dna, multimer        | 2 DNA strands (12 bp duplex)             | `EntityType.DNA` featurization, P-backbone RMSD          | scaffolded       |
-| `1UBQ_ESM`    | esm                  | 1 protein (76 aa)                        | MLX ESM-2 3B vs chai-lab's traced CUDA checkpoint        | scaffolded       |
-| `1CRN_CONSTR` | constraints, ligand  | 1 protein + methanethiol + 3 restraints  | Contact / pocket / covalent restraint features           | scaffolded       |
-
-"measured" means numbers are in [Status](#status) above; "scaffolded"
-means the plumbing is end-to-end ready but the sweep that populates
-numbers has not yet run against the current checkpoint.
+| Target        | Kind(s)              | Entities                                 | What it exercises                                        |
+| ------------- | -------------------- | ---------------------------------------- | -------------------------------------------------------- |
+| `1L2Y`        | monomer              | 1 protein (20 aa)                        | Small-monomer structural comparison workflow             |
+| `1VII`        | monomer              | 1 protein (35 aa)                        | Small alpha-helical fold                                 |
+| `1CRN`        | monomer              | 1 protein (46 aa)                        | Crambin monomer / tight-fold workflow                    |
+| `1UBQ`        | monomer              | 1 protein (76 aa)                        | Mid-size alpha/beta monomer                              |
+| `1BRS`        | multimer             | 2 proteins (barnase + barstar, 199 aa)   | Multi-chain featurizer and interface comparison          |
+| `1FKB`        | ligand               | FKBP-12 + FK506 SMILES                   | `EntityType.LIGAND` path                                 |
+| `7TIM`        | long                 | 1 protein (248 aa, TIM barrel)           | Longer-sequence parity / structure workflow              |
+| `1BNA`        | dna, multimer        | 2 DNA strands (12 bp duplex)             | `EntityType.DNA` featurization                           |
+| `1UBQ_ESM`    | esm                  | 1 protein (76 aa)                        | MLX ESM-2 3B integration path                            |
+| `1CRN_CONSTR` | constraints, ligand  | 1 protein + methanethiol + 3 restraints  | Contact / pocket / covalent restraint features           |
 
 ### Reproducing the expanded sweep
 

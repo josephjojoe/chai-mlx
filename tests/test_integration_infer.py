@@ -1,11 +1,9 @@
 """Slow end-to-end integration test for ``chai-mlx-infer``.
 
 Opt-in via the ``CHAI_MLX_RUN_SLOW=1`` environment variable. Runs the
-full FASTA-to-CIF pipeline on a 20-residue target (1L2Y, Trp-cage)
-with production-grade diffusion knobs (200 steps, 3 recycles, 1
-sample) so the pLDDT distribution is genuine and the test would catch
-a real regression, not just a "does it not crash" smoke. Wall-clock
-is ~1 min on an M-series Mac after the one-time weight download.
+full FASTA-to-CIF pipeline on a small target with the default production
+inference knobs so the test exercises the real code path rather than a
+minimal smoke configuration.
 
 What it exercises:
 
@@ -14,16 +12,14 @@ What it exercises:
   fallback when the env points at the repo id).
 * Chai-lab featurization, MLX trunk + diffusion + confidence, ranking.
 * CIF output via :func:`chai_lab.data.io.cif_utils.save_to_cif` with
-  pLDDT B-factors (Phase 1.4) -- the assertion on B-factor variance
-  is meaningful at 200 steps; with a 4-step trajectory it would pass
-  on noise.
+  per-atom pLDDT B-factors.
 * ``scores.json`` + ``manifest.json`` shape and content.
 * ``scores.model_idx_0.npz`` per-sample NPZ (chai-lab parity).
 
 This intentionally duplicates what ``tests/test_inference_cli.py``
 cannot: actually running the model. It is kept opt-in because the
-combination of weight download + ~1 min fold wall-clock is too
-expensive for default local pytest runs.
+combination of weight download and full inference is too expensive for
+default local pytest runs.
 
 Gating: requires ``CHAI_MLX_RUN_SLOW=1``. When local weights are
 absent AND the interpreter can't reach the HuggingFace Hub (offline
@@ -45,8 +41,7 @@ from pathlib import Path
 import pytest
 
 
-# The 20-residue Trp-cage (PDB 1L2Y) is the smallest validated target
-# in HANDOFF.md §1.1 and fits in a single 256-token crop comfortably.
+# A small single-chain target that fits comfortably in one crop.
 _TRP_CAGE_FASTA = ">protein|name=T1L2\nNLYIQWLKDGGPSSGRPPPS\n"
 
 _SLOW_ENABLED = os.environ.get("CHAI_MLX_RUN_SLOW", "").lower() in ("1", "true", "yes")
@@ -113,11 +108,8 @@ def test_inference_script_end_to_end_trpcage() -> None:
             "--weights-dir", _weights_path(),
             "--fasta", str(fasta_path),
             "--output-dir", str(output_dir),
-            # Production-grade diffusion knobs so pLDDTs are genuine
-            # (a 4-step trajectory would let the B-factor variance
-            # assertion below pass on noise). Wall-clock at 200 steps
-            # on M-series is ~1 min; we keep num_samples=1 so the test
-            # stays under the 10 min timeout on slower runners.
+            # Use the normal inference-scale knobs rather than a tiny
+            # smoke setup so the end-to-end path is exercised honestly.
             "--recycles", "3",
             "--num-steps", "200",
             "--num-samples", "1",
@@ -159,18 +151,16 @@ def test_inference_script_end_to_end_trpcage() -> None:
         assert manifest["num_steps"] == 200
         assert manifest["cif_paths"] == [str(cif_path)]
 
-        # Basic CIF content check: pLDDT B-factors should be non-trivial
-        # (Phase 1.4 feature). ``save_to_cif`` writes a line per atom;
+        # Basic CIF content check: pLDDT B-factors should be non-trivial.
+        # ``save_to_cif`` writes a line per atom;
         # we look for any ATOM record with a non-1.0 biso value.
         cif_text = cif_path.read_text()
         atom_lines = [ln for ln in cif_text.splitlines() if ln.startswith("ATOM")]
         assert atom_lines, "CIF has no ATOM records"
         # The biso column is the penultimate numeric-looking field in
         # chai-lab's modelcif output; we just confirm it's not stuck at
-        # 1.000 on every atom (i.e. pLDDTs flowed through). At 200
-        # steps the per-atom pLDDT distribution is genuine, so we
-        # additionally check the range is plausible (0-100, some
-        # variance).
+        # 1.000 on every atom (i.e. pLDDTs flowed through), and that the
+        # values live in a plausible 0-100 range with some variance.
         bisos = []
         for ln in atom_lines[:200]:
             parts = ln.split()

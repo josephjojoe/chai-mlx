@@ -8,8 +8,8 @@ bit-identical inputs. The inputs come from
 ``_probe_first_block_mlx.py``).
 
 If MLX-block-0 ≈ eager-PyTorch-block-0 (fp32 ULPs), the chai-mlx port is
-numerically correct at the block level and the ~35% trunk-level gap lives
-in fused TorchScript kernels that compile 48 blocks into one graph.
+numerically correct at the block level and any larger trunk-level gap
+likely lives in fused TorchScript kernels that compile 48 blocks into one graph.
 
 If MLX-block-0 ≠ eager-PyTorch-block-0, there is a port-level bug inside
 one of the block's sub-ops.  The per-sub-op intermediates

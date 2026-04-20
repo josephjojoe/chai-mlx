@@ -1,12 +1,13 @@
 """CUDA-side boundary probe: capture ``(s, z)`` after ``msa_module`` but
 before ``pairformer_stack`` in chai-lab's scripted trunk.
 
-Companion to ``cuda_harness/_probe_recycle_mlx.py``. §3.8 of HANDOFF.md
-localises the MLX↔CUDA trunk drift (≈35% rel err at fp32) to
-``msa_module`` on the MLX side by elimination: on 1L2Y the
-``template_embedder`` is a literal no-op, the recycle projections are
-identity on recycle 0 (prev caches start at zero), and §3.7 shows the
-pairformer stack is bit-clean given matching inputs. The *direct* test
+Companion to ``cuda_harness/_probe_recycle_mlx.py``. This probe helps
+localise trunk drift by capturing the scripted CUDA boundaries around
+``msa_module`` and ``pairformer_stack`` on the same input. On recycle 0
+the template path is a literal no-op for the standard monomer setup and
+the previous-state projections start from zero, so the post-MSA boundary
+is a useful place to compare the two implementations directly. The
+*direct* test
 — diff the MLX post-MSA pair tensor against the CUDA post-MSA pair
 tensor — requires extracting CUDA's intermediate state out of
 ``trunk.pt``, which is a single TorchScript bundle.
@@ -42,7 +43,7 @@ Usage
 
 ::
 
-    # 1. produce the MLX tensors (already exists at head: §3.8)
+    # 1. produce the MLX tensors
     python3 cuda_harness/_probe_recycle_mlx.py \\
         --npz /tmp/chai_mlx_cuda/intermediates/1L2Y/seed_42.npz \\
         --weights-dir weights

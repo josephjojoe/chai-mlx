@@ -9,15 +9,11 @@ Consumes an NPZ produced by
   values actually used for ranking).
 * Per-sample ranking scalar deltas (aggregate, pTM, iPTM, clashes).
 
-The key number is **max Cα RMSD across all matched (run_A[s],
-run_B[s]) pairs**. Interpretation:
-
-* If max ≤ 0.01 Å → CUDA is deterministic under this precision policy.
-  Any observed MLX-vs-CUDA gap is "real" — it cannot be blamed on CUDA
-  disagreeing with itself.
-* If max is larger (say 0.1–0.5 Å) → CUDA is non-deterministic under
-  this policy, and that much of the MLX-vs-CUDA 0.75 Å is "CUDA vs
-  itself" noise rather than "MLX drift from CUDA".
+The main quantity of interest is the largest run-to-run structural
+difference across matched samples. That gives context for interpreting
+MLX-vs-CUDA comparisons: if CUDA itself varies under a given precision
+policy, some portion of any cross-backend gap may reflect that baseline
+variability rather than a one-sided MLX issue.
 
 We also print the pae/plddt max abs delta so the confidence-side
 determinism is visible separately from the diffusion-side.

@@ -6,8 +6,7 @@ full 200-step MLX diffusion sampler under **two separate conditions**:
 
 1. **trunk_from_mlx**: MLX runs everything itself — the trunk, the
    diffusion sampler, and the confidence head. This is the normal
-   inference path; the resulting Cα RMSD against CUDA is the
-   ``structure_sweep`` number (≈0.75 Å on 1L2Y).
+   inference path.
 
 2. **trunk_from_cuda**: MLX uses the *CUDA-captured* ``single_trunk`` and
    ``pair_trunk`` tensors to build the diffusion cache, and then runs
@@ -15,20 +14,10 @@ full 200-step MLX diffusion sampler under **two separate conditions**:
    whatever the MLX diffusion module itself introduces relative to
    CUDA once both sides have identical conditioning.
 
-The delta between these two numbers tells us:
-
-* ``(1)`` minus ``(2)`` ≈ how much of the structural gap is caused by
-  trunk drift propagating into the diffusion sampler.
-* ``(2)`` on its own ≈ how much of the structural gap is intrinsic to
-  MLX's diffusion sampler even with identical trunk conditioning.
-
-If ``(2)`` is at the same ~0.75 Å, the trunk drift is irrelevant —
-diffusion sampler stochastic divergence dominates (plausible: MLX's
-SE(3) augmentation and noise draws differ from CUDA's even with
-identical seed because the RNGs are different). If ``(2)`` is much
-smaller (say 0.1 Å), trunk drift is the dominant propagator and the
-~0.75 Å corresponds to the cascading bf16 accumulation story we've
-been telling.
+The delta between these two numbers helps separate how much of the
+structural disagreement comes from trunk drift propagating forward versus
+how much is intrinsic to the diffusion loop once both sides have
+identical conditioning.
 
 Usage
 -----
@@ -41,8 +30,8 @@ Usage
         --cuda-reference-dir /tmp/chai_mlx_cuda/reference/1L2Y/seed_42 \\
         --mlx-seed 42
 
-Note: we only run on seed=42 because that's the canonical NPZ we
-already have. Extending to multiple seeds needs multiple NPZs.
+Note: extending this analysis to multiple seeds requires one captured NPZ
+per seed.
 """
 
 from __future__ import annotations
@@ -309,11 +298,11 @@ def main() -> None:
     print()
     print("Interpretation:")
     print(
-        "  If Δ ≈ 0, trunk drift is NOT the dominant driver of the ~0.75 Å MLX-vs-CUDA"
+        "  If Δ is near zero, trunk drift is not the dominant driver of the current"
     )
-    print("  structural gap — the MLX diffusion sampler itself introduces most of it.")
+    print("  structural gap; the diffusion loop itself is contributing most of it.")
     print(
-        "  If Δ is large (say >0.2 Å), trunk drift cascades into diffusion and accounts"
+        "  If Δ is large, trunk drift is cascading into diffusion and accounting"
     )
     print(
         "  for most of the gap; feeding MLX the CUDA trunk tightens the structural match."

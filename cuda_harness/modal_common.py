@@ -336,8 +336,7 @@ DEFAULT_TARGETS: dict[str, Target] = {
 
     # -- >200 residue monomer ---------------------------------------------
     # Triosephosphate isomerase, 248 residues. TIM barrel fold; a
-    # canonical stress test for mid-sized monomers, well above the
-    # 76-residue ceiling previously validated.
+    # canonical stress test for a longer monomer target.
     "7TIM": _target(
         "7TIM",
         (
@@ -441,12 +440,11 @@ DEFAULT_TARGETS: dict[str, Target] = {
     #
     # This is a pure compute target for the glycan + covalent-bond
     # code path. The full-scale 1AC5 glycan archetype (483-aa
-    # carboxypeptidase-Y + two N-linked glycans, 768-token crop) was
-    # previously in this slate as a CUDA-only row, but has been
-    # retired — see HANDOFF §1.1b. UBQG is sufficient to validate
-    # the covalent-bond + glycan feature path two-sided on a 16 GB
-    # Mac; users with larger machines can add 1AC5 back locally by
-    # appending a target definition in their own code.
+    # carboxypeptidase-Y + two N-linked glycans, 768-token crop) is not
+    # kept in the default slate. UBQG keeps the glycan + covalent-bond
+    # feature path cheap enough to run on a 16 GB Mac; users with larger
+    # machines can add 1AC5 back locally by appending a target definition
+    # in their own code.
     "UBQG": _target(
         "UBQG",
         (
@@ -464,10 +462,8 @@ DEFAULT_TARGETS: dict[str, Target] = {
 
     # -- Tier-2 two-sided parity smokes -----------------------------------
     # The three targets below (PTM, multi-ligand, large ligand) each
-    # exercise an entity-dispatch code path that HANDOFF §1.11 ran
-    # MLX-side only. Adding them to DEFAULT_TARGETS lets the same
-    # Modal harness run them on CUDA so we can do a head-to-head
-    # MLX↔CUDA comparison via scripts/cuda_structure_sweep.py.
+    # exercise an entity-dispatch code path that we want available in the
+    # standard MLX↔CUDA comparison slate.
     #
     # PTM target ("PTM1"): 40-aa synthetic serum-albumin prefix
     # with an inline [SEP] phosphoserine at position 15. The
@@ -489,7 +485,7 @@ DEFAULT_TARGETS: dict[str, Target] = {
 
     # Multi-ligand ("LYSM"): hen egg-white lysozyme (129 aa) with
     # two distinct ligands (NAG + FRC). Exercises the multi-ligand
-    # entity-dispatch path that previously had no CUDA parity run.
+    # entity-dispatch path.
     "LYSM": _target(
         "LYSM",
         (

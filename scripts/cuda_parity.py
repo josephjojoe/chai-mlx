@@ -25,8 +25,9 @@ to MLX so upstream drift doesn't poison downstream comparisons):
    the CUDA logits.
 
 For each comparison we print ``max / mean / p99 / rel_range`` absolute
-error.  Pass/fail is driven by an optional per-stage tolerance (defaults
-are calibrated against the bf16 per-op divergence floor measured on 1L2Y).
+error. Pass/fail is driven by an optional per-stage tolerance; the
+built-in defaults are intended to catch structural mismatches without
+being so tight that ordinary backend rounding differences dominate.
 
 Usage
 -----

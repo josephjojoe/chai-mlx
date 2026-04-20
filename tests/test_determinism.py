@@ -1,18 +1,11 @@
 """Run the same inputs through ``run_inference`` twice and assert
 the coords are bit-identical.
 
-chai-mlx's scientific claim (HANDOFF §3) is that diffusion is
-bit-exact given correct trunk outputs, and that MLX↔CUDA drift is
-purely floating-point reduction-order accumulation in the pairformer.
-A *silent* loss of same-machine determinism (e.g. from a Metal driver
-update introducing non-deterministic reductions) would invalidate
-that claim without any user-visible symptom.
-
-This test runs a tiny no-weights smoke twice under the same
-``mx.random.seed(...)`` and asserts the resulting coords are
-bit-identical. It uses ``float32`` so bf16 rounding isn't a
-confounder. At tiny shapes (32 atoms, 4 tokens, 2 diffusion steps)
-the whole thing takes <1 s.
+A silent loss of same-machine determinism (for example from a backend or
+driver change introducing nondeterministic reductions) would be easy to
+miss in normal use. This test keeps a tight deterministic guardrail on a
+small no-weights configuration. It uses ``float32`` so bf16 rounding is
+not a confounder.
 """
 
 from __future__ import annotations
@@ -97,9 +90,7 @@ def test_run_inference_is_bit_exact_on_same_seed() -> None:
 
     If this test ever starts failing, it means MLX / Metal has
     introduced a non-deterministic reduction on our hot path. That is
-    worth investigating before shipping a release: the whole
-    "accumulation is expected, bugs are not" framing in HANDOFF §3
-    relies on this invariant holding.
+    worth investigating before shipping a release.
     """
     cfg = ChaiConfig(compute_dtype="float32")
 
@@ -125,5 +116,5 @@ def test_run_inference_is_bit_exact_on_same_seed() -> None:
             f"  max abs diff: {max_abs}\n"
             f"  diffs: {n_diff}/{coords1.size}\n"
             "  this usually means MLX/Metal has introduced a non-"
-            "deterministic reduction on our hot path; see HANDOFF.md §3."
+            "deterministic reduction on our hot path."
         )

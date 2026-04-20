@@ -3,21 +3,13 @@ deterministic seeded (single, pair, masks) input and dump inputs + outputs.
 
 Rationale
 ---------
-Previous single-op probes (``/tmp/chai_mlx_cuda/op_probe``) showed that all
-primitive MLX ops (matmul, softmax, layernorm, exp, rsqrt, sum) match their
-CUDA counterparts to 1-2 ULPs of fp32 rounding on representative pairformer
-shapes, and the 48-deep residual stack diverges ~linearly in absolute terms
-(sub-linearly in rel err thanks to random-walk noise).  Yet the full chai-1
-trunk on the same input produces ~35% rel err between MLX and CUDA outputs.
-That gap cannot be explained by op-level drift alone.
-
-This probe closes the gap by comparing **MLX's implementation of the
+This probe compares **MLX's implementation of the
 pairformer block** against a **line-for-line eager PyTorch reimplementation
 of the same block** (built in ``_probe_first_block_cuda.py``) using the same
 upstream chai-1 weights.  Both sides consume bit-identical inputs.
 
 If MLX-block-0 ≈ eager-PyTorch-block-0 (to fp32 ULPs), the port is correct and
-the 35% gap lives elsewhere: most plausibly inside CUDA's fused TorchScript
+any larger trunk-level disagreement lives elsewhere: most plausibly inside CUDA's fused TorchScript
 kernels that aggregate all 48 blocks into one graph with custom scheduling.
 
 If MLX-block-0 ≠ eager-PyTorch-block-0 at fp32, there is a port-level bug
