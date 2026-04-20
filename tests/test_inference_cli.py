@@ -1,41 +1,27 @@
-"""Argparse-level smoke tests for ``scripts/inference.py``.
+"""Argparse-level smoke tests for the ``chai-mlx-infer`` CLI.
 
 These tests exercise the CLI surface without actually running inference:
-they load the module, invoke ``_parse_args`` with crafted ``sys.argv``
-values, and assert that mutually-exclusive / required-combination flags
+they invoke :func:`chai_mlx.cli.infer._parse_args` with crafted argv
+lists, and assert that mutually-exclusive / required-combination flags
 fail cleanly via ``argparse``'s ``SystemExit(2)`` path.
 
 Running the real end-to-end inference in pytest would require the
 ``[featurize]`` extra + weights on disk + ~10 s of wall clock per sample;
-we already cover that path via the manual smoke tests documented in the
-README and the nightly sweep. These tests only guard the shape of the
-CLI so regressions to the ``--use-msa-server`` / ``--esm-backend`` /
+we already cover that path via :mod:`tests.test_integration_infer` and
+the nightly sweep. These tests only guard the shape of the CLI so
+regressions to the ``--use-msa-server`` / ``--esm-backend`` /
 ``--use-templates-server`` / ``--constraint-path`` surface are caught
 offline in milliseconds.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_INFERENCE_PY = _REPO_ROOT / "scripts" / "inference.py"
-
-
-@pytest.fixture(scope="module")
-def inference_module():
-    """Load ``scripts/inference.py`` as an importable module."""
-    spec = importlib.util.spec_from_file_location("chai_mlx_scripts_inference", _INFERENCE_PY)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from chai_mlx.cli import infer as _infer_mod
 
 
 @pytest.fixture
@@ -46,19 +32,13 @@ def tiny_fasta() -> Path:
         yield fasta
 
 
-def _run_parser(module, argv: list[str]) -> "object":
-    """Invoke ``_parse_args`` with a given ``argv`` and return the Namespace."""
-    saved = sys.argv
-    try:
-        sys.argv = ["inference.py", *argv]
-        return module._parse_args()
-    finally:
-        sys.argv = saved
+def _parse(argv: list[str]):
+    """Invoke ``_parse_args`` directly. Passes argv to avoid mutating sys.argv."""
+    return _infer_mod._parse_args(argv)
 
 
-def test_parser_accepts_minimal_args(inference_module, tiny_fasta: Path) -> None:
-    args = _run_parser(
-        inference_module,
+def test_parser_accepts_minimal_args(tiny_fasta: Path) -> None:
+    args = _parse(
         [
             "--weights-dir", "weights",
             "--fasta", str(tiny_fasta),
@@ -74,10 +54,9 @@ def test_parser_accepts_minimal_args(inference_module, tiny_fasta: Path) -> None
     assert args.constraint_path is None
 
 
-def test_parser_rejects_mlx_cache_without_dir(inference_module, tiny_fasta: Path) -> None:
+def test_parser_rejects_mlx_cache_without_dir(tiny_fasta: Path) -> None:
     with pytest.raises(SystemExit):
-        _run_parser(
-            inference_module,
+        _parse(
             [
                 "--weights-dir", "weights",
                 "--fasta", str(tiny_fasta),
@@ -87,10 +66,9 @@ def test_parser_rejects_mlx_cache_without_dir(inference_module, tiny_fasta: Path
         )
 
 
-def test_parser_rejects_msa_server_plus_msa_directory(inference_module, tiny_fasta: Path) -> None:
+def test_parser_rejects_msa_server_plus_msa_directory(tiny_fasta: Path) -> None:
     with pytest.raises(SystemExit):
-        _run_parser(
-            inference_module,
+        _parse(
             [
                 "--weights-dir", "weights",
                 "--fasta", str(tiny_fasta),
@@ -101,10 +79,9 @@ def test_parser_rejects_msa_server_plus_msa_directory(inference_module, tiny_fas
         )
 
 
-def test_parser_rejects_templates_server_without_msa_server(inference_module, tiny_fasta: Path) -> None:
+def test_parser_rejects_templates_server_without_msa_server(tiny_fasta: Path) -> None:
     with pytest.raises(SystemExit):
-        _run_parser(
-            inference_module,
+        _parse(
             [
                 "--weights-dir", "weights",
                 "--fasta", str(tiny_fasta),
@@ -114,10 +91,9 @@ def test_parser_rejects_templates_server_without_msa_server(inference_module, ti
         )
 
 
-def test_parser_rejects_missing_fasta(inference_module) -> None:
+def test_parser_rejects_missing_fasta() -> None:
     with pytest.raises(SystemExit):
-        _run_parser(
-            inference_module,
+        _parse(
             [
                 "--weights-dir", "weights",
                 "--fasta", "/tmp/this-file-really-does-not-exist.fasta",
@@ -126,9 +102,59 @@ def test_parser_rejects_missing_fasta(inference_module) -> None:
         )
 
 
-def test_parser_accepts_full_surface(inference_module, tiny_fasta: Path) -> None:
-    args = _run_parser(
-        inference_module,
+def test_parser_rejects_both_fasta_and_fasta_dir(tiny_fasta: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="chai_mlx_batch_test_") as td:
+        tddir = Path(td)
+        (tddir / "a.fasta").write_text(">protein|name=A\nMKWV\n")
+        with pytest.raises(SystemExit):
+            _parse(
+                [
+                    "--weights-dir", "weights",
+                    "--fasta", str(tiny_fasta),
+                    "--fasta-dir", str(tddir),
+                    "--output-dir", "/tmp/out",
+                ],
+            )
+
+
+def test_parser_rejects_missing_both_fasta_flags() -> None:
+    with pytest.raises(SystemExit):
+        _parse(
+            ["--weights-dir", "weights", "--output-dir", "/tmp/out"],
+        )
+
+
+def test_parser_accepts_fasta_dir() -> None:
+    with tempfile.TemporaryDirectory(prefix="chai_mlx_batch_test_") as td:
+        tddir = Path(td)
+        (tddir / "a.fasta").write_text(">protein|name=A\nMKWV\n")
+        (tddir / "b.fasta").write_text(">protein|name=B\nMKWV\n")
+        args = _parse(
+            [
+                "--weights-dir", "weights",
+                "--fasta-dir", str(tddir),
+                "--output-dir", "/tmp/out",
+            ],
+        )
+        assert args.fasta is None
+        assert args.fasta_dir == tddir
+
+
+def test_parser_rejects_empty_fasta_dir() -> None:
+    with tempfile.TemporaryDirectory(prefix="chai_mlx_batch_test_") as td:
+        # No *.fasta files inside -- should fail.
+        with pytest.raises(SystemExit):
+            _parse(
+                [
+                    "--weights-dir", "weights",
+                    "--fasta-dir", td,
+                    "--output-dir", "/tmp/out",
+                ],
+            )
+
+
+def test_parser_accepts_full_surface(tiny_fasta: Path) -> None:
+    args = _parse(
         [
             "--weights-dir", "weights",
             "--fasta", str(tiny_fasta),
