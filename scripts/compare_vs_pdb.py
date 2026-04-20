@@ -25,7 +25,7 @@ Usage::
 
     python scripts/compare_vs_pdb.py \\
         --reference-dir /tmp/chai_mlx_cuda/expanded_noesm \\
-        --mlx-dir       /tmp/chai_mlx_cuda/mlx_expanded/bfloat16
+        --mlx-dir       /tmp/chai_mlx_cuda/mlx_expanded/reference
 """
 
 from __future__ import annotations
@@ -232,7 +232,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument(
         "--mlx-dir",
         type=Path,
-        default=Path("/tmp/chai_mlx_cuda/mlx_expanded/bfloat16"),
+        default=Path("/tmp/chai_mlx_cuda/mlx_expanded/reference"),
     )
     parser.add_argument(
         "--seed",

@@ -172,7 +172,7 @@ def main() -> None:
     print(f"  ref    max={np.abs(ref_np).max():.3f}  |ref|={np.linalg.norm(ref_np):.3e}")
 
     mx_dtype = mx.bfloat16 if args.dtype == "bf16" else mx.float32
-    compute_dtype_str = "bfloat16" if args.dtype == "bf16" else "float32"
+    compute_dtype_str = "reference" if args.dtype == "bf16" else "float32"
     model = ChaiMLX.from_pretrained(args.weights_dir, strict=False, compute_dtype=compute_dtype_str)
     tri: TriangleAttention = model.trunk_module.msa_module.triangular_attention[args.round]
 

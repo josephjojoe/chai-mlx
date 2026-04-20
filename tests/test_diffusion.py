@@ -207,7 +207,7 @@ def test_denoise_projects_sigma_conditioned_single_repr() -> None:
 
 
 def test_cast_weights_keeps_diffusion_module_fp32() -> None:
-    model = ChaiMLX(ChaiConfig(compute_dtype="bfloat16"))
+    model = ChaiMLX(ChaiConfig(compute_dtype="reference"))
     _cast_weights(model, mx.bfloat16)
 
     params = {
@@ -233,7 +233,7 @@ def test_cast_weights_keeps_diffusion_module_fp32() -> None:
 
 
 def test_prepare_cache_upcasts_trunk_conditioning_to_fp32() -> None:
-    cfg = ChaiConfig(compute_dtype="bfloat16")
+    cfg = ChaiConfig(compute_dtype="reference")
     module = DiffusionModule(cfg)
     trunk = _make_diffusion_trunk(cfg, dtype=mx.bfloat16)
 
@@ -252,8 +252,8 @@ def test_prepare_cache_upcasts_trunk_conditioning_to_fp32() -> None:
     assert all(t.dtype == mx.float32 for t in tensors)
 
 
-def test_diffusion_step_returns_fp32_under_bfloat16_compute_dtype() -> None:
-    cfg = ChaiConfig(compute_dtype="bfloat16")
+def test_diffusion_step_returns_fp32_under_reference_compute_dtype() -> None:
+    cfg = ChaiConfig(compute_dtype="reference")
     module = DiffusionModule(cfg)
     trunk = _make_diffusion_trunk(cfg, dtype=mx.bfloat16)
     cache = module.prepare_cache(trunk)

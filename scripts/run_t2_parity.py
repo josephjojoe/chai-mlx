@@ -60,7 +60,7 @@ def main() -> None:
     parser.add_argument("--recycles", type=int, default=3)
     parser.add_argument("--num-steps", type=int, default=200)
     parser.add_argument("--num-samples", type=int, default=5)
-    parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--dtype", default="reference", choices=["reference", "float32"])
     parser.add_argument(
         "--targets",
         default=",".join(T2_TARGETS),

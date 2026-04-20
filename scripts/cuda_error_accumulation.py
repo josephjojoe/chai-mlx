@@ -320,7 +320,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--weights-dir", type=Path, required=True)
     parser.add_argument("--npz", type=Path, required=True)
-    parser.add_argument("--compute-dtype", default=None, choices=["bfloat16", "float32"])
+    parser.add_argument("--compute-dtype", default=None, choices=["reference", "float32"])
     parser.add_argument("--mode", default="cascading", choices=["cascading", "isolated"])
     parser.add_argument("--skip-trunk", action="store_true")
     parser.add_argument("--skip-diffusion", action="store_true")
@@ -342,7 +342,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.weights_dir, strict=False, compute_dtype=args.compute_dtype
     )
     dtype = resolve_dtype(model.cfg)
-    dtype_name = "float32" if dtype == mx.float32 else "bfloat16"
+    dtype_name = "float32" if dtype == mx.float32 else "reference"
     print(f"  compute_dtype={dtype_name}")
 
     ctx = _reconstruct_feature_context(data)

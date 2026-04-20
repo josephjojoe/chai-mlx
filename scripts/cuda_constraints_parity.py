@@ -263,8 +263,10 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument(
         "--compute-dtype",
         default="float32",
-        choices=["float32", "bfloat16"],
-        help="Numeric dtype for the projection step (float32 gives tight bounds)",
+        choices=["float32", "reference"],
+        help='Precision policy for the projection step ("reference" matches '
+             'the mixed bf16/fp32 reference bundle; "float32" keeps MLX in '
+             "fp32 for tighter bounds)",
     )
     parser.add_argument(
         "--feature-dir",

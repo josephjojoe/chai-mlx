@@ -122,7 +122,7 @@ def test_inference_script_end_to_end_trpcage() -> None:
             "--num-steps", "200",
             "--num-samples", "1",
             "--esm-backend", "off",
-            "--dtype", "bfloat16",
+            "--dtype", "reference",
             "--seed", "42",
         ]
         # 10 min is plenty for a 20-residue target on M-series / H100;

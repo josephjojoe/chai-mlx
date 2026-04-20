@@ -139,7 +139,11 @@ class ChaiConfig:
     templates: TemplateConfig = field(default_factory=TemplateConfig)
     msa: MSAConfig = field(default_factory=MSAConfig)
     confidence: ConfidenceConfig = field(default_factory=ConfidenceConfig)
-    compute_dtype: str = "bfloat16"
+    # Precision policy name. ``"reference"`` mirrors the reference bundle's
+    # mixed-precision boundary (bf16 trunk/confidence with fp32 diffusion and
+    # other preserved fp32 parameters); ``"float32"`` keeps the MLX port in
+    # full precision throughout.
+    compute_dtype: str = "reference"
     supported_token_sizes: Sequence[int] = (256, 384, 512, 768, 1024, 1536, 2048)
     template_restype_vocab: int = 33
     template_restype_embed_dim: int = 32

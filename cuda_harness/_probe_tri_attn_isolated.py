@@ -70,7 +70,7 @@ def main() -> None:
     print(f"dtype: {args.dtype}")
 
     mx_dtype = mx.bfloat16 if args.dtype == "bf16" else mx.float32
-    compute_dtype_str = "bfloat16" if args.dtype == "bf16" else "float32"
+    compute_dtype_str = "reference" if args.dtype == "bf16" else "float32"
 
     model = ChaiMLX.from_pretrained(args.weights_dir, strict=False, compute_dtype=compute_dtype_str)
     mm = model.trunk_module.msa_module

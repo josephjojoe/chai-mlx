@@ -86,7 +86,7 @@ def main() -> None:
     p.add_argument("--num-steps", type=int, required=True)
     p.add_argument("--num-recycles", type=int, required=True)
     p.add_argument("--num-samples", type=int, required=True)
-    p.add_argument("--dtype", required=True)
+    p.add_argument("--dtype", required=True, choices=["reference", "float32"])
     p.add_argument("--out-dir", type=Path, required=True)
     p.add_argument("--feature-dir", type=Path, required=True)
     p.add_argument("--esm-backend", choices=["off", "mlx", "mlx_cache"], required=True)
@@ -208,7 +208,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--num-steps", type=int, default=200)
     parser.add_argument("--num-recycles", type=int, default=3)
     parser.add_argument("--num-samples", type=int, default=5)
-    parser.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float32"])
+    parser.add_argument(
+        "--dtype",
+        default="reference",
+        choices=["reference", "float32"],
+        help='Precision policy: "reference" matches the reference bundle '
+             "(bf16 trunk/confidence, fp32 diffusion); "
+             '"float32" keeps the MLX port in fp32.',
+    )
     parser.add_argument("--mlx-dir", type=Path, default=Path("/tmp/chai_mlx_cuda/mlx_expanded"))
     parser.add_argument("--feature-dir", type=Path, default=Path("/tmp/chai_mlx_cuda/mlx_expanded_features"))
     parser.add_argument("--esm-backend", choices=["off", "mlx", "mlx_cache"], default="off")

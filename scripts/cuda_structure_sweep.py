@@ -37,7 +37,7 @@ Usage
         --weights-dir weights \\
         --reference-dir /tmp/chai_mlx_cuda/reference \\
         --mlx-output-dir /tmp/chai_mlx_cuda/mlx \\
-        --mlx-dtypes bfloat16 \\
+        --mlx-dtypes reference \\
         --compare-pdb \\
         --csv /tmp/chai_mlx_cuda/structure_sweep.csv
 """
@@ -557,7 +557,12 @@ def main(argv: Iterable[str] | None = None) -> None:
         help="Directory to write local MLX CIF outputs",
     )
     parser.add_argument("--feature-dir", type=Path, default=Path("/tmp/chai_mlx_cuda/mlx_features"))
-    parser.add_argument("--mlx-dtypes", nargs="+", default=["bfloat16"])
+    parser.add_argument(
+        "--mlx-dtypes",
+        nargs="+",
+        default=["reference"],
+        choices=["reference", "float32"],
+    )
     parser.add_argument("--num-steps", type=int, default=200)
     parser.add_argument("--num-recycles", type=int, default=3)
     parser.add_argument(

@@ -66,7 +66,7 @@ def main() -> None:
     ap.add_argument("--dtype", choices=["fp32", "bf16"], default="fp32")
     args = ap.parse_args()
 
-    compute_dtype_str = "float32" if args.dtype == "fp32" else "bfloat16"
+    compute_dtype_str = "float32" if args.dtype == "fp32" else "reference"
     mx_dtype = mx.float32 if args.dtype == "fp32" else mx.bfloat16
 
     print(f"[load] {args.npz}")

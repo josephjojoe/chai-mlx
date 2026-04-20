@@ -68,8 +68,9 @@ atomics; it does *not* move anything between bf16 and fp32.
 
 Implications for the MLX parity experiments:
 
-* At ``--compute-dtype bfloat16`` the MLX trunk and confidence head
-  match the reference's dtype policy directly.
+* At ``--compute-dtype reference`` the MLX trunk and confidence head
+  match the reference's precision policy directly (that mode uses bf16
+  there and keeps diffusion in fp32).
 * At ``--compute-dtype float32`` the MLX side runs matmuls in fp32
   while CUDA's scripted graph still casts to bf16 inside the module
   before every linear. Non-zero error at the trunk boundary is

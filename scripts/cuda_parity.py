@@ -36,7 +36,7 @@ Usage
     python scripts/cuda_parity.py \\
         --weights-dir weights \\
         --npz /tmp/chai_mlx_cuda/intermediates/1L2Y/seed_42.npz \\
-        --compute-dtype bfloat16
+        --compute-dtype reference
 
 Precision notes: the reference trunk / token embedder / confidence
 head graphs bake in ``torch.autocast("cuda", dtype=torch.bfloat16)``
@@ -45,9 +45,10 @@ layer_norm / softmax (fp32). The reference diffusion module runs in
 pure fp32. See ``cuda_harness.run_intermediates`` for the full
 precision write-up.
 
-``--compute-dtype bfloat16`` matches the reference's dtype policy
-directly for the trunk and confidence stages. ``--compute-dtype
-float32`` is useful as a diagnostic (it rules out MLX-side bf16
+``--compute-dtype reference`` matches the reference's precision policy
+directly for the trunk and confidence stages (that mode uses bf16 there
+and keeps diffusion in fp32). ``--compute-dtype float32`` is useful as a
+diagnostic (it rules out MLX-side bf16
 accumulation as a cause) but is *not* bit-identical against CUDA
 even on algorithmic ops: CUDA's scripted module still casts to bf16
 inside the graph before every linear, while MLX at float32 does not.
@@ -714,7 +715,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--weights-dir", type=Path, required=True)
     parser.add_argument("--npz", type=Path, required=True, help="intermediates bundle from run_intermediates.py")
-    parser.add_argument("--compute-dtype", default=None, choices=["bfloat16", "float32"])
+    parser.add_argument("--compute-dtype", default=None, choices=["reference", "float32"])
     parser.add_argument("--skip-embedding", action="store_true")
     parser.add_argument("--skip-trunk", action="store_true")
     parser.add_argument("--skip-diffusion", action="store_true")
@@ -740,7 +741,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.weights_dir, strict=False, compute_dtype=args.compute_dtype
     )
     dtype = resolve_dtype(model.cfg)
-    dtype_name = "float32" if dtype == mx.float32 else "bfloat16"
+    dtype_name = "float32" if dtype == mx.float32 else "reference"
     print(f"  compute_dtype={dtype_name}")
 
     tols = {

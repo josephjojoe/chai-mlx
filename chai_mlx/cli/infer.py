@@ -76,7 +76,14 @@ def _parse_args(argv: "list[str] | None" = None) -> argparse.Namespace:
                            "at the top level.")
 
     model = parser.add_argument_group("model / sampling")
-    model.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float32"])
+    model.add_argument(
+        "--dtype",
+        default="reference",
+        choices=["reference", "float32"],
+        help='Precision policy: "reference" matches the reference bundle '
+             "(bf16 trunk/confidence, fp32 diffusion); "
+             '"float32" keeps the MLX port in fp32.',
+    )
     model.add_argument("--recycles", type=int, default=3,
                        help="Number of trunk recycles (chai-1 'num_trunk_recycles').")
     model.add_argument("--num-steps", type=int, default=200,

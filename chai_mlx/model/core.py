@@ -217,8 +217,9 @@ class ChaiMLX(nn.Module):
         ----------
         compute_dtype : str, optional
             Override the config's ``compute_dtype``.  Pass ``"float32"`` to
-            disable mixed precision, or ``"bfloat16"`` (the default in
-            :class:`ChaiConfig`) for half-precision inference.
+            keep the whole MLX port in fp32, or ``"reference"`` (the default
+            in :class:`ChaiConfig`) to mirror the reference bundle's mixed
+            bf16/fp32 precision policy.
         """
         path, cfg = load_pretrained_config(path_or_repo, compute_dtype=compute_dtype)
 

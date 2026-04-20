@@ -115,8 +115,8 @@ def test_run_inference_tiny_smoke() -> None:
     )
 
 
-def test_run_inference_tiny_smoke_mixed_precision_keeps_diffusion_fp32() -> None:
-    cfg = ChaiConfig(compute_dtype="bfloat16")
+def test_run_inference_tiny_smoke_reference_mode_keeps_diffusion_fp32() -> None:
+    cfg = ChaiConfig(compute_dtype="reference")
     model = ChaiMLX(cfg)
     _cast_weights(model, mx.bfloat16)
     ctx = _tiny_context(cfg)

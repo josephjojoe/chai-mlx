@@ -181,7 +181,7 @@ def main() -> None:
         help="Directory containing CUDA CIFs, e.g. /tmp/chai_mlx_cuda/reference/1L2Y/seed_42",
     )
     parser.add_argument(
-        "--compute-dtype", default=None, choices=["bfloat16", "float32"]
+        "--compute-dtype", default=None, choices=["reference", "float32"]
     )
     parser.add_argument(
         "--num-steps",
@@ -209,7 +209,7 @@ def main() -> None:
         args.weights_dir, strict=False, compute_dtype=args.compute_dtype
     )
     dtype = resolve_dtype(model.cfg)
-    print(f"  compute_dtype={'float32' if dtype == mx.float32 else 'bfloat16'}")
+    print(f"  compute_dtype={'float32' if dtype == mx.float32 else 'reference'}")
 
     ctx = _reconstruct_feature_context(data)
     cuda_emb = _reconstruct_embedding_outputs(data, ctx.structure_inputs, dtype=dtype)
@@ -324,7 +324,7 @@ def main() -> None:
         payload = {
             "npz": str(args.npz),
             "cuda_reference_dir": str(args.cuda_reference_dir),
-            "compute_dtype": "float32" if dtype == mx.float32 else "bfloat16",
+            "compute_dtype": "float32" if dtype == mx.float32 else "reference",
             "manifest": manifest,
             "mlx_seed": args.mlx_seed,
             "num_steps": num_steps,

@@ -129,9 +129,10 @@ result = model.run_inference(ctx, recycles=3, num_samples=5, num_steps=200)
 `ChaiMLX.from_pretrained(...)` accepts either a Hugging Face repo id (as
 above, via `huggingface_hub`) or a local directory containing
 `config.json` plus `model.safetensors` (or sharded safetensors with an
-index file). Pass `compute_dtype="float32"` to disable mixed-precision
-inference in the trunk / confidence paths; diffusion already runs in fp32
-to match the reference bundle.
+index file). The default `compute_dtype="reference"` matches the
+reference bundle's mixed-precision policy: bf16 trunk / confidence with
+fp32 diffusion and other preserved fp32 parameters. Pass
+`compute_dtype="float32"` to keep the MLX port in fp32 throughout.
 
 `model.run_inference_debug(...)` returns a superset `FoldOutputs` that
 retains the feature context, embeddings, and trunk intermediates
@@ -171,7 +172,8 @@ Common flags:
   `{seed, seed+1, …}`; when >1, outputs land under
   `out/trunk_{i}/` with the same layout as above
 - `--recycles 3 --num-steps 200` — chai-1 defaults
-- `--dtype bfloat16|float32` — mixed precision vs full-precision
+- `--dtype reference|float32` — reference mixed precision (bf16 trunk /
+  confidence, fp32 diffusion) vs all-fp32
 - `--constraint-path restraints.csv` — chai-lab contact + pocket +
   covalent-bond restraints
 - `--use-msa-server` / `--msa-directory <dir>` — online ColabFold vs

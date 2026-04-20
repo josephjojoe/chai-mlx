@@ -36,7 +36,7 @@ Usage
         --num-recycles 3 \\
         --num-repeats 3 \\
         --warmup 1 \\
-        --dtype bfloat16 \\
+        --dtype reference \\
         --output-json /tmp/chai_mlx_cuda/throughput/mlx.json
 
 Then combine the Modal CUDA output and the MLX output with
@@ -318,7 +318,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--num-recycles", type=int, default=3)
     parser.add_argument("--num-repeats", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=1)
-    parser.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float32"])
+    parser.add_argument("--dtype", default="reference", choices=["reference", "float32"])
     parser.add_argument("--feature-dir", type=Path, default=Path("/tmp/chai_mlx_cuda/mlx_bench_features"))
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--output-csv", type=Path, default=None)

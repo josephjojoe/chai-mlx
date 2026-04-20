@@ -147,7 +147,7 @@ def main() -> None:
         print(f"\n=== {dtype_name} ===")
         model = ChaiMLX.from_pretrained(
             "weights",
-            compute_dtype="float32" if dtype_name == "fp32" else "bfloat16",
+            compute_dtype="float32" if dtype_name == "fp32" else "reference",
         )
         outputs = _run_block_0(model, inputs, dtype)
         out_path = OUT_DIR / f"mlx_out_{dtype_name}.npz"

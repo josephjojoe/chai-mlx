@@ -11,14 +11,13 @@ if TYPE_CHECKING:
 
 
 _DTYPE_MAP = {
-    "bfloat16": mx.bfloat16,
-    "float16": mx.float16,
+    "reference": mx.bfloat16,
     "float32": mx.float32,
 }
 
 
 def resolve_dtype(cfg_or_str: "ChaiConfig | str") -> mx.Dtype:
-    """Resolve a config or string dtype name to an ``mx.Dtype``."""
+    """Resolve a compute policy name to the MLX dtype used for casts."""
     name = cfg_or_str if isinstance(cfg_or_str, str) else cfg_or_str.compute_dtype
     try:
         return _DTYPE_MAP[name]
