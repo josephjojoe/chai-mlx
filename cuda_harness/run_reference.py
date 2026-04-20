@@ -112,6 +112,8 @@ def cuda_inference(
     run_id: str,
     constraint_csv_bytes: bytes | None = None,
     use_esm_embeddings: bool = False,
+    use_msa_server: bool = False,
+    use_templates_server: bool = False,
 ) -> dict:
     """Run one CUDA chai-lab inference and return bytes for every sample."""
     import time
@@ -149,8 +151,8 @@ def cuda_inference(
         fasta_file=fasta_path,
         output_dir=output_dir,
         use_esm_embeddings=use_esm_embeddings,
-        use_msa_server=False,
-        use_templates_server=False,
+        use_msa_server=use_msa_server,
+        use_templates_server=use_templates_server,
         constraint_path=constraint_path,
         # Use FASTA entity names as chain IDs so constraint CSVs can
         # reference chains by the labels the user wrote in the FASTA
@@ -226,6 +228,8 @@ def run_reference(
     ensure_weights: bool = True,
     constraint_resource: str | None = None,
     use_esm_embeddings: bool = False,
+    use_msa_server: bool = False,
+    use_templates_server: bool = False,
 ) -> None:
     targets_list: list[str] = [t.strip() for t in targets.split(",") if t.strip()]
     seeds_list: list[int] = [int(s.strip()) for s in seeds.split(",") if s.strip()]
@@ -260,6 +264,8 @@ def run_reference(
                 run_id=rid,
                 constraint_csv_bytes=constraint_bytes,
                 use_esm_embeddings=use_esm_embeddings,
+                use_msa_server=use_msa_server,
+                use_templates_server=use_templates_server,
             )
             dst = _save_run(result, target, output_dir_path)
             print(

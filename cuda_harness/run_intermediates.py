@@ -38,10 +38,17 @@ Usage
 Notes
 -----
 
-This captures intermediates under the **same bf16 mixed-precision policy**
-chai-lab uses in production — it does not force fp32.  That means the
-tensors you diff against on MLX are the ones CUDA would produce in a real
-inference, including any bf16 rounding from cuDNN fused kernels.
+This captures intermediates under **chai-lab's default runtime
+precision policy**, which is fp32 end-to-end: chai-lab's
+``chai1.py`` has no ``torch.autocast`` and no bf16 casts, and the
+exported ``trunk.pt`` / ``diffusion_module.pt`` graphs are
+1398/1398 and 343/343 fp32 tensors respectively (see HANDOFF.md
+§3.4).  The tensors you diff against on MLX are therefore what
+CUDA produces in a real inference: fp32 activations × fp32
+weights, including whatever intra-kernel bf16 or TF32 reductions
+cuBLAS/cuDNN silently apply on Ampere/Hopper.  (The precision
+policy knob controls *those* silent reductions via TF32 flags;
+it does not change the activation or weight dtype.)
 
 We reproduce the main chai-lab inference flow explicitly rather than
 monkey-patching ``run_folding_on_context``.  This is intentional: the

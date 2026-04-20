@@ -46,7 +46,11 @@ app = modal.App(name="chai-mlx-cuda")
 image = (
     modal.Image.debian_slim(python_version="3.12")
     # uv needs git on PATH to install a VCS spec; debian_slim doesn't ship it.
-    .apt_install("git")
+    # kalign>=3.3 is required by chai-lab whenever ``use_templates_server=True``
+    # (see chai_lab/tools/kalign.py) because the online-templates path
+    # aligns each hit against the query sequence. debian_slim ships
+    # kalign>=3.3 in its default repos.
+    .apt_install("git", "kalign")
     .uv_pip_install(
         # Install chai-lab from the same upstream commit our local checkout
         # is pinned at (post-v0.6.1 main, with PR #360's `_component_moved_to`
@@ -400,6 +404,142 @@ DEFAULT_TARGETS: dict[str, Target] = {
         description="Crambin + bridging ligand + synthetic restraints",
         kinds=frozenset({"constraints", "ligand"}),
         constraint_resource="1CRN_all_three.csv",
+    ),
+
+    # -- RNA --------------------------------------------------------------
+    # 2KOC: 14-nucleotide RNA hairpin (NMR ensemble). The sequence uses
+    # only the canonical ACGU alphabet -- no post-transcriptionally
+    # modified nucleotides -- so comparing our canonical-base prediction
+    # against the experimental structure is a clean test.
+    #
+    # Why not 1EHZ (yeast tRNA-Phe): tRNA structures are heavily
+    # modified (D, Psi, m2G, T, etc.) and those modifications shape the
+    # TPsiC / D-loops. chai-lab's FASTA front-end only accepts the 4-
+    # letter canonical alphabet for RNA (see
+    # residue_constants.residue_types_with_nucleotides), so a tRNA
+    # prediction is lying to the model about the sequence. 2KOC has no
+    # such ambiguity.
+    "2KOC": _target(
+        "2KOC",
+        (
+            (
+                "rna",
+                "2KOC",
+                "GGCACUUCGGUGCC",
+            ),
+        ),
+        description="14-nt RNA hairpin (PDB 2KOC, NMR)",
+        kinds=frozenset({"rna"}),
+    ),
+
+    # -- Glycan -----------------------------------------------------------
+    # UBQG: synthetic small glycan target. Ubiquitin (76 aa, same
+    # sequence as the 1UBQ monomer in this slate) with a single NAG
+    # attached to Asn-25 via an N-linked covalent bond. The protein
+    # chain is 76 aa and the whole complex fits in the 256-token crop,
+    # so this is cheap to run on a 16 GB Mac.
+    #
+    # This is a pure compute target for the glycan + covalent-bond
+    # code path. The full-scale 1AC5 glycan archetype (483-aa
+    # carboxypeptidase-Y + two N-linked glycans, 768-token crop) was
+    # previously in this slate as a CUDA-only row, but has been
+    # retired — see HANDOFF §1.1b. UBQG is sufficient to validate
+    # the covalent-bond + glycan feature path two-sided on a 16 GB
+    # Mac; users with larger machines can add 1AC5 back locally by
+    # appending a target definition in their own code.
+    "UBQG": _target(
+        "UBQG",
+        (
+            (
+                "protein",
+                "UBQG",
+                "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG",
+            ),
+            ("glycan", "NAG1", "NAG"),
+        ),
+        description="Ubiquitin + single NAG glycan (synthetic small target for the glycan code path)",
+        kinds=frozenset({"glycan", "ligand", "constraints"}),
+        constraint_resource="UBQG_glycan.csv",
+    ),
+
+    # -- Tier-2 two-sided parity smokes -----------------------------------
+    # The three targets below (PTM, multi-ligand, large ligand) each
+    # exercise an entity-dispatch code path that HANDOFF §1.11 ran
+    # MLX-side only. Adding them to DEFAULT_TARGETS lets the same
+    # Modal harness run them on CUDA so we can do a head-to-head
+    # MLX↔CUDA comparison via scripts/cuda_structure_sweep.py.
+    #
+    # PTM target ("PTM1"): 40-aa synthetic serum-albumin prefix
+    # with an inline [SEP] phosphoserine at position 15. The
+    # MLX-side featurizer requires ``CHAI_MLX_ALLOW_MODIFIED_RESIDUES=1``
+    # to bypass the fail-fast validator; the CUDA-side featurizer
+    # (chai-lab upstream) accepts the bracketed token directly.
+    "PTM1": _target(
+        "PTM1",
+        (
+            (
+                "protein",
+                "PTM1",
+                "MKWVTFISLLLLFS[SEP]AYSRGVFRRDAHKSEVAHRFKDLGEE",
+            ),
+        ),
+        description="40-aa protein with inline [SEP] phosphoserine (T2-3 PTM smoke)",
+        kinds=frozenset({"monomer", "ptm"}),
+    ),
+
+    # Multi-ligand ("LYSM"): hen egg-white lysozyme (129 aa) with
+    # two distinct ligands (NAG + FRC). Exercises the multi-ligand
+    # entity-dispatch path that previously had no CUDA parity run.
+    "LYSM": _target(
+        "LYSM",
+        (
+            (
+                "protein",
+                "LYSM",
+                "KVFGRCELAAAMKRHGLDNYRGYSLGNWVCAAKFESNFNTQATNRNTDGSTDYGILQINSR"
+                "WWCNDGRTPGSRNLCNIPCSALLSSDITASVNCAKKIVSDGNGMNAWVAWRNRCKGTDVQA"
+                "WIRGCRL",
+            ),
+            (
+                "ligand",
+                "NAG",
+                "OC[C@H]1O[C@H](O)[C@H](NC(C)=O)[C@@H](O)[C@@H]1O",
+            ),
+            (
+                "ligand",
+                "FRC",
+                "OC[C@@H]1OC(=O)[C@H](O)[C@@H](O)[C@H]1O",
+            ),
+        ),
+        description="Lysozyme + NAG + fructose (T2-4 multi-ligand smoke)",
+        kinds=frozenset({"ligand", "multiligand"}),
+    ),
+
+    # Large ligand ("BIGL"): 18-aa protein + 162-heavy-atom
+    # bis-aromatic PEG chain (simulates a long-linker PROTAC). The
+    # ligand heavy-atom count is ~3× the largest in the core slate
+    # (FK506 = 51 atoms), so this exercises the atom-attention
+    # encoder's 128-key / 32-query block structure near its budget.
+    "BIGL": _target(
+        "BIGL",
+        (
+            ("protein", "BIGL", "MKWVTFISLLLLFSSAYS"),
+            # Two aromatic rings bridging 50 ethylene-glycol units;
+            # 162 heavy atoms total (12 from the two benzenes + 150
+            # from 50 × OCC). The original T2-5 smoke in HANDOFF §1.11
+            # used the same SMILES. Built programmatically so the
+            # repeat count is explicit and audit-friendly.
+            (
+                "ligand",
+                "L1",
+                "c1ccccc1" + "OCC" * 50 + "c1ccccc1",
+            ),
+        ),
+        description=(
+            "18-aa protein + 162-heavy-atom bis-aromatic PEG ligand "
+            "(T2-5 large-ligand smoke)"
+        ),
+        kinds=frozenset({"ligand", "largeligand"}),
     ),
 }
 
