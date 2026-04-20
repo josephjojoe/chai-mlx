@@ -1,0 +1,427 @@
+=== token_embedder.token_single_input_emb.atom_encoder.to_atom_cond ===
+def forward(self,
+    atom_single_input_feats: Tensor) -> Tensor:
+  weight = self.weight
+  x = torch.linear(atom_single_input_feats, torch.to(weight, 15))
+  return x
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.pair_update_block ===
+def forward(self,
+    input: Tensor,
+    input0: Tensor,
+    block_atom_pair_feat: Tensor) -> Tensor:
+  atom_pair_mlp = self.atom_pair_mlp
+  atom_single_to_atom_pair_proj_w = self.atom_single_to_atom_pair_proj_w
+  atom_single_to_atom_pair_proj_h = self.atom_single_to_atom_pair_proj_h
+  _0 = (atom_single_to_atom_pair_proj_h).forward(input, )
+  _1 = (atom_single_to_atom_pair_proj_w).forward(input0, )
+  _2 = torch.unsqueeze(block_atom_pair_feat, 1)
+  element = ops.prim.NumToTensor(torch.size(_0, 0))
+  element0 = ops.prim.NumToTensor(torch.size(_0, 1))
+  element1 = ops.prim.NumToTensor(torch.size(_0, 2))
+  element2 = ops.prim.NumToTensor(torch.size(_0, 3))
+  element3 = ops.prim.NumToTensor(torch.size(_0, 4))
+  _3 = int(torch.mul(element, CONSTANTS.c0))
+  _4 = int(torch.mul(element0, CONSTANTS.c0))
+  _5 = int(torch.mul(element1, CONSTANTS.c0))
+  _6 = int(torch.mul(element2, CONSTANTS.c0))
+  _7 = int(torch.mul(element3, CONSTANTS.c0))
+  _8 = torch.reshape(_0, [_3, _4, _5, _6, 1, _7])
+  _9 = torch.add(_2, _8)
+  element4 = ops.prim.NumToTensor(torch.size(_1, 0))
+  element5 = ops.prim.NumToTensor(torch.size(_1, 1))
+  element6 = ops.prim.NumToTensor(torch.size(_1, 2))
+  element7 = ops.prim.NumToTensor(torch.size(_1, 3))
+  element8 = ops.prim.NumToTensor(torch.size(_1, 4))
+  _10 = int(torch.mul(element4, CONSTANTS.c0))
+  _11 = int(torch.mul(element5, CONSTANTS.c0))
+  _12 = int(torch.mul(element6, CONSTANTS.c0))
+  _13 = int(torch.mul(element7, CONSTANTS.c0))
+  _14 = int(torch.mul(element8, CONSTANTS.c0))
+  _15 = torch.reshape(_1, [_10, _11, _12, 1, _13, _14])
+  input1 = torch.add(_9, _15)
+  x = torch.add_((atom_pair_mlp).forward(input1, ), input1)
+  return x
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.pair_update_block.atom_single_to_atom_pair_proj_h ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  return (_1).forward((_0).forward(input, ), )
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.pair_update_block.atom_single_to_atom_pair_proj_h.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  return torch.relu(input)
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.pair_update_block.atom_single_to_atom_pair_proj_h.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  x = torch.linear(torch.to(argument_1, 15), _0)
+  return x
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.pair_update_block.atom_single_to_atom_pair_proj_w ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  return (_1).forward((_0).forward(input, ), )
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.pair_update_block.atom_single_to_atom_pair_proj_w.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  return torch.relu(input)
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.pair_update_block.atom_single_to_atom_pair_proj_w.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  x = torch.linear(torch.to(argument_1, 15), _0)
+  return x
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.pair_update_block.atom_pair_mlp ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  _2 = getattr(self, "2")
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  _3 = (_2).forward((_1).forward((_0).forward(input, ), ), )
+  return _3
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.pair_update_block.atom_pair_mlp.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  input0 = torch.linear(input, torch.to(weight, 15))
+  return input0
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.pair_update_block.atom_pair_mlp.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.relu_(argument_1)
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.pair_update_block.atom_pair_mlp.2 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.linear(argument_1, torch.to(weight, 15))
+  return _0
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.transitions.0.ada_ln.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  return torch.linear(torch.to(input, 15), _0)
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.transitions.0.linear_a_nobias_double ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  return torch.linear(torch.to(input, 15), _0)
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.transitions.0.linear_b_nobias ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.linear(input, torch.to(weight, 15))
+  return _0
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.transitions.0.linear_s_biasinit_m2 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  bias = self.bias
+  _0 = torch.to(bias, 15)
+  _1 = torch.to(weight, 15)
+  out = torch.linear(torch.to(input, 15), _1, _0)
+  return out
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.transitions.1.ada_ln.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  return torch.linear(torch.to(input, 15), _0)
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.transitions.1.linear_a_nobias_double ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  return torch.linear(torch.to(input, 15), _0)
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.transitions.1.linear_b_nobias ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.linear(input, torch.to(weight, 15))
+  return _0
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.transitions.1.linear_s_biasinit_m2 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  bias = self.bias
+  _0 = torch.to(bias, 15)
+  _1 = torch.to(weight, 15)
+  out = torch.linear(torch.to(input, 15), _1, _0)
+  return out
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.transitions.2.ada_ln.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  return torch.linear(torch.to(input, 15), _0)
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.transitions.2.linear_a_nobias_double ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  return torch.linear(torch.to(input, 15), _0)
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.transitions.2.linear_b_nobias ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.linear(input, torch.to(weight, 15))
+  return _0
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.transitions.2.linear_s_biasinit_m2 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  bias = self.bias
+  _0 = torch.to(bias, 15)
+  _1 = torch.to(weight, 15)
+  out = torch.linear(torch.to(input, 15), _1, _0)
+  return out
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.local_attentions.0.single_layer_norm.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  return torch.linear(torch.to(input, 15), _0)
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.local_attentions.0.to_qkv ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  post_rearrange = self.post_rearrange
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  x = torch.einsum("eda,fbca->febdc", _0)
+  return (post_rearrange).forward(x, )
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.local_attentions.0.to_qkv.post_rearrange ===
+def forward(self,
+    x: Tensor) -> Tensor:
+  element = ops.prim.NumToTensor(torch.size(x, 0))
+  element0 = ops.prim.NumToTensor(torch.size(x, 1))
+  element1 = ops.prim.NumToTensor(torch.size(x, 2))
+  element2 = ops.prim.NumToTensor(torch.size(x, 3))
+  element3 = ops.prim.NumToTensor(torch.size(x, 4))
+  _0 = int(torch.mul(element, CONSTANTS.c0))
+  result = torch.mul(element0, CONSTANTS.c0)
+  _1 = int(torch.mul_(result, element1))
+  _2 = int(torch.mul(element2, CONSTANTS.c0))
+  _3 = int(torch.mul(element3, CONSTANTS.c0))
+  return torch.reshape(x, [_0, _1, _2, _3])
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.local_attentions.0.out_proj ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  bias = self.bias
+  _0 = torch.to(bias, 15)
+  _1 = torch.to(weight, 15)
+  _2 = torch.linear(torch.to(input, 15), _1, _0)
+  return _2
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.local_attentions.1.single_layer_norm.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  return torch.linear(torch.to(input, 15), _0)
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.local_attentions.1.to_qkv ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  post_rearrange = self.post_rearrange
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  x = torch.einsum("eda,fbca->febdc", _0)
+  return (post_rearrange).forward(x, )
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.local_attentions.1.to_qkv.post_rearrange ===
+def forward(self,
+    x: Tensor) -> Tensor:
+  element = ops.prim.NumToTensor(torch.size(x, 0))
+  element0 = ops.prim.NumToTensor(torch.size(x, 1))
+  element1 = ops.prim.NumToTensor(torch.size(x, 2))
+  element2 = ops.prim.NumToTensor(torch.size(x, 3))
+  element3 = ops.prim.NumToTensor(torch.size(x, 4))
+  _0 = int(torch.mul(element, CONSTANTS.c0))
+  result = torch.mul(element0, CONSTANTS.c0)
+  _1 = int(torch.mul_(result, element1))
+  _2 = int(torch.mul(element2, CONSTANTS.c0))
+  _3 = int(torch.mul(element3, CONSTANTS.c0))
+  return torch.reshape(x, [_0, _1, _2, _3])
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.local_attentions.1.out_proj ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  bias = self.bias
+  _0 = torch.to(bias, 15)
+  _1 = torch.to(weight, 15)
+  _2 = torch.linear(torch.to(input, 15), _1, _0)
+  return _2
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.local_attentions.2.single_layer_norm.lin_s_merged ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.to(weight, 15)
+  return torch.linear(torch.to(input, 15), _0)
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.local_attentions.2.to_qkv ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  post_rearrange = self.post_rearrange
+  weight = self.weight
+  _0 = [torch.to(argument_1, 15), torch.to(weight, 15)]
+  x = torch.einsum("eda,fbca->febdc", _0)
+  return (post_rearrange).forward(x, )
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.local_attentions.2.to_qkv.post_rearrange ===
+def forward(self,
+    x: Tensor) -> Tensor:
+  element = ops.prim.NumToTensor(torch.size(x, 0))
+  element0 = ops.prim.NumToTensor(torch.size(x, 1))
+  element1 = ops.prim.NumToTensor(torch.size(x, 2))
+  element2 = ops.prim.NumToTensor(torch.size(x, 3))
+  element3 = ops.prim.NumToTensor(torch.size(x, 4))
+  _0 = int(torch.mul(element, CONSTANTS.c0))
+  result = torch.mul(element0, CONSTANTS.c0)
+  _1 = int(torch.mul_(result, element1))
+  _2 = int(torch.mul(element2, CONSTANTS.c0))
+  _3 = int(torch.mul(element3, CONSTANTS.c0))
+  return torch.reshape(x, [_0, _1, _2, _3])
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.local_attentions.2.out_proj ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  bias = self.bias
+  _0 = torch.to(bias, 15)
+  _1 = torch.to(weight, 15)
+  _2 = torch.linear(torch.to(input, 15), _1, _0)
+  return _2
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.atom_transformer.local_diffn_transformer.blocked_pairs2blocked_bias.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  bias = self.bias
+  weight = self.weight
+  _0 = torch.layer_norm(torch.to(input, 6), [16], weight, bias)
+  return _0
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.to_token_single ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  _1 = getattr(self, "1")
+  _0 = getattr(self, "0")
+  return (_1).forward((_0).forward(input, ), )
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.to_token_single.0 ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  input0 = torch.linear(input, torch.to(weight, 15))
+  return input0
+
+
+=== token_embedder.token_single_input_emb.atom_encoder.to_token_single.1 ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  return torch.relu_(argument_1)
+
+
+=== token_embedder.token_single_proj_in_trunk ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  input0 = torch.linear(input, torch.to(weight, 15))
+  return input0
+
+
+=== token_embedder.token_single_proj_in_structure ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.linear(input, torch.to(weight, 15))
+  return _0
+
+
+=== token_embedder.token_pair_proj_in_trunk ===
+def forward(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.linear(input, torch.to(weight, 15))
+  return _0
+
+
+=== token_embedder.token_single_to_token_pair_outer_sum_proj ===
+def forward(self,
+    argument_1: Tensor) -> Tensor:
+  weight = self.weight
+  _0 = torch.linear(argument_1, torch.to(weight, 15))
+  return _0
+

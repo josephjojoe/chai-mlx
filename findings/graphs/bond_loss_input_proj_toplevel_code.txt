@@ -1,0 +1,62 @@
+=== bond_loss_input_proj.forward_256 ===
+def forward_256(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== bond_loss_input_proj.forward_384 ===
+def forward_384(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== bond_loss_input_proj.forward_512 ===
+def forward_512(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== bond_loss_input_proj.forward_768 ===
+def forward_768(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== bond_loss_input_proj.forward_1024 ===
+def forward_1024(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== bond_loss_input_proj.forward_1536 ===
+def forward_1536(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== bond_loss_input_proj.forward_2048 ===
+def forward_2048(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== bond_loss_input_proj.forward_2560 ===
+def forward_2560(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+
+
+=== bond_loss_input_proj.forward_3072 ===
+def forward_3072(self,
+    input: Tensor) -> Tensor:
+  weight = self.weight
+  return torch.linear(input, weight)
+

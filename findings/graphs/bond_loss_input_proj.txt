@@ -1,0 +1,80 @@
+=== bond_loss_input_proj.forward_256 ===
+graph(%self.1 : __torch__.torch.nn.modules.linear.Linear,
+      %input.1 : Tensor):
+  %6 : NoneType = prim::Constant()
+  %weight.1 : Tensor = prim::GetAttr[name="weight"](%self.1)
+  %7 : Tensor = aten::linear(%input.1, %weight.1, %6) # code/__torch__/torch/nn/modules/linear.py:10:11
+  return (%7)
+
+
+=== bond_loss_input_proj.forward_384 ===
+graph(%self.1 : __torch__.torch.nn.modules.linear.Linear,
+      %input.1 : Tensor):
+  %6 : NoneType = prim::Constant()
+  %weight.1 : Tensor = prim::GetAttr[name="weight"](%self.1)
+  %7 : Tensor = aten::linear(%input.1, %weight.1, %6) # code/__torch__/torch/nn/modules/linear.py:14:11
+  return (%7)
+
+
+=== bond_loss_input_proj.forward_512 ===
+graph(%self.1 : __torch__.torch.nn.modules.linear.Linear,
+      %input.1 : Tensor):
+  %6 : NoneType = prim::Constant()
+  %weight.1 : Tensor = prim::GetAttr[name="weight"](%self.1)
+  %7 : Tensor = aten::linear(%input.1, %weight.1, %6) # code/__torch__/torch/nn/modules/linear.py:18:11
+  return (%7)
+
+
+=== bond_loss_input_proj.forward_768 ===
+graph(%self.1 : __torch__.torch.nn.modules.linear.Linear,
+      %input.1 : Tensor):
+  %6 : NoneType = prim::Constant()
+  %weight.1 : Tensor = prim::GetAttr[name="weight"](%self.1)
+  %7 : Tensor = aten::linear(%input.1, %weight.1, %6) # code/__torch__/torch/nn/modules/linear.py:22:11
+  return (%7)
+
+
+=== bond_loss_input_proj.forward_1024 ===
+graph(%self.1 : __torch__.torch.nn.modules.linear.Linear,
+      %input.1 : Tensor):
+  %6 : NoneType = prim::Constant()
+  %weight.1 : Tensor = prim::GetAttr[name="weight"](%self.1)
+  %7 : Tensor = aten::linear(%input.1, %weight.1, %6) # code/__torch__/torch/nn/modules/linear.py:26:11
+  return (%7)
+
+
+=== bond_loss_input_proj.forward_1536 ===
+graph(%self.1 : __torch__.torch.nn.modules.linear.Linear,
+      %input.1 : Tensor):
+  %6 : NoneType = prim::Constant()
+  %weight.1 : Tensor = prim::GetAttr[name="weight"](%self.1)
+  %7 : Tensor = aten::linear(%input.1, %weight.1, %6) # code/__torch__/torch/nn/modules/linear.py:30:11
+  return (%7)
+
+
+=== bond_loss_input_proj.forward_2048 ===
+graph(%self.1 : __torch__.torch.nn.modules.linear.Linear,
+      %input.1 : Tensor):
+  %6 : NoneType = prim::Constant()
+  %weight.1 : Tensor = prim::GetAttr[name="weight"](%self.1)
+  %7 : Tensor = aten::linear(%input.1, %weight.1, %6) # code/__torch__/torch/nn/modules/linear.py:34:11
+  return (%7)
+
+
+=== bond_loss_input_proj.forward_2560 ===
+graph(%self.1 : __torch__.torch.nn.modules.linear.Linear,
+      %input.1 : Tensor):
+  %6 : NoneType = prim::Constant()
+  %weight.1 : Tensor = prim::GetAttr[name="weight"](%self.1)
+  %7 : Tensor = aten::linear(%input.1, %weight.1, %6) # code/__torch__/torch/nn/modules/linear.py:38:11
+  return (%7)
+
+
+=== bond_loss_input_proj.forward_3072 ===
+graph(%self.1 : __torch__.torch.nn.modules.linear.Linear,
+      %input.1 : Tensor):
+  %6 : NoneType = prim::Constant()
+  %weight.1 : Tensor = prim::GetAttr[name="weight"](%self.1)
+  %7 : Tensor = aten::linear(%input.1, %weight.1, %6) # code/__torch__/torch/nn/modules/linear.py:42:11
+  return (%7)
+
