@@ -19,7 +19,13 @@ dependencies = [
 [project.optional-dependencies]
 featurize = [
   "torch>=2.0",
-  "chai_lab",
+  # Pinned to the same commit the Modal image uses
+  # (cuda_harness/modal_common.py). This is post-v0.6.1 main + PR #360's
+  # ``_component_moved_to`` helper + PR #415's gemmi-0.7 support. The
+  # bare PyPI ``chai_lab`` drifts away from this API over time, so
+  # freshly installed envs will silently break featurize_fasta without
+  # the pin.
+  "chai_lab @ git+https://github.com/chaidiscovery/chai-lab@61036259c98222160963cb780750e354876ce485",
 ]
 convert = [
   "torch>=2.0",
@@ -29,7 +35,12 @@ test = [
   "pytest",
 ]
 esm = [
-  "esm-mlx @ file://./esm-mlx",
+  # ``file://./esm-mlx`` only resolves when installing from a clone with
+  # the submodule present at ./esm-mlx relative to the install-time cwd.
+  # Switch to a pinned git URL so ``pip install chai-mlx[esm]`` works
+  # from PyPI / bare git installs too. Commit is the same one
+  # .gitmodules tracks and HANDOFF §5.6 validates.
+  "esm-mlx @ git+https://github.com/josephjojoe/esm-mlx@8d9adf42fc2b6745d807978ef590d70184f79531",
 ]
 cuda-harness = [
   "modal>=1.3",
@@ -38,6 +49,9 @@ cuda-harness = [
 ]
 
 [project.scripts]
+chai-mlx-infer = "chai_mlx.cli.infer:main"
+chai-mlx-precompute-esm = "chai_mlx.cli.precompute_esm_impl:main"
+chai-mlx-sweep = "chai_mlx.cli.sweep_impl:main"
 chai-mlx-export-torchscript = "chai_mlx.io.weights.export_torchscript:main"
 chai-mlx-convert-torchscript = "chai_mlx.io.weights.convert_torchscript:main"
 chai-mlx-convert-npz = "chai_mlx.io.weights.convert_npz:main"
@@ -47,3 +61,6 @@ include = ["chai_mlx*", "cuda_harness*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "slow: opt-in end-to-end tests that download HF weights and run the real pipeline. Run with `CHAI_MLX_RUN_SLOW=1 pytest -q -m slow`.",
+]
