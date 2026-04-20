@@ -29,12 +29,21 @@ took to prove that the port is actually faithful.
   vs **0.57 Å** for CUDA against the NMR ground truth. MLX sits ~0.26 Å
   further from experimental truth than CUDA on average, with
   **GDT-TS = 95.1%** and **Cα lDDT = 89.8%** between the two implementations.
-- The remaining gap is dominated by bf16 fused-kernel rounding accumulating
-  through the 48-block pairformer trunk (inherent to running bf16 on two
-  different implementations), plus per-step diffusion RNG differences
-  between `mx.random.normal` and `torch.randn`. Neither is a structural
-  bug, and running MLX at `compute_dtype="float32"` does not meaningfully
-  shrink the gap.
+- The remaining gap is dominated by TorchScript kernel-fusion differences
+  in the chai-lab scripted `trunk.pt`, not by the MLX port. An eager
+  PyTorch reimplementation of the exact same chai-lab module tree (same
+  weights, same layout) at bf16 is 19.7% away from scripted-CUDA on the
+  trunk pair tensor and 44% away on the single tensor, while MLX-fp32
+  sits inside that envelope (14.9% and 42.2% from scripted-CUDA on the
+  same tensors). Both eager-CUDA at fp32 and bf16 land in essentially
+  the same place as MLX (1.3% between each other), and MLX → eager-CUDA
+  is 12% on the full 48-block trunk at bf16. The full attribution — with
+  per-round MSA-module intermediates, per-block pairformer intermediates,
+  isolated tri-attention drift, and SDPA-variant analysis — lives in
+  [`findings/drift_attribution.md`](findings/drift_attribution.md).
+  Running MLX at `compute_dtype="float32"` does not meaningfully shrink
+  the gap against scripted-CUDA, because scripted-CUDA itself is the
+  outlier relative to both eager paths.
 
 Numerically validated so far: monomers up to 76 residues
 (1L2Y, 1VII, 1CRN, 1UBQ). The expanded validation slate (multimer,
