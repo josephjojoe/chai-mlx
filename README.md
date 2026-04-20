@@ -134,6 +134,24 @@ reference bundle's mixed-precision policy: bf16 trunk / confidence with
 fp32 diffusion and other preserved fp32 parameters. Pass
 `compute_dtype="float32"` to keep the MLX port in fp32 throughout.
 
+```python
+model = ChaiMLX.from_pretrained("josephjojoe/chai-mlx")  # default: reference
+model_fp32 = ChaiMLX.from_pretrained(
+    "josephjojoe/chai-mlx",
+    compute_dtype="float32",
+)
+```
+
+Precision policies:
+
+- `reference` (default): mirrors the upstream TorchScript precision
+  boundary. Trunk / confidence run in bf16 where the reference graph does,
+  while diffusion and numerically sensitive preserved-fp32 parameters stay
+  in fp32.
+- `float32`: keeps the MLX port in fp32 throughout. This is mainly useful
+  as a diagnostic mode when checking whether bf16 accumulation contributes
+  to a mismatch.
+
 `model.run_inference_debug(...)` returns a superset `FoldOutputs` that
 retains the feature context, embeddings, and trunk intermediates
 alongside coordinates / confidence / ranking — useful when feeding
@@ -244,7 +262,10 @@ Pre-converted weights are hosted on Hugging Face at
 [`josephjojoe/chai-mlx`](https://huggingface.co/josephjojoe/chai-mlx)
 (~1.2 GB, float32 safetensors, sharded with an index file). They are
 Chai Discovery's released Chai-1 weights, re-expressed in MLX's naming
-convention — no retraining or numerical modification.
+convention — no retraining or numerical modification. The shipped
+`config.json` records `config_version="1"` and
+`compute_dtype="reference"`, so loading directly from HF picks up the
+same default precision policy documented above.
 
 If you'd rather start from the upstream TorchScript distribution, fetch
 the `.pt` files from Chai's CDN and convert locally:
