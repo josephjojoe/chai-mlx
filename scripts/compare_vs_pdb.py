@@ -67,6 +67,12 @@ _TARGET_TO_PDB = {
     # TIM (7TIM is the dimer; the monomer is 249 residues).
     "7TIM": {"pdb_id": "7TIM", "entity": "protein", "chain_lengths": [249]},
     "1BNA": {"pdb_id": "1BNA", "entity": "dna", "chain_lengths": [12, 12]},
+    # 2KOC: 14-nt RNA hairpin (NMR ensemble). Compared on the
+    # phosphate backbone, like DNA targets. No UBQG equivalent here
+    # because UBQG is a synthetic ubiquitin + NAG target with no real
+    # PDB reference (the point is MLX-vs-CUDA agreement on the glycan
+    # code path, not vs experimental truth).
+    "2KOC": {"pdb_id": "2KOC", "entity": "rna", "chain_lengths": [14]},
 }
 
 

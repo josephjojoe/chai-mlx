@@ -53,13 +53,22 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import sys
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_SCRIPTS = _REPO_ROOT / "scripts"
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 import mlx.core as mx
 import numpy as np
 
 from chai_mlx import ChaiMLX
 from chai_mlx.utils import resolve_dtype
 
-from scripts.cuda_parity import (
+from cuda_parity import (  # type: ignore[import-not-found]
     _as_mx,
     _load_npz,
     _read_manifest,
@@ -81,6 +90,14 @@ class SampleRMSD:
 
 
 def _ca_from_cif(path: Path) -> np.ndarray:
+    """Return representative backbone atoms for the structure.
+
+    For protein chains: Cα. For DNA/RNA chains: phosphate (P). If the
+    structure has both (e.g. a protein+RNA complex), both are
+    concatenated in chain order. This generalisation lets the
+    diffusion-isolation harness run on nucleic-acid-only targets
+    (1BNA, 2KOC) that have no Cα atoms.
+    """
     import gemmi
 
     st = gemmi.read_structure(str(path))
@@ -88,7 +105,7 @@ def _ca_from_cif(path: Path) -> np.ndarray:
     for chain in st[0]:
         for res in chain:
             for atom in res:
-                if atom.name == "CA":
+                if atom.name in ("CA", "P"):
                     p = atom.pos
                     coords.append([p.x, p.y, p.z])
     return np.asarray(coords, dtype=np.float64)

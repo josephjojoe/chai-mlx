@@ -293,12 +293,31 @@ class Comparison:
         )
 
 
-def _compare(name: str, cuda: np.ndarray, mlx: np.ndarray, tol: float) -> Comparison:
+def _compare(
+    name: str,
+    cuda: np.ndarray,
+    mlx: np.ndarray,
+    tol: float,
+    *,
+    mask: np.ndarray | None = None,
+) -> Comparison:
+    """Tensor-for-tensor comparison with robust handling of structural nulls.
+
+    If ``mask`` is provided, only entries where ``mask`` is truthy are
+    considered (e.g. non-pad tokens, non-empty MSA rows). The pre-mask
+    ``ref_range`` is still reported so callers can spot the "reference is
+    uniformly zero" case distinctly from the "reference has values but
+    MLX also matched zero" case.
+
+    NaN / Inf in either side are reported as a hard fail with ``max_abs =
+    inf`` and a readable ``name`` suffix so the symptom is visible in
+    the log rather than poisoning downstream ``rel`` math silently.
+    """
     cuda_f = cuda.astype(np.float32)
     mlx_f = mlx.astype(np.float32)
     if cuda_f.shape != mlx_f.shape:
         return Comparison(
-            name=name,
+            name=f"{name} [shape mismatch: cuda={cuda_f.shape} mlx={mlx_f.shape}]",
             shape=cuda_f.shape,
             max_abs=float("inf"),
             mean_abs=float("inf"),
@@ -308,22 +327,68 @@ def _compare(name: str, cuda: np.ndarray, mlx: np.ndarray, tol: float) -> Compar
             passed=False,
             tol=tol,
         )
+
+    cuda_bad = ~np.isfinite(cuda_f)
+    mlx_bad = ~np.isfinite(mlx_f)
+    if cuda_bad.any() or mlx_bad.any():
+        suffix = []
+        if cuda_bad.any():
+            suffix.append(f"cuda has {int(cuda_bad.sum())} non-finite")
+        if mlx_bad.any():
+            suffix.append(f"mlx has {int(mlx_bad.sum())} non-finite")
+        return Comparison(
+            name=f"{name} [{'; '.join(suffix)}]",
+            shape=cuda_f.shape,
+            max_abs=float("inf"),
+            mean_abs=float("inf"),
+            p99_abs=float("inf"),
+            ref_range=float(np.nanmax(np.abs(cuda_f))) if np.isfinite(cuda_f).any() else 0.0,
+            rel=float("inf"),
+            passed=False,
+            tol=tol,
+        )
+
+    # Full-tensor ref_range (always reported pre-mask so "entire tensor is
+    # zero" is visually distinct from "masked subset is zero").
+    full_ref_range = float(np.abs(cuda_f).max()) if cuda_f.size else 0.0
+
+    if mask is not None:
+        m = np.asarray(mask).astype(bool)
+        while m.ndim < cuda_f.ndim:
+            m = m[..., None]
+        m = np.broadcast_to(m, cuda_f.shape)
+        if not m.any():
+            # Structural null: mask selects zero entries. Compare nothing.
+            return Comparison(
+                name=f"{name} [mask selects 0 entries]",
+                shape=cuda_f.shape,
+                max_abs=0.0,
+                mean_abs=0.0,
+                p99_abs=0.0,
+                ref_range=full_ref_range,
+                rel=0.0,
+                passed=True,
+                tol=tol,
+            )
+        cuda_f = cuda_f[m]
+        mlx_f = mlx_f[m]
+
     diff = np.abs(cuda_f - mlx_f)
     max_abs = float(diff.max()) if diff.size else 0.0
     mean_abs = float(diff.mean()) if diff.size else 0.0
     p99_abs = float(np.percentile(diff, 99)) if diff.size else 0.0
-    ref_range = float(np.abs(cuda_f).max()) if diff.size else 0.0
-    # When the reference is identically zero (e.g. empty MSA features), the
-    # only meaningful question is whether MLX also produced zeros. Report
-    # ``rel=0`` in that case so the output isn't dominated by a div-by-zero
-    # ``inf`` that swamps the real signal.
+    masked_ref_range = float(np.abs(cuda_f).max()) if cuda_f.size else 0.0
+    ref_range = masked_ref_range if mask is not None else full_ref_range
+
     if ref_range == 0.0:
+        # Masked-in region of reference is identically zero. The only
+        # meaningful question is whether MLX matched.
         rel = 0.0 if max_abs == 0.0 else float("inf")
     else:
         rel = max_abs / ref_range
     return Comparison(
         name=name,
-        shape=cuda_f.shape,
+        shape=cuda_f.shape if mask is None else cuda.shape,
         max_abs=max_abs,
         mean_abs=mean_abs,
         p99_abs=p99_abs,
@@ -381,20 +446,30 @@ def check_embedding(
         + data.get("embedding.bond_structure", np.zeros_like(data["embedding.token_pair_structure"])).astype(np.float32)
     )
 
+    # Masks for structurally-padded tensors. chai-lab zero-fills the
+    # MSA embedding rows where ``msa_mask`` is False, and zero-fills
+    # per-template pair positions where ``template_mask`` is False. MLX
+    # follows suit, but the comparison is only meaningful on non-pad
+    # entries -- otherwise numerical noise in the masked-out region
+    # drowns the signal. Pass the relevant mask so ``_compare`` reports
+    # on the region that actually participates in downstream compute.
+    msa_mask = data.get("inputs.batch.msa_mask")
+    template_mask = data.get("inputs.batch.template_mask")
+
     field_mapping = [
-        ("token_single", "token_single_input", data["embedding.token_single"]),
-        ("atom_single_trunk", "atom_single_input", data["embedding.atom_single_trunk"]),
-        ("atom_single_structure", "atom_single_structure_input", data["embedding.atom_single_structure"]),
-        ("atom_pair_trunk", "atom_pair_input", data["embedding.atom_pair_trunk"]),
-        ("atom_pair_structure", "atom_pair_structure_input", data["embedding.atom_pair_structure"]),
-        ("msa", "msa_input", data["embedding.msa"]),
-        ("templates", "template_input", data["embedding.templates"]),
-        ("token_single_initial", "single_initial", data["embedding.token_single_initial"]),
-        ("token_pair_initial", "pair_initial", data["embedding.token_pair_initial"]),
+        ("token_single", "token_single_input", data["embedding.token_single"], None),
+        ("atom_single_trunk", "atom_single_input", data["embedding.atom_single_trunk"], None),
+        ("atom_single_structure", "atom_single_structure_input", data["embedding.atom_single_structure"], None),
+        ("atom_pair_trunk", "atom_pair_input", data["embedding.atom_pair_trunk"], None),
+        ("atom_pair_structure", "atom_pair_structure_input", data["embedding.atom_pair_structure"], None),
+        ("msa", "msa_input", data["embedding.msa"], msa_mask),
+        ("templates", "template_input", data["embedding.templates"], template_mask),
+        ("token_single_initial", "single_initial", data["embedding.token_single_initial"], None),
+        ("token_pair_initial", "pair_initial", data["embedding.token_pair_initial"], None),
     ]
-    for label, attr, cuda_arr in field_mapping:
+    for label, attr, cuda_arr, mask in field_mapping:
         got = _tensor_to_numpy(getattr(emb, attr))
-        c = _compare(label, cuda_arr, got, tol)
+        c = _compare(label, cuda_arr, got, tol, mask=mask)
         comparisons.append(c)
         print(c.format())
 
