@@ -120,7 +120,7 @@ def _parse_args(argv: "list[str] | None" = None) -> argparse.Namespace:
              "chai-lab's seven reference crop sizes "
              "[256, 384, 512, 768, 1024, 1536, 2048] with n_atoms = 23 * "
              "n_tokens; use this only for parity comparisons against the "
-             "CUDA reference bundle (see drift_attribution.md).",
+             "CUDA reference bundle.",
     )
 
     constraints = parser.add_argument_group("constraints")

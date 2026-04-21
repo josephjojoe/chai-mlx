@@ -379,8 +379,7 @@ def _mlx_run(
     # This sweep compares against the CUDA reference bundle's
     # TorchScript artefacts, which are traced at chai-lab's seven
     # bucket sizes. Stick with pad_strategy="bucket" so the MLX coords
-    # tensors emitted here align with saved CUDA intermediates; see
-    # drift_attribution.md.
+    # tensors emitted here align with saved CUDA intermediates.
     ctx = featurize_fasta(
         fasta_path,
         output_dir=feature_dir / "mlx_features",

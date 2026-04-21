@@ -40,8 +40,7 @@ axes are padded:
   smallest value in ``AVAILABLE_MODEL_SIZES = [256, 384, 512, 768, 1024,
   1536, 2048]`` that fits, and set ``n_atoms = 23 * n_tokens``. Necessary
   for parity comparisons with the CUDA reference bundle's traced
-  TorchScript artefacts (which were exported at those seven sizes; see
-  ``drift_attribution.md``).
+  TorchScript artefacts (which were exported at those seven sizes).
 
 The MLX model forward itself does not depend on either choice — it reads
 ``num_tokens`` and ``num_atoms`` from the input tensor shapes at call

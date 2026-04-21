@@ -29,8 +29,7 @@ took to prove that the port is actually faithful.
   (mixed bf16/fp32) and `float32` (all-fp32).
 - Historical comparison and validation numbers have been intentionally
   removed after recent changes to the port. Use the workflows below to
-  regenerate current parity, structural, and throughput results. The
-  supporting probe inventory lives in [`drift_attribution.md`](drift_attribution.md).
+  regenerate current parity, structural, and throughput results.
 
 ## Requirements
 
@@ -212,8 +211,7 @@ This is **required** for tensor-level parity with the CUDA reference
 bundle (the scripts under `cuda_harness/` expect bucketed shapes so
 they can diff against saved TorchScript intermediates). At the raw
 tensor level, exact-length and bucketed runs disagree bit-for-bit,
-because the attention masks see a different count of padded rows;
-see [`drift_attribution.md`](drift_attribution.md) for details.
+because the attention masks see a different count of padded rows.
 
 **User-facing outputs are pad-invariant.** Every aggregation in the
 ranking and confidence stack (pTM, ipTM, complex pLDDT, per-chain

@@ -33,4 +33,3 @@ To regenerate the current summary:
 1. Inspect the `aten::to(...)` sites in the IR under this directory.
 2. Run `cuda_harness/_probe_jit_precision.py` to resolve the current
    scalar-type constants programmatically.
-3. Record the refreshed results in `../drift_attribution.md`.
