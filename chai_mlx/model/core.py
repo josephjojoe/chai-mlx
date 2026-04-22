@@ -341,7 +341,10 @@ class ChaiMLX(nn.Module):
         """
         ctx = self.featurize(inputs)
         emb = self.embed_inputs(ctx)
-        # Raw features are only needed during embedding.
+        # Raw features are only needed during embedding. Dropping them here
+        # and clearing frees the heavy raw feature slabs (token-pair /
+        # template blocks) before the trunk starts allocating pair tensors
+        # of a different shape class.
         ctx = self._without_raw_features(ctx)
         structure = ctx.structure_inputs
         batch_size = emb.token_single_input.shape[0]
@@ -353,6 +356,14 @@ class ChaiMLX(nn.Module):
             recycles=recycles,
             recycle_msa_subsample=recycle_msa_subsample,
         )
+        # Shape-class transition: the trunk's last-recycle intermediates are
+        # (B, N, N, z_dim) / (B, N, s_dim). ``prepare_diffusion_cache`` now
+        # starts carving out atom-shape conditioning tensors (B, S, A, *) that
+        # the trunk's cached bf16 pair slabs will never be reused for, so
+        # clearing here prevents the allocator from carrying both around.
+        mx.eval(trunk_out.single_trunk, trunk_out.pair_trunk)
+        mx.clear_cache()
+
         cache = self.prepare_diffusion_cache(trunk_out)
         mx.eval(cache.s_static, cache.z_cond, cache.blocked_pair_base,
                 cache.atom_cond, cache.atom_single_cond, *cache.pair_biases)
@@ -371,6 +382,10 @@ class ChaiMLX(nn.Module):
             mx.eval(coords)
             if step_idx % _DIFFUSION_CACHE_CLEAR_INTERVAL == 0:
                 mx.clear_cache()
+
+        # Shape-class transition: diffusion's scratch tensors are atom-shaped;
+        # the confidence head re-enters token-pair shapes. Clearing here
+        # evicts the atom-shape slabs that confidence will not reuse.
         mx.clear_cache()
 
         conf_full = self.confidence(trunk_out, coords)
