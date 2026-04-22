@@ -96,7 +96,34 @@ class ConfidenceHead(nn.Module):
         if coords.ndim != 4:
             raise ValueError(f"coords must have shape [b, a, 3] or [b, ds, a, 3], got {coords.shape}")
 
-        outputs = [self._run_single(trunk, coords[:, i]) for i in range(coords.shape[1])]
+        # MLX is lazy: a list comprehension of ``_run_single`` calls enqueues
+        # every sample's full pairformer graph before any of them evaluate, so
+        # at stack-time the allocator must hold the 4-block pairformer
+        # intermediates for *all* diffusion samples simultaneously. On bucket
+        # runs (N=1024) this dominates the end-of-run peak; empirically about
+        # 2x the trunk's live peak.
+        #
+        # Evaluating each sample's outputs before moving to the next forces
+        # MLX to realise (and release) that sample's intermediates while only
+        # the five small ``ConfidenceOutputs`` tensors remain live, so the
+        # max-concurrent residency collapses to one sample's pairformer plus
+        # the accumulated per-sample output headers (logits / token_pair /
+        # token_single). A ``clear_cache`` after each eval returns the
+        # released pair-shape slabs to Metal instead of letting them pile up
+        # in the allocator across the five-sample loop.
+        outputs: list[ConfidenceOutputs] = []
+        for i in range(coords.shape[1]):
+            sample = self._run_single(trunk, coords[:, i])
+            mx.eval(
+                sample.pae_logits,
+                sample.pde_logits,
+                sample.plddt_logits,
+                sample.token_single,
+                sample.token_pair,
+            )
+            outputs.append(sample)
+            mx.clear_cache()
+
         return ConfidenceOutputs(
             pae_logits=mx.stack([o.pae_logits for o in outputs], axis=1),
             pde_logits=mx.stack([o.pde_logits for o in outputs], axis=1),
