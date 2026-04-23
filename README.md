@@ -56,15 +56,15 @@ That is the recommended "clone and run real FASTA inference" path: the
 default install now includes `torch` plus the pinned `chai_lab` commit
 that `featurize_fasta` / `chai-mlx-infer` need.
 
+There is no separate `[inference]` or `[featurize]` extra anymore. If
+you see those names in older notes or commands from previous revisions,
+replace them with the plain default install above.
+
 If you also want local ESM-2 embeddings on Apple silicon:
 
 ```bash
 python -m pip install -e ".[esm]"
 ```
-
-Older docs may still mention `.[inference]` / `.[featurize]`; those
-extras are now backward-compatible aliases of the default install and
-are no longer required for first-time users.
 
 ### Optional submodules
 
@@ -92,15 +92,25 @@ The two pinned submodules are:
 
 ### Optional extras
 
+Extras are additive on top of the inference-ready default install:
+
 ```bash
-python -m pip install -e .                            # recommended default install; inference-ready
-python -m pip install -e ".[esm]"                     # add esm-mlx for esm_backend='mlx' / 'mlx_cache'
-python -m pip install -e ".[test]"                    # add pytest
-python -m pip install -e ".[convert]"                 # add safetensors for TorchScript -> safetensors export
-python -m pip install -e ".[cuda-harness]"            # add Modal CUDA comparison harnesses
-python -m pip install -e ".[inference]"               # backward-compatible alias of the default install
-python -m pip install -e ".[featurize]"               # backward-compatible alias of the default install
+python -m pip install -e ".[esm]"                     # local ESM-2 embeddings on Apple silicon
+python -m pip install -e ".[test]"                    # pytest
+python -m pip install -e ".[convert]"                 # safetensors-based weight conversion/export
+python -m pip install -e ".[cuda-harness]"            # Modal CUDA comparison harnesses
+python -m pip install -e ".[test,esm]"                # combine extras when you need both
 ```
+
+| Extra            | What it adds                            | When to install it |
+| ---------------- | --------------------------------------- | ------------------ |
+| `[esm]`          | Pinned `esm-mlx` from GitHub            | When using `esm_backend="mlx"` or `"mlx_cache"`, or when running `chai-mlx-precompute-esm` locally |
+| `[test]`         | `pytest`                                | When running the local test suite |
+| `[convert]`      | `safetensors`                           | When using the checkpoint / NPZ / TorchScript conversion utilities |
+| `[cuda-harness]` | `modal`, `gemmi`, `biopython`           | When running the Modal-based CUDA reference harnesses and local comparison scripts |
+
+The base install already covers FASTA featurization and inference, so no
+extra is needed for `chai-mlx-infer` or `featurize_fasta`.
 
 ### Installed console scripts
 

@@ -46,10 +46,6 @@ Repository = "https://github.com/josephjojoe/chai-mlx"
 Issues = "https://github.com/josephjojoe/chai-mlx/issues"
 
 [project.optional-dependencies]
-# Backward-compatible no-op aliases for older docs / local workflows. The
-# full FASTA inference stack now lives in the base dependencies above.
-inference = []
-featurize = []
 convert = [
   "safetensors>=0.4",
 ]
