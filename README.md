@@ -35,10 +35,30 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
+That editable install is also the minimum contributor setup: it pulls in the
+`torch` + pinned `chai_lab` runtime that powers `featurize_fasta()`,
+`chai-mlx-infer`, and the runtime-dependent pytest cases. If you run `pytest`
+from a bare checkout (or after a `--no-deps` install), those tests will be
+reported as skipped because the chai-lab runtime is not importable.
+
+For the default contributor test environment, install the `test` extra:
+
+```bash
+python -m pip install -e ".[test]"
+pytest -q
+```
+
 If you also want MLX-native ESM-2 embeddings or the precompute cache workflow:
 
 ```bash
 python -m pip install -e ".[esm]"
+```
+
+If you want the optional ESM adapter tests as well, install both extras:
+
+```bash
+python -m pip install -e ".[test,esm]"
+pytest -q
 ```
 
 Submodules are optional. The default install pulls the pinned `chai_lab` and
@@ -163,7 +183,8 @@ standard Hugging Face cache afterwards.
 ## Example And Tests
 
 - FASTA smoke: `python examples/fasta_smoke.py --fasta path/to/input.fasta`
-- Test suite: `python -m pip install -e ".[test]" && pytest -q`
+- Default test suite: `python -m pip install -e ".[test]" && pytest -q`
+- ESM adapter coverage too: `python -m pip install -e ".[test,esm]" && pytest -q`
 - Slow end-to-end inference: `CHAI_MLX_RUN_SLOW=1 pytest -q -m slow`
 
 ## License
