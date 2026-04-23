@@ -14,17 +14,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install package
+      - name: Install package and test extras
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[test]"
+          python -m pip install -e ".[test,esm]"
 
       - name: Validate environment
         run: python -m pip check

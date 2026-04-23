@@ -1,6 +1,0 @@
-[submodule "chai-lab"]
-	path = chai-lab
-	url = https://github.com/chaidiscovery/chai-lab
-[submodule "esm-mlx"]
-	path = esm-mlx
-	url = https://github.com/josephjojoe/esm-mlx

@@ -61,9 +61,9 @@ python -m pip install -e ".[test,esm]"
 pytest -q
 ```
 
-Submodules are optional. The default install pulls the pinned `chai_lab` and
-`esm-mlx` dependencies directly from Git URLs, so you only need submodules if
-you want editable checkouts of those upstream projects while developing here.
+No git submodules are required. The base install resolves the pinned
+`chai_lab` dependency directly, and the `esm` extra resolves `esm_mlx`
+directly.
 
 ## Quick Start
 
