@@ -1,11 +1,7 @@
 """Sample ranking in MLX.
 
-Faithful port of :mod:`chai_lab.ranking.rank` (+ ``ranking/{ptm,clashes,plddt,
-frames,utils}``).  The previous version of this module computed pTM as
-``TM(E[PAE])`` which is not equal to the chai-lab scalar ``E[TM(PAE)]``
-(TM is non-linear).  It also omitted ``valid_frames_mask`` for the
-interface/complex ptm computations and did not produce per-chain-pair
-clash matrices.
+Faithful port of :mod:`chai_lab.ranking.rank` (+ ``ranking/{ptm,clashes,
+plddt,frames,utils}``).
 
 The reference formulas are:
 
@@ -631,19 +627,19 @@ def _ranking_for_sample(
         - 100.0 * has_clashes.astype(mx.float32)
     )
 
-    # Legacy expectation-based scalars (kept for compatibility; not used
-    # by the aggregate score).  PAE/PDE bins span [0, 32] with 64 bins;
-    # chai-lab's default pLDDT expectation range is [0, 1].
-    legacy_pae = expectation_from_logits(pae_logits, max_value=32.0)
-    legacy_pde = expectation_from_logits(pde_logits, max_value=32.0)
-    legacy_plddt = expectation_from_logits(plddt_logits, max_value=1.0)
+    # Expectation-based summaries decoded directly from the logits. They
+    # are returned alongside the ranking outputs, but the aggregate score
+    # itself is driven by pTM, ipTM, and clashes.
+    pae_expectation = expectation_from_logits(pae_logits, max_value=32.0)
+    pde_expectation = expectation_from_logits(pde_logits, max_value=32.0)
+    plddt_expectation = expectation_from_logits(plddt_logits, max_value=1.0)
 
     asym_ids_arr = mx.array(asyms, dtype=mx.int32) if asyms else mx.zeros((0,), dtype=mx.int32)
 
     return RankingOutputs(
-        plddt=legacy_plddt,
-        pae=legacy_pae,
-        pde=legacy_pde,
+        plddt=plddt_expectation,
+        pae=pae_expectation,
+        pde=pde_expectation,
         ptm=ptm,
         iptm=iptm,
         has_inter_chain_clashes=has_clashes.astype(mx.float32),

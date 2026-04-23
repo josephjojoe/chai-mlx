@@ -392,7 +392,7 @@ class InputEmbedder(nn.Module):
         feats = self.feature_embedding(ctx)
 
         # Canonical location: FeatureContext.bond_adjacency (set by featurize_fasta).
-        # StructureInputs.bond_adjacency is a legacy fallback.
+        # StructureInputs.bond_adjacency is accepted as an alternate source.
         bond_adjacency = ctx.bond_adjacency if ctx.bond_adjacency is not None else ctx.structure_inputs.bond_adjacency
         if bond_adjacency is not None:
             bond_trunk, bond_structure = self.bond_projection(bond_adjacency)

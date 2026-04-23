@@ -15,9 +15,7 @@ from chai_mlx.config import ChaiConfig
 # ``chai-lab/`` ships as a submodule so the MLX featurizer can delegate to
 # chai-lab's FASTA + MSA + template pipeline without pulling a second copy
 # from PyPI. ``esm-mlx/`` ships as a submodule so the ESM-on-MLX adapter
-# can be exercised offline, without an editable install. Mirrors the
-# sys.path insertions inside scripts/cuda_*.py and scripts/mlx_throughput.py
-# so ``pytest`` finds the same modules they do.
+# can be exercised offline, without an editable install.
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 for submodule in ("chai-lab", "esm-mlx"):

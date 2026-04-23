@@ -2,15 +2,12 @@
 
 chai-lab's own FASTA parser ``chai_lab.data.parsing.input_validation.read_inputs``
 imports the heavy featurization stack (RDKit, torch, chai-lab's entity
-tables). For tasks like CLI-side pre-flight validation or ESM pre-cache
+tables). For tasks like CLI-side pre-flight validation or ESM cache
 population we only need the header metadata, not the entity types. This
 module provides a minimal, dependency-free parser that matches chai-lab's
 header grammar (``>kind|name=SHORT``) and a set of fast validators that
 raise pretty errors up front instead of letting chai-lab fail deep in
 ``string_to_tensorcode`` or downstream featurizers.
-
-Keeping this in ``chai_mlx.data`` means both ``scripts/inference.py`` and
-``scripts/precompute_esm_mlx.py`` can import it without pulling chai-lab.
 """
 
 from __future__ import annotations
@@ -256,7 +253,7 @@ def _modified_residue_issues(records: list[FastaRecord]) -> list[FastaValidation
     for rec in records:
         if rec.kind not in polymer_kinds or not rec.sequence:
             continue
-        # Bracketed ``[FOO]`` (or legacy ``(FOO)``) tokens are chai-1's
+        # Bracketed ``[FOO]`` (or alternate ``(FOO)``) tokens are chai-1's
         # modified-residue syntax on polymer sequences. A plain
         # canonical FASTA (``MKWV...``) never contains these symbols,
         # so the presence of either is a reliable signal.

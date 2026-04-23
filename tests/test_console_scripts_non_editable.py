@@ -1,21 +1,9 @@
-"""Regression test for the console-script shims.
+"""Regression test for packaged console scripts.
 
-The original ``chai_mlx/cli/infer.py`` loaded ``scripts/inference.py``
-via ``Path(__file__).resolve().parents[2] / "scripts" / "inference.py"``.
-That design breaks under ``pip install chai-mlx`` (non-editable) because
-``scripts/`` is not shipped in the wheel. This test simulates that
-install mode:
-
-1. Copy ``chai_mlx/`` into a tmp directory (``site-packages``-like).
-2. Remove the repo root from ``sys.path`` so ``scripts/`` cannot be
-   found on the filesystem.
-3. Import ``chai_mlx.cli.infer`` from the tmp copy and call ``main``
-   with ``--help`` -- which should cleanly return ``SystemExit(0)``,
-   proving the canonical implementation lives inside the package.
-
-If this test regresses, the binaries declared in ``pyproject.toml``
-are broken for PyPI users even though they work from an editable
-clone.
+The shipped CLIs should run from the installed package alone. This test
+simulates a non-editable install by copying only ``chai_mlx/`` into a
+temporary directory, importing the entry module there, and invoking
+``main() --help``.
 """
 
 from __future__ import annotations
@@ -35,7 +23,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def _run_in_isolated_copy(entry: str) -> subprocess.CompletedProcess:
     """Run ``python -c 'from <entry> import main; main()' --help``
-    from a directory that does NOT contain ``scripts/``.
+    from a directory that only contains the copied package.
 
     Using a subprocess is cheaper and safer than monkey-patching
     ``sys.path`` in-process -- we get a clean interpreter whose only
@@ -69,28 +57,16 @@ def _run_in_isolated_copy(entry: str) -> subprocess.CompletedProcess:
     [
         "chai_mlx.cli.infer",
         "chai_mlx.cli.precompute_esm_impl",
-        "chai_mlx.cli.sweep_impl",
-        "chai_mlx.io.weights.export_torchscript",
-        "chai_mlx.io.weights.convert_torchscript",
-        "chai_mlx.io.weights.convert_npz",
     ],
 )
 def test_cli_main_runs_without_scripts_dir(entry: str) -> None:
-    """``chai-mlx-*`` binaries must work without ``scripts/`` on disk."""
-    # Some entry points (notably ``sweep_impl`` / ``precompute_esm_impl``)
-    # still import optional helpers before argparse runs. That's fine:
-    # what we care about here is that every console script is packaged
-    # self-sufficiently and does not error with
-    # "Could not locate scripts/...".
+    """The packaged CLIs must work from the installed package alone."""
     result = _run_in_isolated_copy(entry)
     combined = (result.stdout or "") + (result.stderr or "")
     assert result.returncode == 0, (
         f"{entry} --help failed (rc={result.returncode}):\n"
         f"stdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
-    )
-    assert "Could not locate scripts/" not in combined, (
-        f"{entry} still tries to load scripts/ by path:\n{combined}"
     )
     # Sanity: --help output should contain the usage line.
     assert "usage:" in combined.lower(), (
@@ -105,10 +81,6 @@ def test_entry_points_declared_in_pyproject_match_modules() -> None:
     expected = {
         "chai-mlx-infer": "chai_mlx.cli.infer",
         "chai-mlx-precompute-esm": "chai_mlx.cli.precompute_esm_impl",
-        "chai-mlx-sweep": "chai_mlx.cli.sweep_impl",
-        "chai-mlx-export-torchscript": "chai_mlx.io.weights.export_torchscript",
-        "chai-mlx-convert-torchscript": "chai_mlx.io.weights.convert_torchscript",
-        "chai-mlx-convert-npz": "chai_mlx.io.weights.convert_npz",
     }
     for script_name, module_path in expected.items():
         assert f'{script_name} = "{module_path}:main"' in pyproject, (

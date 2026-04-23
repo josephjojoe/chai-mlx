@@ -143,8 +143,8 @@ class RankingOutputs:
 
     Fields:
 
-    - ``plddt``, ``pae``, ``pde``: per-input expectation scalars/arrays kept
-      for legacy compatibility with earlier MLX callers.
+    - ``plddt``, ``pae``, ``pde``: expectation-based summaries decoded
+      directly from the logits.
     - ``ptm``, ``iptm``: complex pTM / interface pTM (chai-lab semantics).
     - ``per_chain_ptm``: pTM for each chain in the complex, shape ``[..., c]``.
     - ``per_chain_pair_iptm``: per-chain-pair ipTM, shape ``[..., c, c]``.

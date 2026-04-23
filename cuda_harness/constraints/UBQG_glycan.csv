@@ -1,2 +1,0 @@
-restraint_id,chainA,res_idxA,chainB,res_idxB,connection_type,confidence,min_distance_angstrom,max_distance_angstrom,comment
-bond1,UBQG,N25@N,NAG1,@C1,covalent,1.0,,,Synthetic N-linked glycan: ubiquitin Asn-25 -> NAG1 C1 covalent bond

@@ -1,8 +1,8 @@
 """Test the per-token PAE / PDE / pLDDT tensors in
 ``scores.model_idx_*.npz``.
 
-The CLI claims drop-in compatibility with chai-lab's
-``StructureCandidates`` ``pae`` / ``pde`` / ``plddt`` fields.
+The CLI writes the same ``pae`` / ``pde`` / ``plddt`` field names that
+chai-lab uses in ``StructureCandidates``.
 This test invokes :func:`chai_mlx.cli.infer._write_per_sample_scores`
 directly with synthetic logits + a structure whose masks we control,
 and asserts:

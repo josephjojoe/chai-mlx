@@ -1,19 +1,11 @@
 """End-to-end Chai-MLX inference runner for arbitrary FASTA inputs.
 
 This is the canonical implementation of the ``chai-mlx-infer`` console
-script declared in ``pyproject.toml`` and of the ``scripts/inference.py``
-forwarder. The logic lives here (inside the installed package) so the
-binary works after ``pip install chai-mlx`` from PyPI -- the previous
-design loaded ``scripts/inference.py`` by path, which silently fails
-under a non-editable install because ``scripts/`` is not shipped in the
-wheel.
-
-Exposes the full :func:`chai_mlx.data.featurize.featurize_fasta` surface
-(constraints, offline MSA, online MSA server, offline templates, online
-templates server, all four ESM backends), runs the production inference
-pipeline, and writes the same per-sample CIF + scores + manifest set
-that ``scripts/run_mlx_sweep.py`` produces for the hardcoded target
-slate.
+script declared in ``pyproject.toml``. It exposes the full
+:func:`chai_mlx.data.featurize.featurize_fasta` surface (constraints,
+offline MSA, online MSA server, offline templates, online templates
+server, and all four ESM backends), runs the production inference
+pipeline, and writes per-sample CIFs, scores, and a run manifest.
 
 Output layout under ``--output-dir``::
 
@@ -119,8 +111,7 @@ def _parse_args(argv: "list[str] | None" = None) -> argparse.Namespace:
              "the MLX kernels accept. 'bucket' pads up to the smallest of "
              "chai-lab's seven reference crop sizes "
              "[256, 384, 512, 768, 1024, 1536, 2048] with n_atoms = 23 * "
-             "n_tokens; use this only for parity comparisons against the "
-             "CUDA reference bundle.",
+             "n_tokens; use this when you want those same traced bucket sizes.",
     )
 
     constraints = parser.add_argument_group("constraints")
@@ -168,7 +159,7 @@ def _parse_args(argv: "list[str] | None" = None) -> argparse.Namespace:
                           "'mlx_cache': load pre-computed embeddings from --esm-cache-dir.")
     esm.add_argument("--esm-cache-dir", type=Path, default=None,
                      help="Directory of pre-computed <sha1(seq)>.npy files (produced by "
-                          "chai-mlx-precompute-esm / scripts/precompute_esm_mlx.py). "
+                           "chai-mlx-precompute-esm). "
                           "Required with --esm-backend mlx_cache.")
 
     output = parser.add_argument_group("output")
@@ -347,9 +338,8 @@ def _bin_centers_np(min_bin: float, max_bin: float, no_bins: int):
     """NumPy port of :func:`chai_lab.chai1._bin_centers`.
 
     Mirrors upstream so decoded PAE/PDE/pLDDT tensors use bit-identical
-    bin midpoints; that is what makes the emitted ``pae``/``pde``/
-    ``plddt`` arrays drop-in compatible with
-    :class:`chai_lab.chai1.StructureCandidates`.
+    bin midpoints; that keeps the emitted ``pae``/``pde``/``plddt``
+    arrays aligned with chai-lab's decoded outputs.
     """
     import numpy as np
     return np.linspace(min_bin, max_bin, 2 * no_bins + 1)[1::2]

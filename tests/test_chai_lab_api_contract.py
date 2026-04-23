@@ -111,7 +111,7 @@ def test_rank_get_scores_public_api() -> None:
     The docstring of :func:`chai_mlx.cli.infer._write_per_sample_scores`
     claims our per-sample npz sidecars mirror chai-lab's
     ``get_scores`` output. If chai-lab renames a key in that function,
-    our drop-in-compatibility claim becomes a lie.
+    the sidecar layout here needs updating.
     """
     from chai_lab.ranking.rank import get_scores  # noqa: F401
     # We do not call get_scores -- its signature requires a full

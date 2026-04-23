@@ -18,10 +18,9 @@ The ``esm_backend`` knob on :func:`featurize_fasta` selects how ESM-2
 embeddings are obtained:
 
 * ``"off"`` (default): no ESM embeddings; the feature is zero-filled.
-  Matches every existing harness call site.
-* ``"chai"``: pass ``use_esm_embeddings=True`` through to chai-lab, which
-  loads its traced CUDA fp16 checkpoint.  Only sensible on a machine that
-  has torch + CUDA.
+  Suits the default inference path.
+* ``"chai"``: delegate to chai-lab's traced CUDA fp16 checkpoint. Only
+  sensible on a machine that has torch + CUDA.
 * ``"mlx"``: pre-compute embeddings with ``esm-mlx`` on Apple silicon
   and inject them into the chai-lab featurization pipeline.  Requires
   the ``[esm]`` extra.
@@ -36,11 +35,10 @@ axes are padded:
   atom attention; see ``chai_lab.model.utils.get_qkv_indices_for_blocks``).
   This skips the multi-hundred-token padding that chai-lab's seven
   static buckets impose on shorter inputs.
-* ``"bucket"``: legacy chai-lab behaviour — pad ``n_tokens`` up to the
+* ``"bucket"``: pad ``n_tokens`` up to the
   smallest value in ``AVAILABLE_MODEL_SIZES = [256, 384, 512, 768, 1024,
   1536, 2048]`` that fits, and set ``n_atoms = 23 * n_tokens``. Necessary
-  for parity comparisons with the CUDA reference bundle's traced
-  TorchScript artefacts (which were exported at those seven sizes).
+  when you want chai-lab's traced TorchScript bucket sizes.
 
 The MLX model forward itself does not depend on either choice — it reads
 ``num_tokens`` and ``num_atoms`` from the input tensor shapes at call
@@ -203,10 +201,9 @@ def _override_pad_strategy(strategy: PadStrategy) -> Iterator[None]:
     TorchScript sizes and the ``23 * n_tokens`` atom bound.
 
     Both ``Collate._collate`` (in :func:`featurize_fasta`) and the
-    CIF-writer ref context in :func:`chai_mlx.cli.infer._save_cifs` /
-    :mod:`chai_mlx.cli.sweep_impl` must use the same strategy so the
-    coords array emitted by the MLX model lines up with the atom
-    bookkeeping that ``save_to_cif`` walks.
+    CIF-writer reference context in :func:`chai_mlx.cli.infer._save_cifs`
+    must use the same strategy so the coords array emitted by the MLX
+    model lines up with the atom bookkeeping that ``save_to_cif`` walks.
     """
     if strategy not in ("exact", "bucket"):
         raise ValueError(
@@ -331,7 +328,7 @@ def _warn_if_insufficient_ram_for_esm_mlx() -> None:
             f"[chai-mlx] warning: esm_backend='mlx' loads ~11 GB of ESM-2 3B "
             f"weights in-process; this machine has {gib:.1f} GiB total RAM. "
             "Prefer esm_backend='mlx_cache' after pre-computing embeddings "
-            "with scripts/precompute_esm_mlx.py.",
+            "with chai-mlx-precompute-esm.",
             file=sys.stderr,
             flush=True,
         )
@@ -416,7 +413,6 @@ def featurize_fasta(
     output_dir: str | Path | None = None,
     msa_directory: Path | None = None,
     constraint_path: Path | None = None,
-    use_esm_embeddings: bool | None = None,
     esm_backend: Literal["off", "chai", "mlx", "mlx_cache"] = "off",
     esm_cache_dir: str | Path | None = None,
     use_msa_server: bool = False,
@@ -436,8 +432,7 @@ def featurize_fasta(
     Parameters
     ----------
     esm_backend:
-        * ``"off"`` (default) — zero-fill ESM embeddings. All existing
-          harness scripts use this.
+        * ``"off"`` (default) — zero-fill ESM embeddings.
         * ``"chai"`` — delegate to chai-lab's traced CUDA fp16 checkpoint.
           Only sensible on a CUDA host.
         * ``"mlx"`` — compute embeddings with ``esm-mlx`` in-process.
@@ -445,18 +440,12 @@ def featurize_fasta(
           inference on a 16 GB Mac.
         * ``"mlx_cache"`` — load embeddings from the directory pointed to
           by ``esm_cache_dir`` (as produced by
-          :mod:`scripts.precompute_esm_mlx`). Zero extra RAM cost at
+          ``chai-mlx-precompute-esm``). Zero extra RAM cost at
           inference time.
 
     esm_cache_dir:
         Directory of pre-computed ``<sha1>.npy`` files. Required when
         ``esm_backend="mlx_cache"``; ignored otherwise.
-
-    use_esm_embeddings:
-        **Deprecated.** Retained for backward compatibility with callers
-        that pass this boolean.  ``True`` is equivalent to
-        ``esm_backend="chai"``; ``False`` is equivalent to the default
-        ``esm_backend="off"``.  Passing both raises ``ValueError``.
 
     pad_strategy:
         * ``"exact"`` (default) — pad the token axis to exactly
@@ -467,12 +456,11 @@ def featurize_fasta(
         * ``"bucket"`` — pad up to the smallest value in
           ``chai_lab.data.collate.utils.AVAILABLE_MODEL_SIZES``
           (``[256, 384, 512, 768, 1024, 1536, 2048]``), with
-          ``n_atoms = 23 * n_tokens``. Necessary for parity comparisons
-          with the CUDA reference bundle's TorchScript artefacts, which
-          were traced at those exact seven sizes. Downstream helpers
-          (``chai_mlx.cli.infer._save_cifs``,
-          :mod:`chai_mlx.cli.sweep_impl`) must be told the same value
-          so the CIF atom-indexing matches the MLX coords tensor.
+          ``n_atoms = 23 * n_tokens``. Use this when you want the same
+          bucket sizes as chai-lab's traced TorchScript artefacts.
+          Downstream helpers such as ``chai_mlx.cli.infer._save_cifs``
+          must be told the same value so the CIF atom-indexing matches
+          the MLX coords tensor.
     """
     import tempfile
 
@@ -488,14 +476,6 @@ def featurize_fasta(
     else:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-
-    if use_esm_embeddings is not None:
-        if esm_backend != "off":
-            raise ValueError(
-                "Pass only one of use_esm_embeddings= or esm_backend= "
-                "(use_esm_embeddings is deprecated)"
-            )
-        esm_backend = "chai" if use_esm_embeddings else "off"
 
     if esm_backend not in ("off", "chai", "mlx", "mlx_cache"):
         raise ValueError(
@@ -513,8 +493,7 @@ def featurize_fasta(
     # reference chains *by FASTA name*, so when the user attaches a
     # CSV we force it to True so the restraint lookups line up with
     # what the user wrote in the FASTA.  Outside the CSV case we
-    # match chai-1's default for drop-in compatibility with downstream
-    # tooling that expects A/B/C... chain IDs.
+    # match chai-1's default sequential A/B/C... chain IDs.
     if entity_name_as_subchain is None:
         entity_name_as_subchain = constraint_path is not None
 

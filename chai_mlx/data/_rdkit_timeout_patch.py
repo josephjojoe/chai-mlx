@@ -14,15 +14,14 @@ ligands where RDKit genuinely hangs (tracked in
 https://github.com/rdkit/rdkit/discussions/7289).  For every ligand in
 our validation slate (FK506, methanethiol, etc.) and every protein
 with disulfides, RDKit returns promptly, so the timeout never fires on
-the happy path.  On Linux (Modal), chai-lab's decorator works fine
-because multiprocessing defaults to ``fork`` there.
+the happy path. On Linux, chai-lab's decorator works fine because
+multiprocessing defaults to ``fork`` there.
 
 We therefore swap the decorator for an identity pass-through **in
 process** when ``apply_rdkit_timeout_patch()`` is called.  Nothing
 else in chai-lab's behaviour changes; if RDKit hangs on a novel
-ligand, the process will hang (which is the same failure mode you'd
-see on Linux inside a Modal ``Timeout`` anyway, just without the
-15-second bail-out).
+ligand, the process will hang, just without the original 15-second
+bail-out.
 
 Invoke exactly once, before the first ``featurize_fasta`` call.  The
 patch is idempotent.

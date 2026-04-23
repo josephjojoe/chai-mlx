@@ -1,5 +1,0 @@
-restraint_id,chainA,res_idxA,chainB,res_idxB,connection_type,confidence,min_distance_angstrom,max_distance_angstrom,comment
-r_contact_C3_C40,1CRN,C3,1CRN,C40,contact,1.0,1.8,2.5,Crambin Cys3-Cys40 disulfide (synthetic contact restraint)
-r_contact_I7_I34,1CRN,I7,1CRN,I34,contact,0.9,3.0,8.0,Synthetic hydrophobic-core contact
-r_pocket_LIG1_C16,LIG1,,1CRN,C16,pocket,1.0,,6.0,Pocket restraint anchoring LIG1 near Cys16
-r_covalent_C32_C1_LIG1,1CRN,C32@SG,LIG1,@C1,covalent,1.0,,,Synthetic covalent bond between Cys32 SG and LIG1 C1

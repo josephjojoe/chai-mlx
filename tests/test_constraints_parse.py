@@ -73,9 +73,8 @@ def test_contact_restraint_populates_distance_feature(tmp_path: Path) -> None:
     helper cannot pickle on some macOS Python builds (AttributeError:
     Can't pickle local object 'timeout.<locals>.handler').  We stay
     protein-only here so offline pytest works regardless of platform;
-    the pocket + covalent + ligand paths are still validated end-to-end
-    via ``scripts/cuda_constraints_parity.py`` against the Modal CUDA
-    harness output.
+    the pocket + covalent + ligand paths are covered by the dedicated
+    ligand tests below.
     """
     from chai_mlx.data.featurize import featurize_fasta
 
@@ -262,9 +261,7 @@ def test_protein_plus_ligand_featurize(tmp_path: Path) -> None:
 def test_protein_plus_ligand_featurize_bucket_mode(tmp_path: Path) -> None:
     """Bucket-mode opt-in: reproduces chai-lab's 256-token rounding.
 
-    Kept as a regression guard for the parity path that compares against
-    the CUDA reference TorchScript artefacts (which were traced at
-    exactly those seven sizes).
+    Kept as a regression guard for the traced seven-size bucket path.
     """
     from chai_mlx.data.featurize import featurize_fasta
 

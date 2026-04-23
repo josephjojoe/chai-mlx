@@ -50,7 +50,7 @@ def build_embedding_context_from_cache(
 ) -> "EmbeddingContext":
     """Build an ``EmbeddingContext`` from a pre-computed ESM-MLX cache.
 
-    Pairs with :mod:`scripts.precompute_esm_mlx`: every protein sequence
+    Pairs with ``chai-mlx-precompute-esm``: every protein sequence
     is looked up by ``sha1(sequence)[:16]`` and loaded from
     ``<cache-dir>/<sha1>.npy``.  Non-protein chains are zero-filled to
     match chai-lab's convention.
@@ -70,7 +70,7 @@ def build_embedding_context_from_cache(
     if not cache_dir.is_dir():
         raise FileNotFoundError(
             f"ESM-MLX cache directory not found: {cache_dir}. "
-            "Run scripts/precompute_esm_mlx.py first."
+            "Run chai-mlx-precompute-esm first."
         )
 
     seq_to_context: dict[str, EmbeddingContext] = {}
@@ -86,7 +86,7 @@ def build_embedding_context_from_cache(
             raise FileNotFoundError(
                 f"ESM-MLX cache miss: sequence of length {len(seq)} "
                 f"(sha {sha}) not found at {npy_path}. "
-                "Run scripts/precompute_esm_mlx.py with --targets covering this target."
+                "Run chai-mlx-precompute-esm for the FASTA you plan to fold."
             )
         emb_np = np.load(npy_path).astype(np.float32, copy=False)
         if emb_np.shape != (len(seq), _ESM_EMBED_DIM):
@@ -148,7 +148,7 @@ def build_embedding_context(
             "esm_backend='mlx' requires the esm_mlx package. Install with:\n"
             "    pip install 'chai-mlx[esm]'\n"
             "    pip install -e '.[esm]'\n"
-            "(or pre-compute embeddings with scripts/precompute_esm_mlx.py "
+            "(or pre-compute embeddings with chai-mlx-precompute-esm "
             "and pass esm_backend='mlx_cache' + esm_cache_dir= instead)."
         ) from exc
 

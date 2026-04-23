@@ -47,7 +47,6 @@ _TRP_CAGE_FASTA = ">protein|name=T1L2\nNLYIQWLKDGGPSSGRPPPS\n"
 _SLOW_ENABLED = os.environ.get("CHAI_MLX_RUN_SLOW", "").lower() in ("1", "true", "yes")
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_SCRIPTS_INFER = _REPO_ROOT / "scripts" / "inference.py"
 _DEFAULT_WEIGHTS = _REPO_ROOT / "weights"
 
 
@@ -90,7 +89,7 @@ def _skip_reason() -> str | None:
 
 
 @pytest.mark.slow
-def test_inference_script_end_to_end_trpcage() -> None:
+def test_inference_cli_end_to_end_trpcage() -> None:
     reason = _skip_reason()
     if reason is not None:
         pytest.skip(reason)
@@ -104,7 +103,8 @@ def test_inference_script_end_to_end_trpcage() -> None:
 
         cmd = [
             sys.executable,
-            str(_SCRIPTS_INFER),
+            "-m",
+            "chai_mlx.cli.infer",
             "--weights-dir", _weights_path(),
             "--fasta", str(fasta_path),
             "--output-dir", str(output_dir),

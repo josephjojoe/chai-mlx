@@ -54,8 +54,8 @@ def test_parser_accepts_minimal_args(tiny_fasta: Path) -> None:
     # Exact-length is the default padding strategy.  See
     # ``chai_mlx.data.featurize.featurize_fasta`` for the rationale:
     # the MLX model forward is shape-agnostic in N, so the 7 static
-    # chai-lab buckets only exist for parity with the CUDA reference
-    # TorchScript artefacts -- not for correctness.
+    # chai-lab buckets only exist to preserve the traced bundle's
+    # fixed crop sizes -- not for correctness.
     assert args.pad_strategy == "exact"
 
 

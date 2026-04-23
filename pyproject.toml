@@ -5,20 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "chai-mlx"
 version = "0.1.0"
-description = "MLX inference port of Chai-1 with a clean pipeline API and reusable tooling"
+description = "MLX inference port of Chai-1 with staged APIs and FASTA inference"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Joseph Jojoe" }]
 keywords = ["mlx", "protein-folding", "structure-prediction", "apple-silicon", "chai-1"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: Apache Software License",
   "Operating System :: MacOS :: MacOS X",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
@@ -32,9 +31,9 @@ dependencies = [
   # ``pip install -e .`` should be enough for first-time users to run the
   # FASTA CLI without learning extras first.
   "torch>=2.0",
-  # Pinned to the same commit the Modal image uses
-  # (cuda_harness/modal_common.py). This is post-v0.6.1 main + PR #360's
-  # ``_component_moved_to`` helper + PR #415's gemmi-0.7 support. The
+  # Pinned to the known-good upstream commit. This is post-v0.6.1 main
+  # + PR #360's ``_component_moved_to`` helper + PR #415's gemmi-0.7
+  # support. The
   # bare PyPI ``chai_lab`` drifts away from this API over time, so keep the
   # base install pinned to the known-good commit.
   "chai_lab @ git+https://github.com/chaidiscovery/chai-lab@61036259c98222160963cb780750e354876ce485",
@@ -46,36 +45,21 @@ Repository = "https://github.com/josephjojoe/chai-mlx"
 Issues = "https://github.com/josephjojoe/chai-mlx/issues"
 
 [project.optional-dependencies]
-convert = [
-  "safetensors>=0.4",
-]
 test = [
   "pytest",
 ]
 esm = [
-  # ``file://./esm-mlx`` only resolves when installing from a clone with
-  # the submodule present at ./esm-mlx relative to the install-time cwd.
-  # Switch to a pinned git URL so ``pip install chai-mlx[esm]`` works
-  # from PyPI / bare git installs too. Commit is the same one
-  # .gitmodules tracks.
+  # Keep the optional ESM cache workflow available from a clone or
+  # non-editable install by pinning the published git repo directly.
   "esm-mlx @ git+https://github.com/josephjojoe/esm-mlx@8d9adf42fc2b6745d807978ef590d70184f79531",
-]
-cuda-harness = [
-  "modal>=1.3",
-  "gemmi>=0.7",
-  "biopython>=1.84",
 ]
 
 [project.scripts]
 chai-mlx-infer = "chai_mlx.cli.infer:main"
 chai-mlx-precompute-esm = "chai_mlx.cli.precompute_esm_impl:main"
-chai-mlx-sweep = "chai_mlx.cli.sweep_impl:main"
-chai-mlx-export-torchscript = "chai_mlx.io.weights.export_torchscript:main"
-chai-mlx-convert-torchscript = "chai_mlx.io.weights.convert_torchscript:main"
-chai-mlx-convert-npz = "chai_mlx.io.weights.convert_npz:main"
 
 [tool.setuptools.packages.find]
-include = ["chai_mlx*", "cuda_harness*"]
+include = ["chai_mlx*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
