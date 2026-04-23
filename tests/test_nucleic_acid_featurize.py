@@ -23,7 +23,7 @@ _HAS_CHAI_LAB = has_chai_lab_runtime()
 
 pytestmark = pytest.mark.skipif(
     not _HAS_CHAI_LAB,
-    reason="featurization tests require chai-lab (install via [featurize] extra)",
+    reason="featurization tests require the chai-lab runtime",
 )
 
 

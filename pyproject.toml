@@ -28,6 +28,16 @@ dependencies = [
   "numpy>=1.26,<2.4",
   "huggingface_hub>=0.28",
   "mlx>=0.16",
+  # Default install is inference-ready: plain ``pip install chai-mlx`` /
+  # ``pip install -e .`` should be enough for first-time users to run the
+  # FASTA CLI without learning extras first.
+  "torch>=2.0",
+  # Pinned to the same commit the Modal image uses
+  # (cuda_harness/modal_common.py). This is post-v0.6.1 main + PR #360's
+  # ``_component_moved_to`` helper + PR #415's gemmi-0.7 support. The
+  # bare PyPI ``chai_lab`` drifts away from this API over time, so keep the
+  # base install pinned to the known-good commit.
+  "chai_lab @ git+https://github.com/chaidiscovery/chai-lab@61036259c98222160963cb780750e354876ce485",
 ]
 
 [project.urls]
@@ -36,23 +46,11 @@ Repository = "https://github.com/josephjojoe/chai-mlx"
 Issues = "https://github.com/josephjojoe/chai-mlx/issues"
 
 [project.optional-dependencies]
-inference = [
-  "torch>=2.0",
-  # Pinned to the same commit the Modal image uses
-  # (cuda_harness/modal_common.py). This is post-v0.6.1 main + PR #360's
-  # ``_component_moved_to`` helper + PR #415's gemmi-0.7 support. The
-  # bare PyPI ``chai_lab`` drifts away from this API over time, so
-  # freshly installed envs will silently break featurize_fasta without
-  # the pin.
-  "chai_lab @ git+https://github.com/chaidiscovery/chai-lab@61036259c98222160963cb780750e354876ce485",
-]
-featurize = [
-  # Backward-compatible alias for older docs / local workflows.
-  "torch>=2.0",
-  "chai_lab @ git+https://github.com/chaidiscovery/chai-lab@61036259c98222160963cb780750e354876ce485",
-]
+# Backward-compatible no-op aliases for older docs / local workflows. The
+# full FASTA inference stack now lives in the base dependencies above.
+inference = []
+featurize = []
 convert = [
-  "torch>=2.0",
   "safetensors>=0.4",
 ]
 test = [

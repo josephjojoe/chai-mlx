@@ -90,7 +90,7 @@ def _require_chai_lab():
     except ImportError as exc:
         raise SystemExit(
             "cuda_parity requires chai_lab (for feature_generators + EntityType). "
-            "Install via: pip install -e '.[inference]'"
+            "Install via: pip install -e ."
         ) from exc
     return feature_generators, ChaiEntityType
 

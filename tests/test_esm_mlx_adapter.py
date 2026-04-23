@@ -28,7 +28,7 @@ _HAS_CHAI_LAB = has_chai_lab_runtime(require_esm_mlx=True)
 pytestmark = pytest.mark.skipif(
     not _HAS_CHAI_LAB,
     reason="esm-mlx adapter test requires chai-lab, torch, and esm_mlx "
-    "(install [featurize] + [esm] extras)",
+    "(install the default package plus the [esm] extra)",
 )
 
 

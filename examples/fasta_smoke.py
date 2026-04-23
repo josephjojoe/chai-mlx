@@ -3,9 +3,9 @@
 Exercises the full FASTA → raw features → encoding → projection pipeline
 and verifies output dimensions match the model config.
 
-Requires ``chai-lab`` and ``torch`` to be installed::
+Requires the default `chai-mlx` install::
 
-    pip install .[inference]
+    pip install -e .
     python examples/fasta_smoke.py --fasta /path/to/input.fasta
 
 If no --fasta is provided, a minimal synthetic FASTA is created in a temp dir.

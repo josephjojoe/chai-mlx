@@ -12,8 +12,8 @@ Chai-mlx mirrors chai-lab's three hard input limits via
   the largest value.
 
 These tests use a lightweight stand-in feature-context so they pass
-without the ``[featurize]`` extra. The helper's error messages must
-mention the offending value and the limit so users can act on them.
+without the chai-lab runtime. The helper's error messages must mention
+the offending value and the limit so users can act on them.
 """
 
 from __future__ import annotations

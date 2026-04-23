@@ -5,13 +5,12 @@ they invoke :func:`chai_mlx.cli.infer._parse_args` with crafted argv
 lists, and assert that mutually-exclusive / required-combination flags
 fail cleanly via ``argparse``'s ``SystemExit(2)`` path.
 
-Running the real end-to-end inference in pytest would require the
-``[featurize]`` extra + weights on disk + ~10 s of wall clock per sample;
-we already cover that path via :mod:`tests.test_integration_infer` and
-the nightly sweep. These tests only guard the shape of the CLI so
-regressions to the ``--use-msa-server`` / ``--esm-backend`` /
-``--use-templates-server`` / ``--constraint-path`` surface are caught
-offline in milliseconds.
+Running the real end-to-end inference in pytest would require model
+weights on disk + ~10 s of wall clock per sample; we already cover that
+path via :mod:`tests.test_integration_infer` and the nightly sweep.
+These tests only guard the shape of the CLI so regressions to the
+``--use-msa-server`` / ``--esm-backend`` / ``--use-templates-server`` /
+``--constraint-path`` surface are caught offline in milliseconds.
 """
 
 from __future__ import annotations

@@ -147,6 +147,7 @@ def build_embedding_context(
         raise RuntimeError(
             "esm_backend='mlx' requires the esm_mlx package. Install with:\n"
             "    pip install 'chai-mlx[esm]'\n"
+            "    pip install -e '.[esm]'\n"
             "(or pre-compute embeddings with scripts/precompute_esm_mlx.py "
             "and pass esm_backend='mlx_cache' + esm_cache_dir= instead)."
         ) from exc

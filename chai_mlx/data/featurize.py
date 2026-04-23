@@ -269,16 +269,16 @@ def _require_chai_lab():
     """Import ``chai_lab.chai1`` or raise a readable RuntimeError.
 
     The bare ``ImportError`` from the inline ``from chai_lab.chai1
-    import ...`` is unhelpful for users who forgot the ``[inference]``
-    extra. This helper re-raises with installation instructions.
+    import ...`` is unhelpful for users in a broken or ``--no-deps``
+    environment. This helper re-raises with installation instructions.
     """
     try:
         import chai_lab.chai1 as chai1  # noqa: F401
     except ImportError as exc:
         raise RuntimeError(
             "featurize_fasta requires chai_lab. Install with one of:\n"
-            "    pip install 'chai-mlx[inference]'\n"
-            "    pip install -e '.[inference]'"
+            "    pip install chai-mlx\n"
+            "    pip install -e ."
         ) from exc
     return chai1
 
@@ -286,17 +286,17 @@ def _require_chai_lab():
 def _require_torch():
     """Import ``torch`` or raise a readable RuntimeError.
 
-    ``torch`` is pulled in through the same ``[inference]`` extra as
-    chai_lab; surfacing the same instruction keeps the failure mode
-    uniform.
+    ``torch`` is part of chai-mlx's default install; surfacing the same
+    instructions as :func:`_require_chai_lab` keeps the failure mode
+    uniform for broken environments.
     """
     try:
         import torch  # noqa: F401
     except ImportError as exc:
         raise RuntimeError(
             "featurize_fasta requires torch. Install with one of:\n"
-            "    pip install 'chai-mlx[inference]'\n"
-            "    pip install -e '.[inference]'"
+            "    pip install chai-mlx\n"
+            "    pip install -e ."
         ) from exc
     return torch
 

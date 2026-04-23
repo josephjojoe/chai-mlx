@@ -49,31 +49,29 @@ cd chai-mlx
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e ".[inference]"
+python -m pip install -e .
 ```
 
-That is the recommended "clone and run real FASTA inference" path: it
-installs `torch` plus the pinned `chai_lab` commit that
-`featurize_fasta` / `chai-mlx-infer` need.
+That is the recommended "clone and run real FASTA inference" path: the
+default install now includes `torch` plus the pinned `chai_lab` commit
+that `featurize_fasta` / `chai-mlx-infer` need.
 
 If you also want local ESM-2 embeddings on Apple silicon:
 
 ```bash
-python -m pip install -e ".[inference,esm]"
+python -m pip install -e ".[esm]"
 ```
 
-If you only need the core MLX package (for precomputed-feature APIs,
-weight loading, or development against already-materialized inputs), the
-slimmer base install still works:
-
-```bash
-python -m pip install -e .
-```
+Older docs may still mention `.[inference]` / `.[featurize]`; those
+extras are now backward-compatible aliases of the default install and
+are no longer required for first-time users.
 
 ### Optional submodules
 
 End users do **not** need submodules for the normal install paths above:
-the extras pull pinned upstream dependencies from Git URLs directly.
+the base install already pulls the pinned upstream `chai_lab`
+dependency, and optional extras pull their own extra dependencies from
+Git URLs directly.
 Submodules are only useful if you want local editable checkouts of the
 upstream projects while developing on this repo.
 
@@ -95,12 +93,13 @@ The two pinned submodules are:
 ### Optional extras
 
 ```bash
-python -m pip install -e ".[inference]"               # torch + pinned chai_lab; recommended end-user install
-python -m pip install -e ".[featurize]"               # backward-compatible alias of .[inference]
-python -m pip install -e ".[inference,esm]"           # add esm-mlx for esm_backend='mlx' / 'mlx_cache'
-python -m pip install -e ".[inference,test]"          # inference install + pytest
-python -m pip install -e ".[convert]"                 # torch + safetensors; TorchScript -> safetensors export
-python -m pip install -e ".[inference,cuda-harness]"  # Modal CUDA comparison harnesses
+python -m pip install -e .                            # recommended default install; inference-ready
+python -m pip install -e ".[esm]"                     # add esm-mlx for esm_backend='mlx' / 'mlx_cache'
+python -m pip install -e ".[test]"                    # add pytest
+python -m pip install -e ".[convert]"                 # add safetensors for TorchScript -> safetensors export
+python -m pip install -e ".[cuda-harness]"            # add Modal CUDA comparison harnesses
+python -m pip install -e ".[inference]"               # backward-compatible alias of the default install
+python -m pip install -e ".[featurize]"               # backward-compatible alias of the default install
 ```
 
 ### Installed console scripts
@@ -128,7 +127,7 @@ from chai_mlx import ChaiMLX, featurize_fasta
 # Cached in the standard HF cache on subsequent calls.
 model = ChaiMLX.from_pretrained("josephjojoe/chai-mlx")
 
-ctx = featurize_fasta("input.fasta", output_dir="./out")  # needs [inference] extra
+ctx = featurize_fasta("input.fasta", output_dir="./out")
 result = model.run_inference(ctx, recycles=3, num_samples=5, num_steps=200)
 # result.coords:     MLX array, shape (B, S, A, 3)
 # result.confidence: pae_logits, pde_logits, plddt_logits
@@ -418,9 +417,9 @@ LICENSE, NOTICE       Apache-2.0 + upstream attribution
 
 - **Smoke the package on random inputs** (no weights, no featurizer):
   `python examples/basic_inference.py`
-- **Smoke the featurizer** (needs `[inference]`):
+- **Smoke the featurizer**:
   `python examples/fasta_smoke.py --fasta path/to/input.fasta`
-- **End-to-end FASTA inference** (needs `[inference]`):
+- **End-to-end FASTA inference**:
   `chai-mlx-infer --weights-dir josephjojoe/chai-mlx \
      --fasta path/to/input.fasta --output-dir ./out`
 - **Benchmark the diffusion loop**:
@@ -441,7 +440,7 @@ local GPU needed.
 
 ### Prerequisites
 
-1. `python -m pip install -e ".[inference,cuda-harness]"`
+1. `python -m pip install -e ".[cuda-harness]"`
 2. A Modal account configured via `modal setup`
    (confirm with `modal profile current`).
 3. One-time weight cache on the Modal Volume:
@@ -545,9 +544,9 @@ target is tagged with one or more `kinds`, and harnesses accept a
 
 ### Reproducing the expanded sweep
 
-Assumes `[cuda-harness]` and `[inference]` extras are installed and a
-`modal` profile is set up. No MSA or template servers are used
-(offline only). Local MLX inference uses the `[esm]` extra when
+Assumes the default install plus the `[cuda-harness]` extra are
+installed and a `modal` profile is set up. No MSA or template servers
+are used (offline only). Local MLX inference uses the `[esm]` extra when
 `--esm-backend mlx` is set.
 
 ```bash

@@ -8,15 +8,14 @@ at 5-second-into-inference runtime.
 
 If this test breaks, either:
 
-1. Pin ``pyproject.toml``'s ``[featurize]`` extra to a chai-lab
-   commit that still has the symbol (short-term fix), or
+1. Pin ``pyproject.toml``'s base chai-lab dependency to a commit that
+   still has the symbol (short-term fix), or
 2. Adapt chai-mlx to the new chai-lab API (proper fix). The
    canonical call sites are listed in the docstring below each
    assertion so the adaptation is mechanical.
 
-The test is gated on the ``[featurize]`` extra being installed
-(same as every other chai-lab-dependent test) so environments
-without torch + chai-lab still pass ``pytest -q``.
+The test is gated on the chai-lab runtime being installed so stripped
+down source-tree / ``--no-deps`` environments still pass ``pytest -q``.
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ _HAS_CHAI_LAB = has_chai_lab_runtime()
 
 pytestmark = pytest.mark.skipif(
     not _HAS_CHAI_LAB,
-    reason="chai-lab API contract requires the [featurize] extra",
+    reason="chai-lab API contract requires the chai-lab runtime",
 )
 
 

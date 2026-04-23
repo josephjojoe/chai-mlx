@@ -204,11 +204,11 @@ def find_fasta_issues(records: list[FastaRecord]) -> list[FastaValidationIssue]:
 def _ligand_smiles_issues(records: list[FastaRecord]) -> list[FastaValidationIssue]:
     """Validate every ligand record's SMILES via RDKit.
 
-    RDKit is a transitive dep of chai-lab; when the ``[featurize]``
-    extra is installed it's always present. When it isn't, we skip the
-    check silently (the featurizer will fail later with its own
+    RDKit is a transitive dep of chai-lab, so it is present in the
+    default install. In stripped-down / ``--no-deps`` environments we
+    skip the check silently; the featurizer will fail later with its own
     RDKit-parses-your-ligand error, which is still clearer than the
-    alternative).
+    alternative.
     """
     issues: list[FastaValidationIssue] = []
     try:
