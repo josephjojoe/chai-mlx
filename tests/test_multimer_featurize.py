@@ -6,17 +6,15 @@ the returned context carries two distinct chain IDs tagged as PROTEIN.
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from tests.helpers import has_chai_lab_runtime
 
-_HAS_CHAI_LAB = (
-    importlib.util.find_spec("torch") is not None
-    and importlib.util.find_spec("chai_lab") is not None
-)
+
+_HAS_CHAI_LAB = has_chai_lab_runtime()
 
 pytestmark = pytest.mark.skipif(
     not _HAS_CHAI_LAB,

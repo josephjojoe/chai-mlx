@@ -19,7 +19,7 @@ For each (target, sample) we emit:
 * **mlx_minus_cuda_A** — negative means MLX is closer to the PDB.
 
 Results are printed per-sample and saved as CSV + JSON under
-``/tmp/chai_mlx_cuda/findings/``.
+``/tmp/chai_mlx_cuda/reports/``.
 
 Usage::
 
@@ -248,12 +248,12 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument(
         "--csv",
         type=Path,
-        default=Path("/tmp/chai_mlx_cuda/findings/vs_pdb.csv"),
+        default=Path("/tmp/chai_mlx_cuda/reports/vs_pdb.csv"),
     )
     parser.add_argument(
         "--json",
         type=Path,
-        default=Path("/tmp/chai_mlx_cuda/findings/vs_pdb.json"),
+        default=Path("/tmp/chai_mlx_cuda/reports/vs_pdb.json"),
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 

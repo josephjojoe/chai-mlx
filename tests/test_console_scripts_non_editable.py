@@ -70,16 +70,18 @@ def _run_in_isolated_copy(entry: str) -> subprocess.CompletedProcess:
         "chai_mlx.cli.infer",
         "chai_mlx.cli.precompute_esm_impl",
         "chai_mlx.cli.sweep_impl",
+        "chai_mlx.io.weights.export_torchscript",
+        "chai_mlx.io.weights.convert_torchscript",
+        "chai_mlx.io.weights.convert_npz",
     ],
 )
 def test_cli_main_runs_without_scripts_dir(entry: str) -> None:
     """``chai-mlx-*`` binaries must work without ``scripts/`` on disk."""
-    # ``chai_mlx.cli.sweep_impl`` and ``precompute_esm_impl`` have
-    # hard requirements on ``cuda_harness`` at --help time because
-    # argparse runs after imports.  That's fine -- they still exit
-    # cleanly on --help; what we care about is that the package is
-    # self-sufficient and does not error with
-    # "Could not locate scripts/inference.py".
+    # Some entry points (notably ``sweep_impl`` / ``precompute_esm_impl``)
+    # still import optional helpers before argparse runs. That's fine:
+    # what we care about here is that every console script is packaged
+    # self-sufficiently and does not error with
+    # "Could not locate scripts/...".
     result = _run_in_isolated_copy(entry)
     combined = (result.stdout or "") + (result.stderr or "")
     assert result.returncode == 0, (
@@ -104,6 +106,9 @@ def test_entry_points_declared_in_pyproject_match_modules() -> None:
         "chai-mlx-infer": "chai_mlx.cli.infer",
         "chai-mlx-precompute-esm": "chai_mlx.cli.precompute_esm_impl",
         "chai-mlx-sweep": "chai_mlx.cli.sweep_impl",
+        "chai-mlx-export-torchscript": "chai_mlx.io.weights.export_torchscript",
+        "chai-mlx-convert-torchscript": "chai_mlx.io.weights.convert_torchscript",
+        "chai-mlx-convert-npz": "chai_mlx.io.weights.convert_npz",
     }
     for script_name, module_path in expected.items():
         assert f'{script_name} = "{module_path}:main"' in pyproject, (

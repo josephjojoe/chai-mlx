@@ -4,8 +4,8 @@ The canonical implementation of the FASTA→CIF runner lives inside the
 installed package (``chai_mlx.cli.infer``) so the ``chai-mlx-infer``
 console script works after a plain ``pip install chai-mlx``, not just
 after an editable install from a clone. This file exists so the
-``python scripts/inference.py ...`` invocation the README and HANDOFF
-have referenced for months still works identically.
+longstanding ``python scripts/inference.py ...`` clone workflow still
+works identically.
 
 No logic lives here; see :mod:`chai_mlx.cli.infer` for the actual code.
 """

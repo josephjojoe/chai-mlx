@@ -39,8 +39,8 @@ Notes
 -----
 
 Precision policy of the reference implementation (verified from the
-exported TorchScript graphs in ``findings/graphs/`` and cross-checked
-with ``cuda_harness._probe_jit_precision``):
+upstream scripted modules and cross-checked with
+``cuda_harness._probe_jit_precision``):
 
 * All model parameters ship as **fp32** on disk (``*.pt`` bundles).
 * The trunk, token embedder and confidence head graphs bake in an

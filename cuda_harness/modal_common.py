@@ -522,8 +522,8 @@ DEFAULT_TARGETS: dict[str, Target] = {
             ("protein", "BIGL", "MKWVTFISLLLLFSSAYS"),
             # Two aromatic rings bridging 50 ethylene-glycol units;
             # 162 heavy atoms total (12 from the two benzenes + 150
-            # from 50 × OCC). The original T2-5 smoke in HANDOFF §1.11
-            # used the same SMILES. Built programmatically so the
+            # from 50 × OCC). The original T2-5 smoke used the same
+            # SMILES. Built programmatically so the
             # repeat count is explicit and audit-friendly.
             (
                 "ligand",

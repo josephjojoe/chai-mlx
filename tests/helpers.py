@@ -1,9 +1,36 @@
 from __future__ import annotations
 
+import importlib
+import importlib.util
+from functools import lru_cache
+
 import mlx.core as mx
 
 from chai_mlx.config import ChaiConfig
 from chai_mlx.data.types import FeatureContext, StructureInputs
+
+
+@lru_cache(maxsize=None)
+def module_importable(module_name: str) -> bool:
+    """Return True when *module_name* can be imported successfully."""
+    if importlib.util.find_spec(module_name) is None:
+        return False
+    try:
+        importlib.import_module(module_name)
+    except Exception:
+        return False
+    return True
+
+
+def has_chai_lab_runtime(*, require_esm_mlx: bool = False) -> bool:
+    """Whether the optional chai-lab stack is actually usable."""
+    if importlib.util.find_spec('torch') is None:
+        return False
+    if not module_importable('chai_lab.chai1'):
+        return False
+    if require_esm_mlx and not module_importable('esm_mlx'):
+        return False
+    return True
 
 
 def make_structure_inputs(

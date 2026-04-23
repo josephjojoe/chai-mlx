@@ -10,14 +10,33 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Joseph Jojoe" }]
+keywords = ["mlx", "protein-folding", "structure-prediction", "apple-silicon", "chai-1"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: MacOS :: MacOS X",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
 dependencies = [
-  "numpy>=1.26",
+  # chai-lab pulls in numba for MSA parsing, and current numba wheels reject
+  # NumPy 2.4+. Keep the resolver on a mutually compatible range until the
+  # upstream stack lifts that cap.
+  "numpy>=1.26,<2.4",
   "huggingface_hub>=0.28",
   "mlx>=0.16",
 ]
 
+[project.urls]
+Homepage = "https://github.com/josephjojoe/chai-mlx"
+Repository = "https://github.com/josephjojoe/chai-mlx"
+Issues = "https://github.com/josephjojoe/chai-mlx/issues"
+
 [project.optional-dependencies]
-featurize = [
+inference = [
   "torch>=2.0",
   # Pinned to the same commit the Modal image uses
   # (cuda_harness/modal_common.py). This is post-v0.6.1 main + PR #360's
@@ -25,6 +44,11 @@ featurize = [
   # bare PyPI ``chai_lab`` drifts away from this API over time, so
   # freshly installed envs will silently break featurize_fasta without
   # the pin.
+  "chai_lab @ git+https://github.com/chaidiscovery/chai-lab@61036259c98222160963cb780750e354876ce485",
+]
+featurize = [
+  # Backward-compatible alias for older docs / local workflows.
+  "torch>=2.0",
   "chai_lab @ git+https://github.com/chaidiscovery/chai-lab@61036259c98222160963cb780750e354876ce485",
 ]
 convert = [
@@ -39,7 +63,7 @@ esm = [
   # the submodule present at ./esm-mlx relative to the install-time cwd.
   # Switch to a pinned git URL so ``pip install chai-mlx[esm]`` works
   # from PyPI / bare git installs too. Commit is the same one
-  # .gitmodules tracks and HANDOFF §5.6 validates.
+  # .gitmodules tracks.
   "esm-mlx @ git+https://github.com/josephjojoe/esm-mlx@8d9adf42fc2b6745d807978ef590d70184f79531",
 ]
 cuda-harness = [

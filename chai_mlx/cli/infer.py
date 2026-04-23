@@ -126,7 +126,7 @@ def _parse_args(argv: "list[str] | None" = None) -> argparse.Namespace:
     constraints = parser.add_argument_group("constraints")
     constraints.add_argument("--constraint-path", type=Path, default=None,
                              help="Chai-lab constraint CSV (contact + pocket + covalent-bond "
-                                  "restraints). See HANDOFF.md §1.6 for the tested schema.")
+                                  "restraints).")
 
     msa = parser.add_argument_group("MSA (mutually exclusive modes)")
     msa.add_argument("--msa-directory", type=Path, default=None,
@@ -269,8 +269,8 @@ def _save_cifs(
     import torch
 
     # Install chai-lab's RDKit-timeout workaround before importing its
-    # featurizer, so ligand targets don't hit the macOS closure pickle
-    # bug (HANDOFF.md §5.1).
+    # featurizer, so ligand targets do not hit the macOS closure-pickle
+    # failure in chai-lab's timeout wrapper.
     from chai_mlx.data._rdkit_timeout_patch import apply_rdkit_timeout_patch
     apply_rdkit_timeout_patch()
 

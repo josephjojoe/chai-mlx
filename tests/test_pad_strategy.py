@@ -21,8 +21,6 @@ exercised in :mod:`tests.test_constraints_parse` and the
 
 from __future__ import annotations
 
-import importlib.util
-
 import pytest
 
 from chai_mlx.data.featurize import (
@@ -30,6 +28,7 @@ from chai_mlx.data.featurize import (
     _exact_pad_size,
     _override_pad_strategy,
 )
+from tests.helpers import has_chai_lab_runtime
 
 
 class TestExactPadSize:
@@ -97,7 +96,7 @@ class TestExactPadSize:
         assert n_atoms < bucketed_atoms
 
 
-_HAS_CHAI_LAB = importlib.util.find_spec("chai_lab") is not None
+_HAS_CHAI_LAB = has_chai_lab_runtime()
 
 
 class TestOverridePadStrategy:

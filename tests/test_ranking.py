@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
-
 import mlx.core as mx
 import numpy as np
 import pytest
@@ -11,11 +9,9 @@ import pytest
 from chai_mlx.config import ChaiConfig
 from chai_mlx.data.types import ConfidenceOutputs, StructureInputs
 from chai_mlx.model.ranking import Ranker
+from tests.helpers import has_chai_lab_runtime
 
-_HAS_REF = (
-    importlib.util.find_spec("torch") is not None
-    and importlib.util.find_spec("chai_lab") is not None
-)
+_HAS_REF = has_chai_lab_runtime()
 
 pytestmark = pytest.mark.skipif(
     not _HAS_REF,

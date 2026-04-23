@@ -1,7 +1,7 @@
 """Produce a unified vs-PDB summary with best-of-5 + mean-of-5 columns.
 
-Reads the four authoritative CSVs under ``/tmp/chai_mlx_cuda/findings/``
-and writes ``findings/summary_primary.json`` along with a
+Reads the four authoritative CSVs under ``/tmp/chai_mlx_cuda/reports/``
+and writes ``/tmp/chai_mlx_cuda/reports/summary_primary.json`` along with a
 Markdown-ready table on stdout. Best-of-5 is the primary metric because
 MLX and CUDA use different RNGs on the diffusion noise, so pairing
 ``sample_idx=k`` across sides compares arbitrary members of each side's
@@ -13,7 +13,7 @@ Usage::
 
     python3 scripts/summarise_vs_pdb.py
 
-Outputs under ``/tmp/chai_mlx_cuda/findings/``:
+Outputs under ``/tmp/chai_mlx_cuda/reports/``:
 
 * ``summary_primary.json`` — per-axis (no-ESM / ESM-on / RNA / MSA)
   summary with ``{mlx,cuda}_{mean,best}_A`` per target.
@@ -33,7 +33,7 @@ from pathlib import Path
 
 import numpy as np
 
-FINDINGS = Path("/tmp/chai_mlx_cuda/findings")
+REPORTS = Path("/tmp/chai_mlx_cuda/reports")
 
 
 def _read_rows(path: Path) -> list[dict]:
@@ -76,17 +76,17 @@ def _summarise(path: Path, label: str, esm: bool) -> dict:
 
 def main() -> None:
     primary = {
-        "no_esm": _summarise(FINDINGS / "vs_pdb.csv", "no-ESM", False),
-        "esm_on": _summarise(FINDINGS / "vs_pdb_esm.csv", "ESM-on", True),
-        "rna": _summarise(FINDINGS / "rna_vs_pdb.csv", "RNA (2KOC)", False),
+        "no_esm": _summarise(REPORTS / "vs_pdb.csv", "no-ESM", False),
+        "esm_on": _summarise(REPORTS / "vs_pdb_esm.csv", "ESM-on", True),
+        "rna": _summarise(REPORTS / "rna_vs_pdb.csv", "RNA (2KOC)", False),
         "msa_smoke": _summarise(
-            FINDINGS / "msa_smoke_vs_pdb.csv",
+            REPORTS / "msa_smoke_vs_pdb.csv",
             "1L2Y ESM+MSA+templates",
             True,
         ),
     }
 
-    out_path = FINDINGS / "summary_primary.json"
+    out_path = REPORTS / "summary_primary.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(primary, indent=2))
     print(f"[save] {out_path}")

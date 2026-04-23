@@ -44,12 +44,46 @@ took to prove that the port is actually faithful.
 ## Install
 
 ```bash
-git clone --recurse-submodules https://github.com/josephjojoe/chai-mlx
+git clone https://github.com/josephjojoe/chai-mlx
 cd chai-mlx
-pip install -e .
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[inference]"
 ```
 
-The `--recurse-submodules` flag fetches two pinned checkouts:
+That is the recommended "clone and run real FASTA inference" path: it
+installs `torch` plus the pinned `chai_lab` commit that
+`featurize_fasta` / `chai-mlx-infer` need.
+
+If you also want local ESM-2 embeddings on Apple silicon:
+
+```bash
+python -m pip install -e ".[inference,esm]"
+```
+
+If you only need the core MLX package (for precomputed-feature APIs,
+weight loading, or development against already-materialized inputs), the
+slimmer base install still works:
+
+```bash
+python -m pip install -e .
+```
+
+### Optional submodules
+
+End users do **not** need submodules for the normal install paths above:
+the extras pull pinned upstream dependencies from Git URLs directly.
+Submodules are only useful if you want local editable checkouts of the
+upstream projects while developing on this repo.
+
+If you do want them, clone with `--recurse-submodules` or run:
+
+```bash
+git submodule update --init --recursive
+```
+
+The two pinned submodules are:
 
 - `chai-lab/` — used by the featurizer and the CUDA comparison harnesses.
   The pin is a specific post-0.6.1 commit (see `pyproject.toml`); bare
@@ -58,17 +92,15 @@ The `--recurse-submodules` flag fetches two pinned checkouts:
   `esm_backend="mlx"` / `"mlx_cache"` to compute language-model embeddings
   locally on Apple silicon.
 
-If you cloned without `--recurse-submodules`, run
-`git submodule update --init --recursive`.
-
 ### Optional extras
 
 ```bash
-pip install -e ".[featurize]"     # torch + pinned chai_lab; required for FASTA featurization
-pip install -e ".[esm]"           # esm-mlx; enables esm_backend="mlx" / "mlx_cache"
-pip install -e ".[convert]"       # torch + safetensors; for TorchScript -> safetensors export
-pip install -e ".[cuda-harness]"  # modal + gemmi + biopython; for the CUDA comparison harnesses
-pip install -e ".[test]"          # pytest
+python -m pip install -e ".[inference]"               # torch + pinned chai_lab; recommended end-user install
+python -m pip install -e ".[featurize]"               # backward-compatible alias of .[inference]
+python -m pip install -e ".[inference,esm]"           # add esm-mlx for esm_backend='mlx' / 'mlx_cache'
+python -m pip install -e ".[inference,test]"          # inference install + pytest
+python -m pip install -e ".[convert]"                 # torch + safetensors; TorchScript -> safetensors export
+python -m pip install -e ".[inference,cuda-harness]"  # Modal CUDA comparison harnesses
 ```
 
 ### Installed console scripts
@@ -96,7 +128,7 @@ from chai_mlx import ChaiMLX, featurize_fasta
 # Cached in the standard HF cache on subsequent calls.
 model = ChaiMLX.from_pretrained("josephjojoe/chai-mlx")
 
-ctx = featurize_fasta("input.fasta", output_dir="./out")  # needs [featurize] extra
+ctx = featurize_fasta("input.fasta", output_dir="./out")  # needs [inference] extra
 result = model.run_inference(ctx, recycles=3, num_samples=5, num_steps=200)
 # result.coords:     MLX array, shape (B, S, A, 3)
 # result.confidence: pae_logits, pde_logits, plddt_logits
@@ -374,12 +406,11 @@ examples/             minimal runnable examples
   fasta_smoke.py      FASTA featurization + dim check
   diffusion_benchmark.py  diffusion-loop wall clock
 
-tests/                pytest suite (33 files; ~3 s for the default collection)
+tests/                pytest suite (30 files; default collection runs in a few seconds)
+.github/              CI workflow for the default test suite
 chai-lab/             pinned chai-lab checkout (git submodule)
 esm-mlx/              pinned esm-mlx checkout (git submodule)
 weights/              local model artifacts (gitignored)
-auxiliary/            reference-only preprint excerpts and diagrams
-findings/             graph dumps from the TorchScript reference
 LICENSE, NOTICE       Apache-2.0 + upstream attribution
 ```
 
@@ -387,16 +418,17 @@ LICENSE, NOTICE       Apache-2.0 + upstream attribution
 
 - **Smoke the package on random inputs** (no weights, no featurizer):
   `python examples/basic_inference.py`
-- **Smoke the featurizer** (needs `[featurize]`):
+- **Smoke the featurizer** (needs `[inference]`):
   `python examples/fasta_smoke.py --fasta path/to/input.fasta`
-- **End-to-end FASTA inference** (needs `[featurize]`):
+- **End-to-end FASTA inference** (needs `[inference]`):
   `chai-mlx-infer --weights-dir josephjojoe/chai-mlx \
      --fasta path/to/input.fasta --output-dir ./out`
 - **Benchmark the diffusion loop**:
   `python examples/diffusion_benchmark.py`
 - **Run the tests**:
-  `pip install -e ".[test]"` then `pytest -q`
-  (the slow end-to-end tests that download HF weights are opt-in via
+  `python -m pip install -e ".[test]"` then `pytest -q`
+  (tests that need optional extras auto-skip; the slow end-to-end tests
+  that download HF weights are opt-in via
   `CHAI_MLX_RUN_SLOW=1 pytest -q -m slow`)
 
 ## CUDA comparison harnesses
@@ -409,7 +441,7 @@ local GPU needed.
 
 ### Prerequisites
 
-1. `pip install -e ".[cuda-harness]"`
+1. `python -m pip install -e ".[inference,cuda-harness]"`
 2. A Modal account configured via `modal setup`
    (confirm with `modal profile current`).
 3. One-time weight cache on the Modal Volume:
@@ -513,7 +545,7 @@ target is tagged with one or more `kinds`, and harnesses accept a
 
 ### Reproducing the expanded sweep
 
-Assumes `[cuda-harness]` and `[featurize]` extras are installed and a
+Assumes `[cuda-harness]` and `[inference]` extras are installed and a
 `modal` profile is set up. No MSA or template servers are used
 (offline only). Local MLX inference uses the `[esm]` extra when
 `--esm-backend mlx` is set.
@@ -570,11 +602,12 @@ two principal stages:
    PAE / PDE logits from the final coordinates, and a ranker computes
    pTM / ipTM / clash counts / aggregate score to pick the best sample.
 
-See `auxiliary/preprint-af3-modifications.md` for a summary of how
-Chai-1 differs from AlphaFold-3 (language-model embeddings, constraint
-features), and `findings/graphs/` for TorchScript IR dumps extracted
-from the upstream reference checkpoint — useful when reverse-engineering
-specific submodules.
+Chai-1 differs from AlphaFold-3 in a few notable ways relevant here,
+including language-model embeddings and explicit constraint features.
+The authoritative place to regenerate parity, structural, and precision
+data in this repo is the CUDA harness plus the probe scripts under
+`cuda_harness/`; large generated reverse-engineering artifacts are not
+tracked.
 
 The MLX port preserves the upstream architecture and weight layout
 exactly. Every dimension is pinned in `chai_mlx/config.py::ChaiConfig`,

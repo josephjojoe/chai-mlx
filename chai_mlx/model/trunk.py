@@ -92,7 +92,7 @@ class TemplateEmbedder(nn.Module):
     """Process each template independently through shared pairformer blocks,
     then average valid template outputs before projecting back to pair space.
 
-    TorchScript reference (trunk_forward256.py):
+    TorchScript reference behaviour:
       1. z = proj_in(pair) + template_feats[:, t]   for each template t
       2. Run shared pairformer blocks on z with per-template mask
       3. Stack → layernorm → mask → average over valid templates
@@ -167,7 +167,7 @@ class OuterProductMean(nn.Module):
     weight_ab: [2, 8_group, 8_inner, msa_dim] -- two projections from msa_dim
     to (8 groups × 8 inner).
 
-    TorchScript reference (trunk_forward256.py):
+    TorchScript reference behaviour:
       Einsum 1 — projection per weight half after unbind(dim=0):
         "abc, defc -> abdef"  with weight [8, 8, msa_dim] and
         x [batch, depth, tokens, msa_dim].

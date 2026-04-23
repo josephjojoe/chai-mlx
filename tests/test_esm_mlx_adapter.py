@@ -15,18 +15,15 @@ This is the same injection point chai-lab itself uses via
 
 from __future__ import annotations
 
-import importlib.util
 import types
 
 import numpy as np
 import pytest
 
+from tests.helpers import has_chai_lab_runtime
 
-_HAS_CHAI_LAB = (
-    importlib.util.find_spec("torch") is not None
-    and importlib.util.find_spec("chai_lab") is not None
-    and importlib.util.find_spec("esm_mlx") is not None
-)
+
+_HAS_CHAI_LAB = has_chai_lab_runtime(require_esm_mlx=True)
 
 pytestmark = pytest.mark.skipif(
     not _HAS_CHAI_LAB,

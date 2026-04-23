@@ -10,9 +10,9 @@ from chai_mlx.utils import chunk_last, resolve_dtype
 
 
 # ── per-feature encoding specs ────────────────────────────────────────────
-# Verified against every torch.one_hot / reshape / cat in
-# feature_embedding_forward256.py.  Order is alphabetical within each type
-# group, matching the TorchScript concatenation order.
+# Verified against the upstream TorchScript feature-embedding forward
+# pass during porting. Order is alphabetical within each type group,
+# matching the TorchScript concatenation order.
 
 # (name, encoding, encoded_width)
 #   encoding = "oh" (one-hot), "id" (identity), "rbf", "emb_outersum"

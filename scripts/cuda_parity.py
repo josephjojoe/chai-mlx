@@ -61,6 +61,7 @@ import argparse
 import gc
 import json
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
@@ -77,14 +78,21 @@ from chai_mlx.data.types import (
 from chai_mlx.model.diffusion import DiffusionModule  # noqa: F401  (sanity import)
 from chai_mlx.utils import resolve_dtype
 
-try:
-    from chai_lab.chai1 import feature_generators
-    from chai_lab.data.parsing.structure.entity_type import EntityType as ChaiEntityType
-except ImportError as e:
-    raise SystemExit(
-        "cuda_parity requires chai_lab (for feature_generators + EntityType). "
-        "Install via: pip install -e '.[featurize]'"
-    ) from e
+
+@lru_cache(maxsize=1)
+def _require_chai_lab():
+    """Import the chai-lab pieces the parity harness needs lazily."""
+    try:
+        from chai_lab.chai1 import feature_generators
+        from chai_lab.data.parsing.structure.entity_type import (
+            EntityType as ChaiEntityType,
+        )
+    except ImportError as exc:
+        raise SystemExit(
+            "cuda_parity requires chai_lab (for feature_generators + EntityType). "
+            "Install via: pip install -e '.[inference]'"
+        ) from exc
+    return feature_generators, ChaiEntityType
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +125,7 @@ def _as_mx(arr: np.ndarray, dtype: mx.Dtype | None = None) -> mx.array:
 
 
 def _reconstruct_structure_inputs(data: dict[str, np.ndarray]) -> StructureInputs:
+    _, ChaiEntityType = _require_chai_lab()
     b = data["inputs.batch.token_exists_mask"]
     token_exists = b.astype(np.float32)
     atom_exists = data["inputs.batch.atom_exists_mask"].astype(np.float32)
@@ -179,6 +188,7 @@ def _reconstruct_structure_inputs(data: dict[str, np.ndarray]) -> StructureInput
 
 
 def _reconstruct_feature_context(data: dict[str, np.ndarray]) -> FeatureContext:
+    feature_generators, _ = _require_chai_lab()
     structure = _reconstruct_structure_inputs(data)
 
     raw: dict[str, mx.array] = {}
@@ -727,6 +737,8 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser.add_argument("--tol-confidence", type=float, default=None)
     parser.add_argument("--summary-json", type=Path, default=None, help="optional path to dump pass/fail summary")
     args = parser.parse_args(list(argv) if argv is not None else None)
+
+    _require_chai_lab()
 
     print(f"[load] {args.npz}")
     data = _load_npz(args.npz)

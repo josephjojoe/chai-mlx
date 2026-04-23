@@ -171,7 +171,7 @@ def test_validate_rejects_bad_glycan_when_chailab_present():
 
 def test_validate_rejects_modified_residue_token_by_default(tmp_path):
     """Inline ``[FOO]`` / ``(FOO)`` tokens surface a loud pointer at
-    HANDOFF §8.1; that's chai-lab's real PTM syntax (see
+    chai-lab's PTM syntax; see
     ``chai_lab.data.parsing.input_validation.constituents_of_modified_fasta``).
     """
     fasta = tmp_path / "ptm.fasta"

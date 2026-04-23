@@ -198,7 +198,7 @@ class TokenInputAtomEncoder(nn.Module):
 class DiffusionAtomAttentionEncoder(nn.Module):
     """Atom attention encoder for the diffusion module.
 
-    TorchScript ground truth (diffusion_module_forward256.py):
+    TorchScript reference behaviour:
       - x (initial state) = broadcast(to_atom_cond) + prev_pos_embed(coords)
       - cond (AdaLN)      = broadcast(LN(to_atom_cond + token_to_atom_single(trunk_single)[indices]))
       - token_to_atom_single takes the RAW trunk single (sigma-independent)

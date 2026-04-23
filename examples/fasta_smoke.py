@@ -5,7 +5,7 @@ and verifies output dimensions match the model config.
 
 Requires ``chai-lab`` and ``torch`` to be installed::
 
-    pip install .[featurize]
+    pip install .[inference]
     python examples/fasta_smoke.py --fasta /path/to/input.fasta
 
 If no --fasta is provided, a minimal synthetic FASTA is created in a temp dir.

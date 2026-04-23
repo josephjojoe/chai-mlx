@@ -20,11 +20,10 @@ from pathlib import Path
 
 
 # chai-lab packs entity names into a fixed-length tensor when
-# ``entity_name_as_subchain=True`` (see
-# ``chai_lab.utils.tensor_utils.string_to_tensorcode`` and HANDOFF.md
-# §5.4). That path is mandatory for our featurizer so constraint CSVs
-# can reference chains by the same label the user wrote. Exceeding the
-# limit fails loudly here rather than silently deep in the featurizer.
+# ``entity_name_as_subchain=True``. That path is mandatory for our
+# featurizer so constraint CSVs can reference chains by the same label
+# the user wrote. Exceeding the limit fails loudly here rather than
+# silently deep in the featurizer.
 MAX_ENTITY_NAME_LENGTH: int = 4
 
 # Kinds chai-lab's FASTA parser recognises. Mirrors
@@ -172,7 +171,7 @@ def find_fasta_issues(records: list[FastaRecord]) -> list[FastaValidationIssue]:
                         f"entity name {rec.name!r} is {len(rec.name)} characters; "
                         f"chai-lab packs names into a fixed-length tensor when "
                         f"entity_name_as_subchain=True and cannot exceed "
-                        f"{MAX_ENTITY_NAME_LENGTH} characters (see HANDOFF.md §5.4). "
+                        f"{MAX_ENTITY_NAME_LENGTH} characters. "
                         f"Shorten it to <={MAX_ENTITY_NAME_LENGTH} chars."
                     ),
                 )
@@ -242,9 +241,9 @@ def _modified_residue_issues(records: list[FastaRecord]) -> list[FastaValidation
     ``chai_lab.data.parsing.input_validation.constituents_of_modified_fasta``
     and ``chai_lab.data.parsing.structure.sequence``). Chai-mlx
     inherits that machinery but the path is not end-to-end validated
-    in this repo (HANDOFF.md §8.1). Catching the bracketed token at
-    validation time gives users a loud "yes, you can try this, but
-    it's untested here" pointer rather than a cryptic failure later.
+    in this repo. Catching the bracketed token at validation time gives
+    users a loud "yes, you can try this, but it's untested here" pointer
+    rather than a cryptic failure later.
 
     The check scans for brackets ``[…]`` or parentheses ``(…)`` in
     protein / DNA / RNA polymer sequences; ligand SMILES (``C(=O)``
@@ -269,9 +268,8 @@ def _modified_residue_issues(records: list[FastaRecord]) -> list[FastaValidation
                         f"record {rec.name!r} contains an inline "
                         "modified-residue token ('[FOO]' or '(FOO)'); "
                         "chai-mlx inherits chai-lab's support for these "
-                        "but the path is NOT validated end-to-end here "
-                        "(see HANDOFF.md §8.1 'Modified residues / "
-                        "PTMs'). If you want to try it anyway, re-run "
+                        "but the path is NOT validated end-to-end here. "
+                        "If you want to try it anyway, re-run "
                         "with CHAI_MLX_ALLOW_MODIFIED_RESIDUES=1 set in "
                         "your environment to bypass this check."
                     ),

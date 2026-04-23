@@ -269,16 +269,16 @@ def _require_chai_lab():
     """Import ``chai_lab.chai1`` or raise a readable RuntimeError.
 
     The bare ``ImportError`` from the inline ``from chai_lab.chai1
-    import ...`` is unhelpful for users who forgot the ``[featurize]``
+    import ...`` is unhelpful for users who forgot the ``[inference]``
     extra. This helper re-raises with installation instructions.
     """
     try:
         import chai_lab.chai1 as chai1  # noqa: F401
     except ImportError as exc:
         raise RuntimeError(
-            "featurize_fasta requires chai_lab. Install with:\n"
-            "    pip install 'chai-mlx[featurize]'\n"
-            "(or run from a git clone with the submodule checked out)."
+            "featurize_fasta requires chai_lab. Install with one of:\n"
+            "    pip install 'chai-mlx[inference]'\n"
+            "    pip install -e '.[inference]'"
         ) from exc
     return chai1
 
@@ -286,7 +286,7 @@ def _require_chai_lab():
 def _require_torch():
     """Import ``torch`` or raise a readable RuntimeError.
 
-    ``torch`` is pulled in through the same ``[featurize]`` extra as
+    ``torch`` is pulled in through the same ``[inference]`` extra as
     chai_lab; surfacing the same instruction keeps the failure mode
     uniform.
     """
@@ -294,17 +294,18 @@ def _require_torch():
         import torch  # noqa: F401
     except ImportError as exc:
         raise RuntimeError(
-            "featurize_fasta requires torch. Install with:\n"
-            "    pip install 'chai-mlx[featurize]'"
+            "featurize_fasta requires torch. Install with one of:\n"
+            "    pip install 'chai-mlx[inference]'\n"
+            "    pip install -e '.[inference]'"
         ) from exc
     return torch
 
 
-# 20 GB captures the "16 GB unified memory Mac" OOM case from HANDOFF
-# §2.2 while leaving comfortable headroom on machines just above. ESM-2
-# 3B resident at fp32 is ~11 GB; add chai-mlx's ~1.2 GB weights and
-# several GB of trunk activations and we're well past 16 GB. Users who
-# know better can ignore the warning -- this is print-only, never raise.
+# 20 GB captures the common "16 GB unified memory Mac" OOM case while
+# leaving comfortable headroom on machines just above. ESM-2 3B resident
+# at fp32 is ~11 GB; add chai-mlx's ~1.2 GB weights and several GB of
+# trunk activations and we're well past 16 GB. Users who know better can
+# ignore the warning -- this is print-only, never raise.
 _ESM_MLX_MIN_RAM_BYTES: int = 20 * 1024 ** 3
 
 
@@ -330,7 +331,7 @@ def _warn_if_insufficient_ram_for_esm_mlx() -> None:
             f"[chai-mlx] warning: esm_backend='mlx' loads ~11 GB of ESM-2 3B "
             f"weights in-process; this machine has {gib:.1f} GiB total RAM. "
             "Prefer esm_backend='mlx_cache' after pre-computing embeddings "
-            "with scripts/precompute_esm_mlx.py (see HANDOFF.md §2.2).",
+            "with scripts/precompute_esm_mlx.py.",
             file=sys.stderr,
             flush=True,
         )

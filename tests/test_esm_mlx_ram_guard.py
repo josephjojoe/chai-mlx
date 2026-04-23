@@ -2,7 +2,7 @@
 
 :func:`chai_mlx.data.featurize._warn_if_insufficient_ram_for_esm_mlx`
 prints a stderr warning when ``esm_backend="mlx"`` is requested on a
-host with less than 20 GiB total RAM (HANDOFF §2.2). Without this
+host with less than 20 GiB total RAM. Without this
 warning, users on 16 GB Macs silently OOM mid-inference.
 
 This test mocks ``psutil.virtual_memory()`` to fake a small machine
