@@ -111,7 +111,9 @@ def main(argv: list[str] | None = None) -> None:
         except ImportError as exc:
             raise RuntimeError(
                 "chai-mlx-precompute-esm requires the esm_mlx package. "
-                "Install with:\n    pip install 'chai-mlx[esm]'"
+                "Install with:\n"
+                "    pip install -e '.[esm]'\n"
+                "    pip install \"chai-mlx[esm] @ git+https://github.com/josephjojoe/chai-mlx\""
             ) from exc
 
         model = ESM2.from_pretrained(args.model)

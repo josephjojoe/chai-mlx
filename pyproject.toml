@@ -27,9 +27,10 @@ dependencies = [
   "numpy>=1.26,<2.4",
   "huggingface_hub>=0.28",
   "mlx>=0.16",
-  # Default install is inference-ready: plain ``pip install chai-mlx`` /
-  # ``pip install -e .`` should be enough for first-time users to run the
-  # FASTA CLI without learning extras first.
+  # Default install is inference-ready: plain ``pip install -e .`` (or
+  # ``pip install "chai-mlx @ git+https://github.com/josephjojoe/chai-mlx"``)
+  # is enough for first-time users to run the FASTA CLI without learning
+  # extras first. ``chai-mlx`` is not published on PyPI.
   "torch>=2.0",
   # Pinned to the known-good upstream commit. This is post-v0.6.1 main
   # + PR #360's ``_component_moved_to`` helper + PR #415's gemmi-0.7

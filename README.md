@@ -11,6 +11,8 @@ embeddings.
 - End-to-end MLX inference is available through `chai-mlx-infer`.
 - Optional ESM cache generation is available through `chai-mlx-precompute-esm`.
 - Public precision policies are `reference` and `float32`.
+- `chai-mlx` is not published on PyPI. Install from this repository directly
+  (see below).
 
 ## Requirements
 
@@ -37,9 +39,10 @@ python -m pip install -e .
 
 That editable install is also the minimum contributor setup: it pulls in the
 `torch` + pinned `chai_lab` runtime that powers `featurize_fasta()`,
-`chai-mlx-infer`, and the runtime-dependent pytest cases. If you run `pytest`
-from a bare checkout (or after a `--no-deps` install), those tests will be
-reported as skipped because the chai-lab runtime is not importable.
+`chai-mlx-infer`, and the runtime-dependent pytest cases. If you install with
+`--no-deps` (or run `pytest` against a bare checkout on `PYTHONPATH`), those
+tests will be reported as skipped because the chai-lab runtime is not
+importable.
 
 For the default contributor test environment, install the `test` extra:
 
@@ -61,9 +64,17 @@ python -m pip install -e ".[test,esm]"
 pytest -q
 ```
 
-No git submodules are required. The base install resolves the pinned
-`chai_lab` dependency directly, and the `esm` extra resolves `esm_mlx`
-directly.
+### Installing without a clone
+
+If you prefer not to clone, you can point `pip` at this repo directly:
+
+```bash
+python -m pip install "chai-mlx @ git+https://github.com/josephjojoe/chai-mlx"
+python -m pip install "chai-mlx[esm] @ git+https://github.com/josephjojoe/chai-mlx"
+```
+
+The `esm` extra pulls `esm-mlx` from its own git URL, so neither package needs
+to be published on PyPI. No git submodules are required.
 
 ## Quick Start
 

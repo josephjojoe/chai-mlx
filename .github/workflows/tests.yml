@@ -9,7 +9,7 @@ on:
 
 jobs:
   test-suite:
-    runs-on: macos-14-arm64
+    runs-on: macos-latest
     timeout-minutes: 30
 
     steps:
@@ -31,7 +31,7 @@ jobs:
         run: python -m pytest -q
 
   default-install:
-    runs-on: macos-14-arm64
+    runs-on: macos-latest
     timeout-minutes: 30
 
     steps:
@@ -49,21 +49,31 @@ jobs:
       - name: Build distribution artifacts
         run: python -m build --sdist --wheel
 
-      - name: Smoke install built wheel
+      - name: Locate built wheel
+        id: wheel
+        shell: bash
         run: |
-          wheel_path="$(
-            python - <<'PY'
-            from pathlib import Path
-            wheels = sorted(Path("dist").glob("*.whl"))
-            if len(wheels) != 1:
-                raise SystemExit(f"expected exactly one wheel in dist/, found: {wheels}")
-            print(wheels[0].resolve())
-            PY
+          # Heredoc body must start at column 0; heredocs preserve indentation
+          # literally and Python rejects an indented top-level statement.
+          wheel_path="$(python - <<'PY'
+          from pathlib import Path
+          wheels = sorted(Path("dist").glob("*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(f"expected exactly one wheel in dist/, found: {wheels}")
+          print(wheels[0].resolve())
+          PY
           )"
+          echo "path=$wheel_path" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke install built wheel
+        shell: bash
+        env:
+          WHEEL_PATH: ${{ steps.wheel.outputs.path }}
+        run: |
           smoke_dir="$(mktemp -d)"
           python -m venv "$smoke_dir/venv"
           "$smoke_dir/venv/bin/pip" install --upgrade pip
-          "$smoke_dir/venv/bin/pip" install "$wheel_path"
+          "$smoke_dir/venv/bin/pip" install "$WHEEL_PATH"
           "$smoke_dir/venv/bin/python" -m pip check
 
           # Run outside the repo root so local sources cannot shadow the wheel.

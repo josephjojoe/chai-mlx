@@ -274,8 +274,8 @@ def _require_chai_lab():
     except ImportError as exc:
         raise RuntimeError(
             "featurize_fasta requires chai_lab. Install with one of:\n"
-            "    pip install chai-mlx\n"
-            "    pip install -e ."
+            "    pip install -e .\n"
+            "    pip install \"chai-mlx @ git+https://github.com/josephjojoe/chai-mlx\""
         ) from exc
     return chai1
 
@@ -292,8 +292,8 @@ def _require_torch():
     except ImportError as exc:
         raise RuntimeError(
             "featurize_fasta requires torch. Install with one of:\n"
-            "    pip install chai-mlx\n"
-            "    pip install -e ."
+            "    pip install -e .\n"
+            "    pip install \"chai-mlx @ git+https://github.com/josephjojoe/chai-mlx\""
         ) from exc
     return torch
 
